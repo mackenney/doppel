@@ -363,6 +363,7 @@ ITS_CLASSIFIED_KEY=<hex> its-classified unscrub --entries <path>
 - **stdout:** restored response with originals in place of fakes
 - `--entries`: entries file produced by a prior `scrub` call
 - `ITS_CLASSIFIED_KEY`: hex session key, read from environment only
+- No `--patterns` argument: `unscrub` works from the handle alone.
 
 ### Key delivery
 
