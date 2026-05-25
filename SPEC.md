@@ -11,9 +11,13 @@ responses.
 
 The primary threat it addresses is **accidental secret exfiltration**: secrets
 that end up in LLM request bodies through normal development work (tool output,
-file contents, environment variables, debug context). It is not a DLP system and
-does not guarantee complete coverage. It guarantees that what it does scrub is
-handled correctly and transparently.
+file contents, environment variables, debug context).
+
+This library does one thing. It is not a DLP system, not a PII detector, not a
+compliance tool. Specialization is intentional: a focused tool with a narrow
+contract is easier to reason about, audit, and trust than a Swiss Army knife.
+It guarantees that what it does scrub is handled correctly and transparently;
+it makes no claim about complete coverage.
 
 ### Scope
 
@@ -93,9 +97,16 @@ the original secrets as plaintext in any accessible field.
 
 ```
 session_key  = 32 random bytes, generated at scrub() time, in memory only
-entry        = { fake: Vec<u8>, ciphertext: AEAD_encrypt(original, key=session_key, ad=&fake) }
+nonce        = 192 random bits, generated fresh per entry at scrub() time
+entry        = { fake: Vec<u8>, ciphertext: XChaCha20-Poly1305(original, key=session_key, nonce=nonce, ad=&fake) }
 ScrubHandle  = { session_key, entries: Vec<entry> }
 ```
+
+The cipher is **XChaCha20-Poly1305**. There is no algorithm negotiation and no
+version field: one cipher, chosen for its 192-bit nonce (safe for random
+generation without birthday-bound concerns) and its strong AEAD guarantees.
+Cipher agility is deliberately absent — it is a source of footguns, not
+flexibility.
 
 The `fake` bytes are what appear in the scrubbed payload — the structural replacement
 the model sees. They are also the scan target for `unscrub`: it searches each response
@@ -283,6 +294,10 @@ On a match it decrypts the corresponding ciphertext with `session_key` and resto
 original. This handles the case where the model echoes back a value that was scrubbed in
 the request (e.g. a secret parroted from context into the reply).
 
+Decryption MUST use XChaCha20-Poly1305's tag verification. Restored plaintext MUST NOT
+be emitted before the AEAD tag check passes. A tag failure MUST be treated as an error;
+the chunk MUST NOT be forwarded with a partially-restored or raw fake in place.
+
 If a fake does not appear in the response the stream is forwarded unchanged. `unscrub`
 MUST NOT produce an error or corrupt the stream in this case.
 
@@ -319,6 +334,54 @@ Fakes MUST satisfy:
 | Coverage | Best-effort. Obfuscated or split secrets are out of scope. |
 
 ---
+
+## CLI
+
+The CLI exposes the same contract as the Rust API at the process boundary,
+making `its-classified` usable from any language by shelling out.
+
+### `scrub`
+
+```
+its-classified scrub [--patterns <path>] --entries-out <path> --key-out <path>
+```
+
+- **stdin:** raw payload bytes
+- **stdout:** scrubbed payload (structurally-equivalent fakes in place of secrets)
+- `--entries-out`: path to write the JSON entries array (ciphertext only, not sensitive)
+- `--key-out`: path to write the hex session key (mode 0600 enforced by the tool)
+- `--patterns`: optional TOML pattern config for Tier 2 registered secrets; omit to
+  use built-in Tier 1 patterns only
+
+### `unscrub`
+
+```
+ITS_CLASSIFIED_KEY=<hex> its-classified unscrub --entries <path>
+```
+
+- **stdin:** scrubbed response bytes (streamed — output is forwarded without full buffering)
+- **stdout:** restored response with originals in place of fakes
+- `--entries`: entries file produced by a prior `scrub` call
+- `ITS_CLASSIFIED_KEY`: hex session key, read from environment only
+
+### Key delivery
+
+The session key MUST be passed via the `ITS_CLASSIFIED_KEY` environment variable.
+A `--key` CLI flag is intentionally absent: command-line arguments appear in
+`/proc`, shell history, and process listings. The env var is the only supported
+delivery mechanism, not an oversight.
+
+The entries file contains only ciphertext. It is not sensitive on its own and
+MAY be written to a temp directory. The session key file written by `--key-out`
+MUST be created with mode 0600 and SHOULD be deleted by the caller as soon as
+`unscrub` completes.
+
+### Streaming
+
+`unscrub` reads stdin incrementally and writes stdout as each chunk is resolved.
+It MUST NOT buffer stdin to completion before writing. This is the streaming
+guarantee expressed at the CLI level: the process behaves correctly when piped
+from a live SSE source.
 
 ## Prior art and references
 
