@@ -59,32 +59,28 @@ pub fn scrub(
 
 /// Restore scrubbed secrets in a response stream.
 ///
-/// Scans each chunk of `response` for fakes produced by a prior `scrub` call
-/// on the same `handle`, replaces them with the original secrets, and forwards
-/// the corrected chunks downstream.
+/// Scans each chunk of `response` for the exact fake bytes recorded in `handle`,
+/// decrypts each match, and emits the original in its place. No pattern detection
+/// runs during unscrub — the handle already contains every fake that was inserted.
 ///
-/// Works correctly over streaming responses (SSE, chunked transfer): chunks are
-/// held only as long as needed to resolve an ambiguous match at a chunk
-/// boundary. The maximum hold depth is bounded by the longest secret length
-/// across all active patterns.
+/// Works correctly over streaming responses (SSE, chunked transfer): a sliding
+/// window of max(fake_len) bytes is maintained at chunk boundaries so that fakes
+/// split across chunks are found and restored correctly.
 ///
 /// If a fake does not appear in the response the chunk is forwarded unchanged.
 /// `unscrub` MUST NOT corrupt output when a fake is absent.
 pub fn unscrub(
     response: impl Stream<Item = Bytes>,
     handle: ScrubHandle,
-    patterns: &[Pattern],
 ) -> impl Stream<Item = Bytes>;
 ```
 
-### Why `patterns` appears in both calls
+### Why `patterns` is absent from `unscrub`
 
-In `scrub`, patterns drive detection. In `unscrub`, patterns are needed by the
-stream-aware suspicion engine: to know when to start holding chunks (a prefix
-has started arriving), how many bytes to hold (the expected length of the
-candidate), and when to release (match confirmed or structurally impossible).
-Over a fully-buffered response the patterns are not needed for replacement, but
-`unscrub` must handle streams, so they are a required input.
+`scrub` needs patterns to detect secrets it has never seen before in an arbitrary
+payload. `unscrub` already knows exactly what was inserted: the fakes are in the
+handle. Detection is not the job — exact lookup is. Passing patterns to `unscrub`
+would be both unnecessary and misleading about what the function does.
 
 ---
 
@@ -257,49 +253,38 @@ and MUST handle boundaries as specified below.
 
 ## Streaming behavior (`unscrub`)
 
-### Suspicion-driven buffering
+### Sliding-window exact match
 
-`unscrub` MUST NOT buffer the entire response. It MUST use suspicion-driven
-chunk holding:
+`unscrub` performs exact multi-string matching over the response stream using only
+the fake byte strings from the handle. No structural pattern detection, no charset
+checking, no HMAC verification — those belong to `scrub`.
 
-1. Maintain a set of **active suspects**: byte positions in the stream where a
-   known prefix (Tier 1) or `start_part` (Tier 2) has started matching but the
-   full candidate has not yet arrived.
-2. When a suspect is opened: hold subsequent chunks until one of:
-   - The full expected `length` of bytes has arrived → run confirmation
-     (structural for Tier 1, HMAC for Tier 2).
-   - An incoming byte violates `charset` before `length` is reached → close
-     suspect, release held chunks unmodified, continue scanning.
-3. On confirmed match: replace the candidate bytes with the fake (Tier 1) or
-   the registered fake (Tier 2), then release the processed chunks downstream.
-4. On failed match: release held chunks unmodified.
-5. Multiple suspects MAY be open simultaneously if two prefixes overlap in the
-   stream.
+`unscrub` MUST NOT buffer the entire response. It MUST maintain a sliding window
+of `max(len(entry.fake))` bytes at chunk boundaries to handle fakes split across
+chunks. Bytes outside the window are emitted immediately.
+
+On a match:
+1. Decrypt the corresponding ciphertext with `session_key` using XChaCha20-Poly1305.
+2. Verify the AEAD tag. Restored plaintext MUST NOT be emitted before tag
+   verification passes. A tag failure MUST be treated as an error; the chunk MUST
+   NOT be forwarded with a raw fake or partial restore in place.
+3. Emit the original bytes and advance past the matched fake.
+
+On no match: emit bytes as they leave the window unchanged.
 
 ### Buffer depth guarantee
 
 The maximum number of bytes held at any time is bounded by:
 
 ```
-max_hold = max(length) across all active patterns
+max_hold = max(len(entry.fake)) across all ScrubHandle entries
 ```
 
 For typical secret classes this is on the order of 100–200 bytes. This bound
 MUST hold regardless of response size or chunk count.
 
-### Replacement in the response
-
-`unscrub` scans each chunk for the exact `fake` bytes stored in each `ScrubHandle` entry.
-On a match it decrypts the corresponding ciphertext with `session_key` and restores the
-original. This handles the case where the model echoes back a value that was scrubbed in
-the request (e.g. a secret parroted from context into the reply).
-
-Decryption MUST use XChaCha20-Poly1305's tag verification. Restored plaintext MUST NOT
-be emitted before the AEAD tag check passes. A tag failure MUST be treated as an error;
-the chunk MUST NOT be forwarded with a partially-restored or raw fake in place.
-
-If a fake does not appear in the response the stream is forwarded unchanged. `unscrub`
-MUST NOT produce an error or corrupt the stream in this case.
+If a fake does not appear in the response the stream is forwarded unchanged.
+`unscrub` MUST NOT produce an error or corrupt the stream in this case.
 
 ---
 
