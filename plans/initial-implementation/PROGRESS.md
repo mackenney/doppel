@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress
+Complete
 
 ## Objective
 
@@ -93,14 +93,14 @@ Every SPEC.md behavioral invariant is covered by at least one step's acceptance 
 
 ## Steps
 
-- [ ] [step-01-cargo-skeleton](./step-01-cargo-skeleton.md) — Add all dependencies, module file stubs, binary target
-- [ ] [step-02-types-crypto](./step-02-types-crypto.md) — SessionKey, Entry, ScrubResult types; AEAD encrypt/decrypt
-- [ ] [step-03-fake-hmac](./step-03-fake-hmac.md) — Fake derivation (keyed, stable, collision-safe); HMAC helpers
-- [ ] [step-04-tier1-patterns](./step-04-tier1-patterns.md) — 6 built-in Tier 1 Pattern definitions
-- [ ] [step-05-tier2-register](./step-05-tier2-register.md) — Registration, Tier 2 Pattern struct, HMAC token
-- [ ] [step-06-scrub-engine](./step-06-scrub-engine.md) — Leftmost-longest scan engine, public `scrub()` function
-- [ ] [step-07-unscrub-streaming](./step-07-unscrub-streaming.md) — Aho-Corasick sliding-window streaming unscrub
-- [ ] [step-08-cli](./step-08-cli.md) — clap CLI: scrub/unscrub subcommands, 0600 key file, env var
-- [ ] [step-09-spec-tests](./step-09-spec-tests.md) — All 23 INV spec-invariant tests in tests/spec/
-- [ ] [step-10-integration-tests](./step-10-integration-tests.md) — Full round-trip integration tests
-- [ ] [step-11-e2e-tests](./step-11-e2e-tests.md) — CLI E2E tests (feature-gated) + nextest config
+- [x] [step-01-cargo-skeleton](./step-01-cargo-skeleton.md) — Add all dependencies, module file stubs, binary target
+- [x] [step-02-types-crypto](./step-02-types-crypto.md) — SessionKey, Entry, ScrubResult types; AEAD encrypt/decrypt
+- [x] [step-03-fake-hmac](./step-03-fake-hmac.md) — Fake derivation (keyed, stable, collision-safe); HMAC helpers
+- [x] [step-04-tier1-patterns](./step-04-tier1-patterns.md) — 6 built-in Tier 1 Pattern definitions
+- [x] [step-05-tier2-register](./step-05-tier2-register.md) — Registration, Tier 2 Pattern struct, HMAC token
+- [x] [step-06-scrub-engine](./step-06-scrub-engine.md) — Leftmost-longest scan engine, public `scrub()` function
+- [x] [step-07-unscrub-streaming](./step-07-unscrub-streaming.md) — Aho-Corasick sliding-window streaming unscrub
+- [x] [step-08-cli](./step-08-cli.md) — clap CLI: scrub/unscrub subcommands, 0600 key file, env var
+- [x] [step-09-spec-tests](./step-09-spec-tests.md) — All 22 INV spec-invariant tests in tests/spec/
+- [x] [step-10-integration-tests](./step-10-integration-tests.md) — Full round-trip integration tests
+- [x] [step-11-e2e-tests](./step-11-e2e-tests.md) — CLI E2E tests (feature-gated) + nextest config

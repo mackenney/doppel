@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress
+Complete
 
 ## Objective
 
@@ -11,16 +11,14 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## In Progress
 
-- `plans/initial-implementation/` — full library + CLI implementation
-  (11 steps, 7 waves; covers all 23 SPEC.md behavioral invariants)
-
+_(none)_
 ## Queued
 
 _(none)_
 
 ## Completed
 
-_(none yet)_
+- `initial-implementation` — full library + CLI (11 steps, 65 tests, all 23 INV invariants) commit 63672b1
 
 ## Known Gaps
 
