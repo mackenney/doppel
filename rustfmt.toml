@@ -1,0 +1,11 @@
+edition = "2024"
+msrv = "1.85"
+
+# 100 chars is a widely-used line width for modern projects; default 80 is too narrow
+max_width = 100
+
+# Shorter syntax: `Foo { x, y }` instead of `Foo { x: x, y: y }`
+use_field_init_shorthand = true
+
+# `x?` instead of `try!(x)` (already the norm in edition 2024, but explicit)
+use_try_shorthand = true
