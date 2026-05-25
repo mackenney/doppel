@@ -1,401 +1,168 @@
 # its-classified — Specification
 
-> Key words MUST, SHOULD, SHOULD NOT, MAY are used per RFC 2119.
+> The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are used per RFC 2119.
 
 ## Purpose
 
-`its-classified` is a Rust library that scrubs secrets from arbitrary byte
-payloads before they are forwarded to external services, then transparently
-restores them in the corresponding response — including streaming (SSE)
-responses.
+`its-classified` intercepts secrets in arbitrary byte payloads before they reach an external service, replaces them with structurally-equivalent fakes, and transparently restores the originals in the corresponding response — including streaming (SSE) responses. The threat it addresses is accidental secret exfiltration: secrets that enter LLM request bodies through normal development work (tool output, file contents, environment variables, debug context). It guarantees that what it detects is handled correctly and invisibly; it makes no claim about complete coverage.
 
-The primary threat it addresses is **accidental secret exfiltration**: secrets
-that end up in LLM request bodies through normal development work (tool output,
-file contents, environment variables, debug context).
+## Non-Goals
 
-This library does one thing. It is not a DLP system, not a PII detector, not a
-compliance tool. Specialization is intentional: a focused tool with a narrow
-contract is easier to reason about, audit, and trust than a Swiss Army knife.
-It guarantees that what it does scrub is handled correctly and transparently;
-it makes no claim about complete coverage.
+- Detecting secrets that are deliberately obfuscated, split, base64-encoded, or otherwise transformed before reaching the payload.
+- System-wide network interception (TLS MITM, packet filtering, iptables redirect).
+- PII detection, GDPR compliance, or any regulatory-compliance goal.
+- Persistent storage of original secrets.
+- Guaranteed complete coverage — best-effort detection is the explicit contract, not a limitation to be fixed.
+- Header inspection; scope is request and response body bytes only.
+- Multi-hop or nested scrub/unscrub chains.
+- Defense against a compromised host or a malicious caller with access to process memory.
 
-### Scope
+## Core Mental Model
 
-- **In scope:** request and response body bytes. Headers are out of scope.
-- **Deployment context:** local developer machine. The caller generally trusts
-  the machine; the goal is to avoid exfiltrating secrets to external providers,
-  not to harden against a compromised host.
-- **Best-effort detection:** the library catches high-confidence matches.
-  Obfuscated, split, or encoded secrets are explicitly out of scope. Detection
-  that requires false positive–prone heuristics (e.g. pure entropy scoring) is
-  excluded by default.
+The library's surface area is defined by three operations and three data abstractions:
 
-### Non-goals
+**Pattern** is an opaque detection descriptor. It encapsulates everything needed to find a specific secret or secret class in an arbitrary payload and replace it with a structurally-equivalent fake: the detection mechanism, character set, and the stable fake mapping — either a pre-generated fake (Tier 2) or a per-secret fake deterministically derived from the Pattern on each detection (Tier 1). Built-in Tier 1 definitions and Tier 2 registrations both produce Patterns; `scrub` treats them identically and is not aware of tier distinctions. Built-in Tier 1 Patterns are canonical singleton values — one per class.
 
-- Detecting secrets that are deliberately obfuscated or escaped.
-- System-wide interception (TLS MITM, iptables redirect).
-- PII detection or GDPR compliance.
-- Persistent secret storage of any kind.
-- Guaranteed 100% coverage — best-effort is the contract.
+**`scrub`** receives a complete payload and a set of Patterns. It scans for secrets left-to-right, replaces each detected secret with the fake prescribed by the matching Pattern, and returns three things: the scrubbed payload, a set of substitution **entries**, and a **session key**. `scrub` MUST NOT modify bytes outside the detected secrets. `scrub` accepts a single complete payload buffer; streaming input is not part of the API.
 
----
+**Entries** are the set of substitution records produced by one `scrub` call — one record per distinct secret detected. Each entry holds the fake bytes and the ciphertext of the original secret, encrypted under the session key. Entries are not sensitive on their own: without the session key, the ciphertext is opaque. An observer who sees the entries learns nothing about the secret payload — the bytes after the prefix that constitute the credential value. The prefix, length, and character class are visible in the fake by design, since this is what enables the model to reason about the secret's format.
 
-## Core API
+**Session key** is a 32-byte random value generated fresh at `scrub` time. It is the sole decryption gate for the entries produced in that call. The session key is sensitive and ephemeral: it exists in process memory for one request/response cycle only, MUST NOT be written to disk, and MUST NOT appear in logs or any serialized form. Entries and session key are explicitly separate values with separate sensitivity levels and separate lifetimes.
 
-```rust
-/// Scrub secrets from a payload.
-///
-/// Detects all secrets matching `patterns` in `payload`, replaces each with a
-/// structurally-equivalent fake, and returns the scrubbed payload together with
-/// an opaque handle that can restore the originals.
-///
-/// The returned `ScrubHandle` is ephemeral: it is valid for the duration of one
-/// request/response cycle and MUST be dropped immediately after `unscrub`
-/// completes.
-pub fn scrub(
-    payload: &[u8],
-    patterns: &[Pattern],
-) -> (Vec<u8>, ScrubHandle);
+**`unscrub`** receives a response stream, the entries from the corresponding `scrub` call, and the session key. It performs exact multi-string matching using only the fake byte strings in the entries — no pattern detection, no charset scanning. Every match triggers decryption of the corresponding entry; the original bytes are emitted in place of the fake. Bytes that do not match any fake are forwarded unchanged. `unscrub` MUST NOT require the full response to be buffered before emitting output.
 
-/// Restore scrubbed secrets in a response stream.
-///
-/// Scans each chunk of `response` for the exact fake bytes recorded in `handle`,
-/// decrypts each match, and emits the original in its place. No pattern detection
-/// runs during unscrub — the handle already contains every fake that was inserted.
-///
-/// Works correctly over streaming responses (SSE, chunked transfer): a sliding
-/// window of max(fake_len) bytes is maintained at chunk boundaries so that fakes
-/// split across chunks are found and restored correctly.
-///
-/// If a fake does not appear in the response the chunk is forwarded unchanged.
-/// `unscrub` MUST NOT corrupt output when a fake is absent.
-pub fn unscrub(
-    response: impl Stream<Item = Bytes>,
-    handle: ScrubHandle,
-) -> impl Stream<Item = Bytes>;
-```
+**Registration** is a preparatory operation that takes a secret value and produces a Tier 2 Pattern. The secret is consumed during registration and immediately discarded; the library has no persistent store. The produced Pattern is an opaque value the caller holds and passes to future `scrub` calls. Registration is described in detail under Detection Tiers.
 
-### Why `patterns` is absent from `unscrub`
+These operations and data abstractions are the complete public surface. There are no modes, toggles, or configuration beyond Patterns and the entries. There is no negotiation.
 
-`scrub` needs patterns to detect secrets it has never seen before in an arbitrary
-payload. `unscrub` already knows exactly what was inserted: the fakes are in the
-handle. Detection is not the job — exact lookup is. Passing patterns to `unscrub`
-would be both unnecessary and misleading about what the function does.
+## Detection Tiers
 
----
+### Tier 1 — Known Secret Classes
 
-## `ScrubHandle`
+Tier 1 covers secrets whose format is structurally well-known: a fixed literal prefix followed by a payload of a defined character set and length range.
 
-`ScrubHandle` is an opaque, session-scoped encrypted blob. It MUST NOT expose
-the original secrets as plaintext in any accessible field.
+Detection is structural: at each byte position, test whether any registered prefix matches; on a hit, verify that the following bytes satisfy the character set for the required length range. No full regular expression engine is required or used.
 
-### Internal structure
+The fake for a Tier 1 match preserves the detected prefix exactly and fills the remaining positions with characters drawn from the same character set, sampled from a CSPRNG. The fake has the same total byte length as the original.
+
+The library MUST ship built-in Tier 1 definitions covering at minimum: Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys. Additional definitions MAY be added; the built-in set is not closed.
+
+Each built-in Tier 1 definition is a single canonical Pattern value; the library exposes one Pattern per class. A caller that reuses the same Pattern instance across `scrub` calls will always receive the same fake for the same secret, enabling cross-call stability.
+
+### Tier 2 — Registered Arbitrary Secrets
+
+Tier 2 covers secrets that do not conform to any known structural class. The caller performs a **registration** operation (described below) that produces a Tier 2 Pattern. That Pattern is then passed to `scrub` exactly like a Tier 1 Pattern; `scrub` applies all Patterns uniformly.
+
+Detection: when a start fragment matches, the candidate is confirmed by verifying the end fragment at the expected offset and then computing the HMAC and comparing it against the token stored in the Pattern. A structural match that fails HMAC verification MUST be passed through unchanged; no replacement occurs. HMAC verification is internal to the Pattern's detection logic and does not appear in `scrub`'s output.
+
+### Registration
+
+Registration is a distinct, preparatory operation that precedes the scrub→unscrub cycle. It takes a secret value as input and produces a Pattern. The secret value is consumed during registration and immediately discarded; the registration operation MUST NOT store the original secret anywhere.
+
+The produced Pattern encapsulates:
+- **Detection fingerprint:** start fragment, end fragment, exact byte length, character set, and an HMAC verification token (salt + digest). _(Domain constraint: HMAC provides confirmation that a structural candidate is the registered secret without requiring the full secret to be stored; the unique salt prevents precomputed lookup attacks against the stored digest.)_
+- **Fake:** a pre-generated structurally-equivalent replacement, produced from a CSPRNG at registration time.
+
+The salt MUST be unique per registration; salt reuse is prohibited.
+
+The Pattern produced by registration is an opaque value the caller receives and holds. Whether the caller persists it is the caller's concern; the library has no persistent store. The caller passes the Pattern to future `scrub` calls. At no point after registration does the library have access to the original secret.
+
+## Security Properties
+
+**Entries alone do not leak secrets.** Each entry contains only ciphertext. Without the session key, the entries reveal nothing about the secret payload — the bytes after the prefix that constitute the credential value. The entries are not sensitive.
+
+**Scrubbed payload alone does not leak secrets.** The scrubbed output contains only structurally-equivalent fakes. There are no tokens, markers, indices, or side-channels in the scrubbed payload that reference the original bytes.
+
+**Session key is the trust gate.** The session key is generated fresh at the start of each `scrub` call. It lives in process memory only, for the duration of one request/response cycle. It MUST NOT be written to disk. It MUST NOT appear in logs or any serialized form. When the response cycle ends, no secret material remains anywhere — not in the entries, not on disk, not in the payload.
+
+**Per-entry AEAD encryption.** Each substitution entry is independently encrypted with its own AEAD tag under the session key. `unscrub` decrypts entries one by one as their corresponding fakes are matched in the response stream — it does NOT decrypt the entire entries set upfront. _(Domain constraint: the 192-bit nonce eliminates birthday-bound collision risk for randomly-generated nonces; the AEAD construction provides both confidentiality and ciphertext integrity in a single pass. Cipher agility is deliberately absent — algorithm negotiation introduces downgrade risk and implementation complexity with no benefit in a single-purpose library.)_ Restored plaintext MUST NOT be emitted before the AEAD tag of the matching entry passes verification. A tag failure MUST produce an error; the stream MUST NOT continue with the raw fake or any partially-decrypted bytes in place.
+
+**Fake plausibility does not compromise security of the credential value.** Fakes preserve the detected prefix and character class exactly — this is the intended behavior that enables the model to reason about format, length, and prefix correctness. The prefix, length, and character class are visible in the fake by design and are not secret. What the fake does NOT reveal is the credential value: the bytes after the prefix that constitute the actual secret. Those bytes are replaced with CSPRNG-generated characters from the same character set; no information about the original credential bytes survives in the fake.
+
+**Tier 2 fragment exposure is bounded and deliberate.** Storing start and end fragments for detection reduces the registered secret's entropy by a caller-controlled amount. This is the unavoidable cost of deterministic detection without full-secret storage. There is no way to enable reliable Tier 2 detection without this trade-off.
+
+## Streaming Invariants
+
+`unscrub` operates on a stream of byte chunks. At any point during processing, the maximum number of bytes held without being emitted is bounded by the length of the longest fake across all entries:
 
 ```
-session_key  = 32 random bytes, generated at scrub() time, in memory only
-nonce        = 192 random bits, generated fresh per entry at scrub() time
-entry        = { fake: Vec<u8>, ciphertext: XChaCha20-Poly1305(original, key=session_key, nonce=nonce, ad=&fake) }
-ScrubHandle  = { session_key, entries: Vec<entry> }
+max_hold = max { |fake_i| : fake_i ∈ entries }
 ```
 
-The cipher is **XChaCha20-Poly1305**. There is no algorithm negotiation and no
-version field: one cipher, chosen for its 192-bit nonce (safe for random
-generation without birthday-bound concerns) and its strong AEAD guarantees.
-Cipher agility is deliberately absent — it is a source of footguns, not
-flexibility.
-
-The `fake` bytes are what appear in the scrubbed payload — the structural replacement
-the model sees. They are also the scan target for `unscrub`: it searches each response
-chunk for any `fake` from the entries and decrypts the corresponding ciphertext to
-recover the original. There is no separate token or identifier embedded in the payload;
-the fake is its own index.
-
-### Security properties
-
-- **`ScrubHandle` alone does not leak secrets.** Entries contain only
-  ciphertext; decryption requires `session_key`.
-- **The scrubbed payload alone does not leak secrets.** It contains only
-  structurally-equivalent fakes; neither reveals the original.
-- **`session_key` is the trust gate.** It lives in process memory for the
-  duration of one request/response cycle, then is dropped. It is never written
-  to disk, never logged.
-- Secrets are only in memory for the duration of the request. After `unscrub`
-  completes and `ScrubHandle` is dropped, no secret material remains.
-
-### Lifetime guarantee
-
-`ScrubHandle` MUST be dropped no later than when the response stream produced
-by `unscrub` is exhausted or cancelled. Callers SHOULD scope it to the
-request/response future.
-
----
-
-## Pattern types
-
-### Tier 1 — Known secret classes
-
-A `Tier1Pattern` describes a class of well-known secrets by structure. Detection
-is structural: a fixed prefix match followed by a charset and length scan.
-
-```rust
-pub struct Tier1Pattern {
-    /// Human-readable class name, e.g. "anthropic-api-key".
-    pub name: &'static str,
-    /// Literal prefix that MUST appear verbatim, e.g. "sk-ant-api03-".
-    pub prefix: &'static str,
-    /// Valid characters for the payload portion after the prefix.
-    pub charset: Charset,
-    /// Inclusive length range of the full secret (prefix + payload).
-    pub length: RangeInclusive<usize>,
-}
-```
-
-The fake for a Tier 1 match is generated by preserving the prefix exactly and
-filling the payload portion with random characters drawn from the same `charset`,
-sampled from a CSPRNG. The fake has the same total length as the detected
-original.
-
-**Effect on the model:** the model receives a structurally valid-looking
-credential — correct prefix, correct character set, correct length. It can
-reason about format ("this looks like a valid Anthropic key"), length ("your
-key is the right length"), and prefix correctness, without the true secret bytes
-ever leaving the machine.
-
-The library MUST ship built-in `Tier1Pattern` definitions for at minimum:
-Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal
-access tokens (classic and fine-grained), and GCP API keys. Additional patterns
-MAY be added; the set is not closed.
-
-### Tier 2 — Registered arbitrary secrets
-
-A `Tier2Pattern` covers secrets that do not conform to any known class prefix.
-The caller registers enough information to detect the secret in arbitrary text;
-the full secret is never stored persistently.
-
-```rust
-pub struct Tier2Pattern {
-    /// A portion of the beginning of the secret, sufficient for reliable match
-    /// anchoring. Length is a caller judgment call: longer reduces false
-    /// positives, shorter leaks less about the secret.
-    pub start_part: Vec<u8>,
-    /// A portion of the end of the secret, used for confirmation.
-    pub end_part: Vec<u8>,
-    /// Exact byte length of the full secret.
-    pub length: usize,
-    /// Valid characters for the interior of the secret. The caller SHOULD
-    /// supply this rather than requiring the library to infer it, as the caller
-    /// knows the secret format.
-    pub charset: Charset,
-    /// HMAC-SHA256(secret, salt) where `salt` is caller-supplied and stored
-    /// alongside the hash. Used to confirm a candidate match before replacing.
-    /// The salt MUST be unique per registration and never reused.
-    pub verification: Verification,
-    /// The structurally-equivalent fake to use as the replacement. Generated
-    /// once at registration time using `charset` and `length`, stored here.
-    /// The fake is not a secret.
-    pub fake: Vec<u8>,
-}
-
-pub struct Verification {
-    pub salt: [u8; 32],
-    pub hmac: [u8; 32],
-}
-```
-
-#### What persistent storage contains for Tier 2
-
-A registered secret persists `start_part`, `end_part`, `length`, `charset`,
-`verification`, and `fake`. **It never persists the full secret.** This is a
-deliberate tradeoff: leaking `start_part` and `end_part` reduces the entropy of
-the secret by a bounded, caller-controlled amount, which is the unavoidable cost
-of reliable deterministic detection.
-
-The `verification.hmac` enables confirmation of a candidate match without
-storing the secret: hash the candidate with the stored salt and compare. The
-`verification.salt` prevents the stored hash from being used to verify a guessed
-secret without the salt (i.e., rainbow-table attacks against the registration
-database are infeasible).
-
-#### Fake stability
-
-The fake for a Tier 2 secret is fixed at registration time and reused across
-all scrub calls. This ensures cache key stability when `its-classified` is used
-upstream of a caching layer: the same secret always maps to the same fake within
-a registration lifetime.
-
----
-
-## Detection algorithm
-
-Both tiers share the same scanning contract: the library scans the payload
-left-to-right, finding the leftmost-longest match at each position. Overlapping
-matches are not produced.
-
-**Tier 1 detection:**
-1. At each byte position, test whether any `Tier1Pattern.prefix` matches.
-2. On a prefix hit, verify that the following bytes satisfy `charset` for
-   `length - prefix.len()` bytes.
-3. On structural confirmation, extract the candidate and replace.
-
-**Tier 2 detection:**
-1. At each byte position, test whether any `Tier2Pattern.start_part` matches.
-2. On a start hit, verify length and `end_part` at the expected offset.
-3. Compute HMAC of the candidate; compare against `verification`. Only replace
-   on HMAC match.
-4. HMAC mismatch means a false structural hit; pass through unchanged.
-
-Detection MUST handle the case where a secret spans a chunk boundary in the
-input. The `scrub` function receives a complete payload (not a stream), so
-boundary handling in `scrub` is not required. `unscrub` operates on a stream
-and MUST handle boundaries as specified below.
-
----
-
-## Streaming behavior (`unscrub`)
-
-### Sliding-window exact match
-
-`unscrub` performs exact multi-string matching over the response stream using only
-the fake byte strings from the handle. No structural pattern detection, no charset
-checking, no HMAC verification — those belong to `scrub`.
-
-`unscrub` MUST NOT buffer the entire response. It MUST maintain a sliding window
-of `max(len(entry.fake))` bytes at chunk boundaries to handle fakes split across
-chunks. Bytes outside the window are emitted immediately.
-
-On a match:
-1. Decrypt the corresponding ciphertext with `session_key` using XChaCha20-Poly1305.
-2. Verify the AEAD tag. Restored plaintext MUST NOT be emitted before tag
-   verification passes. A tag failure MUST be treated as an error; the chunk MUST
-   NOT be forwarded with a raw fake or partial restore in place.
-3. Emit the original bytes and advance past the matched fake.
-
-On no match: emit bytes as they leave the window unchanged.
-
-### Buffer depth guarantee
-
-The maximum number of bytes held at any time is bounded by:
-
-```
-max_hold = max(len(entry.fake)) across all ScrubHandle entries
-```
-
-For typical secret classes this is on the order of 100–200 bytes. This bound
-MUST hold regardless of response size or chunk count.
-
-If a fake does not appear in the response the stream is forwarded unchanged.
-`unscrub` MUST NOT produce an error or corrupt the stream in this case.
-
----
-
-## Fake generation
-
-Fakes MUST satisfy:
-
-- **Same prefix** (Tier 1): the prefix bytes are copied exactly from the
-  `Tier1Pattern`.
-- **Same length**: the fake has the same total byte length as the original.
-- **Same charset**: every non-prefix byte of the fake is drawn from the
-  pattern's `charset`.
-- **Unpredictable payload**: payload bytes MUST be drawn from a CSPRNG. The
-  same secret in two different `scrub` calls MUST NOT produce the same fake
-  (per-call freshness). Exception: Tier 2 fakes are fixed at registration (see
-  above).
-- **Not equal to the original**: if the CSPRNG happens to produce the original,
-  resample. This MUST be enforced.
-
----
-
-## Security posture summary
-
-| Property | Guarantee |
-|---|---|
-| Secrets in persistent storage | Never. Tier 2 stores only structural fingerprint + HMAC. |
-| Secrets in memory | Only for the duration of one request/response cycle. |
-| `ScrubHandle` leaked to disk | Ciphertext only; unreadable without `session_key`. |
-| Scrubbed payload observed in transit | Contains structural fakes only. No original bytes, no separate tokens. |
-| Same secret across calls | Different fakes per call (Tier 1). Same fake per registration (Tier 2). |
-| Model reasoning about secret format | Preserved: fake has identical prefix, length, charset. |
-| Coverage | Best-effort. Obfuscated or split secrets are out of scope. |
-
----
-
-## CLI
-
-The CLI exposes the same contract as the Rust API at the process boundary,
-making `its-classified` usable from any language by shelling out.
-
-### `scrub`
-
-```
-its-classified scrub [--patterns <path>] --entries-out <path> --key-out <path>
-```
-
-- **stdin:** raw payload bytes
-- **stdout:** scrubbed payload (structurally-equivalent fakes in place of secrets)
-- `--entries-out`: path to write the JSON entries array (ciphertext only, not sensitive)
-- `--key-out`: path to write the hex session key (mode 0600 enforced by the tool)
-- `--patterns`: optional TOML pattern config for Tier 2 registered secrets; omit to
-  use built-in Tier 1 patterns only
-
-### `unscrub`
-
-```
-ITS_CLASSIFIED_KEY=<hex> its-classified unscrub --entries <path>
-```
-
-- **stdin:** scrubbed response bytes (streamed — output is forwarded without full buffering)
-- **stdout:** restored response with originals in place of fakes
-- `--entries`: entries file produced by a prior `scrub` call
-- `ITS_CLASSIFIED_KEY`: hex session key, read from environment only
-- No `--patterns` argument: `unscrub` works from the handle alone.
-
-### Key delivery
-
-The session key MUST be passed via the `ITS_CLASSIFIED_KEY` environment variable.
-A `--key` CLI flag is intentionally absent: command-line arguments appear in
-`/proc`, shell history, and process listings. The env var is the only supported
-delivery mechanism, not an oversight.
-
-The entries file contains only ciphertext. It is not sensitive on its own and
-MAY be written to a temp directory. The session key file written by `--key-out`
-MUST be created with mode 0600 and SHOULD be deleted by the caller as soon as
-`unscrub` completes.
-
-### Streaming
-
-`unscrub` reads stdin incrementally and writes stdout as each chunk is resolved.
-It MUST NOT buffer stdin to completion before writing. This is the streaming
-guarantee expressed at the CLI level: the process behaves correctly when piped
-from a live SSE source.
-
-## Prior art and references
-
-The following projects implement related ideas and are worth studying, in
-particular for pattern libraries and fake generation:
-
-- **[mirage-proxy](https://github.com/chandika/mirage-proxy)** (Rust) — the
-  closest prior art. Structure-preserving plausible fakes, bidirectional,
-  sub-millisecond. Ships 30+ built-in pattern classes. The pattern library
-  (`src/patterns.rs`) and faker (`src/faker.rs`) are directly relevant
-  references for Tier 1 built-in class definitions. Architecture differs: it
-  is a standalone proxy process; `its-classified` is an in-process library with
-  a stream-aware API.
-
-- **[CloakLLM](https://github.com/cloakllm/CloakLLM)** (Python) — covers the
-  SSE streaming problem with a `StreamDesanitizer` state machine that replaces
-  tokens as chunks arrive without full buffering. Compliance-oriented; uses
-  visible `[CATEGORY_N]` tokens rather than structure-preserving fakes.
-
-- **[scrub-llm](https://github.com/haasonsaas/scrub-llm)** (Python) — 30+
-  built-in patterns, bidirectional, lightweight. Pattern list is a useful
-  reference for Tier 1 coverage completeness.
-
-- **[ctxproxy](https://github.com/jakobhuss/ctxproxy)** (Go) — modular
-  proxy server with stable placeholder tokens and transparent restoration.
-  Pluggable scanner backends.
-
-- **[Presidio](https://github.com/microsoft/presidio)** (Python) — Microsoft's
-  PII detection and anonymization framework. PII-focused rather than
-  credential-focused, but the detection pipeline architecture (regex → NER →
-  custom) is a useful reference for building layered detection.
+This bound MUST hold regardless of stream length, chunk count, or chunk size. For typical secret classes this is on the order of 100–200 bytes.
+
+Bytes that leave the window without matching any fake are emitted immediately. A fake whose bytes are split across a chunk boundary MUST still be found and restored correctly.
+
+When no fake from the entries appears anywhere in the response, the stream MUST be forwarded byte-for-byte unchanged. `unscrub` MUST NOT produce an error in this case.
+
+## Fake Generation
+
+Fakes MUST satisfy these properties simultaneously:
+
+- **Same prefix:** the fake begins with the exact prefix bytes of the matched Pattern.
+- **Same length:** the fake has the same total byte count as the original secret.
+- **Same charset:** every non-prefix byte is drawn from the Pattern's character set.
+- **No collision with original:** if the generated fake equals the original secret, the implementation MUST resample until they differ. A fake that equals the original is not a fake.
+
+The behavioral guarantee is stability: every detection of the same secret under the same Pattern MUST produce the same fake. This applies equally to Tier 1 and Tier 2 Patterns. The mechanism by which stability is achieved is an implementation detail — for example, a keyed derivation from a stable salt embedded in the Pattern. The CSPRNG and collision-avoidance requirements apply to fake generation; once a valid fake has been established for a (secret, Pattern) pair, that fake is returned on all subsequent detections without re-generation.
+
+## CLI Contract
+
+The CLI exposes `scrub` and `unscrub` at the process boundary.
+
+**`scrub`:** reads the complete payload from stdin; writes the scrubbed payload to stdout; writes the entries to a caller-specified path; writes the session key to a caller-specified path. The session key output file MUST be created with mode 0600. No other file permission is acceptable.
+
+**`unscrub`:** reads the response stream from stdin incrementally and writes output to stdout as each chunk resolves. It MUST NOT buffer stdin to completion before writing to stdout. The session key MUST be supplied via the `ITS_CLASSIFIED_KEY` environment variable. A `--key` command-line flag MUST NOT exist. _(Domain constraint: command-line arguments are visible in process listings, `/proc`, and shell history; the environment variable is the only acceptable delivery mechanism.)_
+
+The entries file written by `scrub` contains ciphertext only and is not sensitive on its own. Deletion of the session key file after `unscrub` completes is the caller's responsibility; the CLI `unscrub` command has no mechanism to locate the file and does not perform this deletion. See Known Limitations.
+
+## Behavioral Invariants
+
+1. `scrub` MUST replace every secret detected by the supplied Patterns with a structurally-equivalent fake.
+2. `scrub` MUST NOT modify bytes that are not identified as secrets by the supplied Patterns.
+3. `scrub` MUST return entries containing exactly one record per distinct secret substituted in that call, and no records for secrets not substituted.
+4. `unscrub` MUST restore every fake present in the response stream to its original bytes, regardless of where chunk boundaries fall.
+5. `unscrub` MUST NOT emit restored plaintext before the AEAD tag of the corresponding entry has been verified.
+6. An AEAD tag failure MUST produce an error; the stream MUST NOT continue with a raw fake or any partially-decrypted content in its place.
+7. `unscrub` MUST forward all bytes unchanged when no fake from the entries appears in the stream; it MUST NOT produce an error in this case.
+8. `unscrub` MUST NOT hold more than `max { |fake_i| : fake_i ∈ entries }` bytes unemitted at any point during processing.
+9. The entries MUST NOT contain plaintext secret bytes in any field or serialized form. The session key MUST NOT be serialized together with or embedded within the entries.
+10. The session key MUST NOT be written to disk, appear in logs, or be included in any serialized form.
+11. The session key MUST NOT be retained after the response cycle ends. The entries MUST NOT be retained after the response cycle ends.
+12. All key material MUST be destroyed (overwritten with zeros or equivalent) when the session key's response cycle ends; key material MUST NOT remain accessible after the cycle terminates.
+13. The same secret detected under the same Pattern MUST produce the same fake. This applies to both Tier 1 and Tier 2 Patterns: within any context where the same Pattern and the same secret appear, the resulting fake is identical.
+14. Multiple occurrences of the same secret within a single `scrub` call each produce the same fake in the scrubbed output; all occurrences share a single entry.
+15. A fake MUST NOT equal the original secret; if the CSPRNG produces a collision during fake generation, the implementation MUST resample until they differ.
+16. A Tier 2 candidate that matches structurally but fails HMAC verification MUST be passed through unchanged; no replacement occurs.
+17. Each Tier 2 registration MUST use a unique HMAC salt; salt reuse is prohibited.
+18. Detection MUST produce leftmost-longest matches; overlapping matches MUST NOT be produced. This guarantee applies across all Patterns: when two Patterns both match at the same byte position, the longer match takes precedence. If a Tier 1 Pattern and a Tier 2 Pattern both match at the same byte position with the same byte length, the Tier 1 Pattern takes precedence.
+19. `unscrub` MUST perform only exact matching against fake byte strings from the entries; it MUST NOT run pattern detection of any kind.
+20. The CLI `unscrub` command MUST accept the session key only via the `ITS_CLASSIFIED_KEY` environment variable; no other delivery mechanism is provided or accepted.
+21. The CLI `scrub` command MUST create the session key output file with permission mode 0600.
+22. The built-in Tier 1 set MUST cover Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys.
+23. `scrub` called on a payload containing no detectable secrets MUST return the payload bytes unchanged and an empty entries set.
+
+## Verifiable Conditions
+
+1. Given a payload containing a Tier 1 secret, the scrubbed output contains no byte subsequence equal to the original secret.
+2. Given a scrubbed payload, the corresponding entries, and the session key, passing the scrubbed payload through `unscrub` produces bytes that exactly equal the original payload.
+3. Two `scrub` calls on the same secret under the same Pattern produce identical fake bytes in the output.
+4. Given a response where a fake straddles a chunk boundary, `unscrub` restores the original secret correctly.
+5. Given a response that contains no fake from the entries, `unscrub` produces output byte-for-byte identical to the input and returns no error.
+6. Given an entries set where one entry's AEAD tag has been tampered with, `unscrub` returns an error and emits no partially-restored output.
+7. The entries produced by `scrub` contain no byte sequence equal to any original secret, regardless of how they are serialized or transmitted.
+8. The session key file created by the CLI `scrub` command has permission mode 0600.
+9. The CLI `unscrub` command begins writing to stdout before stdin reaches EOF when the input is a live SSE stream.
+10. Multiple occurrences of the same secret within a single payload each produce the same fake bytes in the scrubbed output.
+11. A Tier 2 candidate that shares start and end fragments with a registered secret but does not match the HMAC passes through the scrubbed payload unchanged.
+12. Given an empty set of patterns, `scrub` returns the payload unchanged and an empty entries set.
+
+## Known Limitations / Accepted Trade-offs
+
+- **Best-effort coverage.** Detection finds high-confidence structural matches. Secrets that are obfuscated, encoded, split across tokens, or otherwise transformed before the payload is constructed are out of scope. Entropy-based heuristic detection is excluded: false-positive avoidance takes priority over recall.
+- **Tier 2 fragment exposure.** Reliable detection of unstructured secrets requires storing enough of the secret to find it. The start and end fragments reduce the registered secret's entropy by a bounded, caller-controlled amount. There is no alternative.
+- **Cross-request correlation.** Because fakes are stable for the lifetime of a Pattern, an observer with access to multiple scrubbed payloads can correlate any two payloads that used the same Pattern — they will share the same fake. This applies equally to Tier 1 and Tier 2 Patterns. This is the accepted cost of fake stability.
+- **Body bytes only.** Header inspection is out of scope. The deployment target is local developer tooling, not a TLS-terminating proxy with visibility into all traffic metadata.
+- **Compressed and binary payloads.** Matching operates on raw bytes. Payloads that are compressed, encrypted, or encoded before reaching this library are not covered.
+- **Single-session entries.** The entries and session key are designed for exactly one request/response cycle. They are not sharable across processes and are not valid after the cycle ends. The session key is intentionally ephemeral.
+- **Session key file deletion is caller responsibility.** The CLI `unscrub` command receives the session key value via environment variable but has no specified mechanism to locate the key file. Deletion of the key file after `unscrub` completes is an operational step the caller must perform.
