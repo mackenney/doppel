@@ -12,9 +12,12 @@ one test that directly asserts the MUST/MUST NOT clause. These tests are the con
 they must pass on every commit.
 
 ### This Step
-Write all 23 spec-invariant tests in `tests/spec/inv.rs`, add module declaration to
+Write all 22 spec-invariant tests in `tests/spec/inv.rs`, add module declaration to
 `tests/spec.rs`. Use seeded RNG via `pub(crate)` test-internal APIs where needed.
 Every test must include an `// INV-N:` citation comment.
+INV-21 (0600 key file mode) is a CLI-level invariant; it is covered by step-08's
+acceptance check (`stat -c %a`) and the step-11 e2e test — no spec test in
+`tests/spec/` is required for it.
 
 ## Prerequisites
 
@@ -41,7 +44,7 @@ Every test must include an `// INV-N:` citation comment.
 mod inv;
 ```
 
-### Task 2: tests/spec/inv.rs — all 23 invariant tests
+### Task 2: tests/spec/inv.rs — 22 invariant tests (INV-1 through INV-20, INV-22, INV-23)
 
 **Test setup helpers** (at top of file):
 
@@ -394,7 +397,7 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
 ## Acceptance Criteria
 
 - [ ] `cargo nextest run --test spec` exits 0
-- [ ] All 23 `test_invN_*` functions present in `tests/spec/inv.rs`
+- [ ] All 22 `test_invN_*` functions present in `tests/spec/inv.rs` (INV-21 is CLI-only; covered by step-08 and step-11)
 - [ ] Each test has an `// INV-N:` comment quoting the invariant
 - [ ] `cargo clippy -- -D warnings` exits 0
 - [ ] No real API keys or credentials in test code (only synthetic values with all-A payloads)
@@ -404,8 +407,8 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
 You are reviewing Step 09. Verify:
 
 1. Run `cargo nextest run --test spec` — must exit 0
-2. Run `grep -c "fn test_inv" tests/spec/inv.rs` — must return 23 (or ≥23)
-3. Run `grep -c "// INV-" tests/spec/inv.rs` — must return ≥23
+2. Run `grep -c "fn test_inv" tests/spec/inv.rs` — must return 22 (INV-21 is CLI-only, verified in step-08 and step-11)
+3. Run `grep -c "// INV-" tests/spec/inv.rs` — must return ≥22
 4. Run `cargo clippy -- -D warnings` — must exit 0
 5. Run `grep -i "real\|actual\|sk-ant-api03-[^A]" tests/spec/inv.rs` — must return no results (no real keys)
 
