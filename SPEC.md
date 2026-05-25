@@ -93,20 +93,22 @@ the original secrets as plaintext in any accessible field.
 
 ```
 session_key  = 32 random bytes, generated at scrub() time, in memory only
-entry        = { fake_id: [u8; 16], ciphertext: AEAD_encrypt(original, key=session_key, ad=fake_id) }
+entry        = { fake: Vec<u8>, ciphertext: AEAD_encrypt(original, key=session_key, ad=&fake) }
 ScrubHandle  = { session_key, entries: Vec<entry> }
 ```
 
-The `fake_id` is a random 16-byte identifier embedded in the scrubbed payload
-as the replacement token. It does not appear in `ScrubHandle.entries` in a way
-that allows correlation without the session key.
+The `fake` bytes are what appear in the scrubbed payload — the structural replacement
+the model sees. They are also the scan target for `unscrub`: it searches each response
+chunk for any `fake` from the entries and decrypts the corresponding ciphertext to
+recover the original. There is no separate token or identifier embedded in the payload;
+the fake is its own index.
 
 ### Security properties
 
 - **`ScrubHandle` alone does not leak secrets.** Entries contain only
   ciphertext; decryption requires `session_key`.
-- **The scrubbed payload alone does not leak secrets.** It contains `fake_id`
-  tokens and structurally-equivalent fakes; neither reveals the original.
+- **The scrubbed payload alone does not leak secrets.** It contains only
+  structurally-equivalent fakes; neither reveals the original.
 - **`session_key` is the trust gate.** It lives in process memory for the
   duration of one request/response cycle, then is dropped. It is never written
   to disk, never logged.
@@ -276,14 +278,13 @@ MUST hold regardless of response size or chunk count.
 
 ### Replacement in the response
 
-`unscrub` additionally scans the response for `fake_id` tokens embedded by
-`scrub`, decrypting and restoring each to the original secret. This handles the
-case where the response echoes back a value that was scrubbed in the request
-(e.g. the model parroting a secret from context back into its reply).
+`unscrub` scans each chunk for the exact `fake` bytes stored in each `ScrubHandle` entry.
+On a match it decrypts the corresponding ciphertext with `session_key` and restores the
+original. This handles the case where the model echoes back a value that was scrubbed in
+the request (e.g. a secret parroted from context into the reply).
 
-If a fake or `fake_id` does not appear in the response, the stream is forwarded
-unchanged. `unscrub` MUST NOT produce an error or corrupt the stream in this
-case.
+If a fake does not appear in the response the stream is forwarded unchanged. `unscrub`
+MUST NOT produce an error or corrupt the stream in this case.
 
 ---
 
@@ -312,7 +313,7 @@ Fakes MUST satisfy:
 | Secrets in persistent storage | Never. Tier 2 stores only structural fingerprint + HMAC. |
 | Secrets in memory | Only for the duration of one request/response cycle. |
 | `ScrubHandle` leaked to disk | Ciphertext only; unreadable without `session_key`. |
-| Scrubbed payload observed in transit | Contains fakes and `fake_id` tokens. No original bytes. |
+| Scrubbed payload observed in transit | Contains structural fakes only. No original bytes, no separate tokens. |
 | Same secret across calls | Different fakes per call (Tier 1). Same fake per registration (Tier 2). |
 | Model reasoning about secret format | Preserved: fake has identical prefix, length, charset. |
 | Coverage | Best-effort. Obfuscated or split secrets are out of scope. |
