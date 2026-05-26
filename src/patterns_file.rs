@@ -357,7 +357,246 @@ impl Default for PatternsFile {
 
 #[cfg(test)]
 mod tests {
-    // Unit tests for the TOML-based PatternsFile are implemented in step-10.
-    // The previous tests used HashMap API and JSON fixtures incompatible with the
-    // Vec-based tier1 and TOML serialization introduced in steps 06-07.
+    use super::*;
+
+    #[test]
+    fn test_round_trip_serialize_deserialize() {
+        let mut pf = PatternsFile::new();
+        pf.generate_missing_tier1_salts();
+        let bytes = pf.serialize().unwrap();
+        let pf2 = PatternsFile::deserialize(&bytes).unwrap();
+        assert_eq!(pf2.version, 2);
+        assert_eq!(pf2.tier1.len(), 15);
+        let orig_salt = pf
+            .tier1
+            .iter()
+            .find(|e| e.identifier == "anthropic")
+            .unwrap()
+            .salt;
+        let deser_salt = pf2
+            .tier1
+            .iter()
+            .find(|e| e.identifier == "anthropic")
+            .unwrap()
+            .salt;
+        assert_eq!(orig_salt, deser_salt);
+    }
+
+    #[test]
+    fn test_version_rejection() {
+        let data = b"version = 1\ntier1 = []\ntier2 = []\n";
+        let err = PatternsFile::deserialize(data).unwrap_err();
+        assert!(matches!(
+            err,
+            PatternsFileError::UnsupportedVersion { found: 1 }
+        ));
+    }
+
+    #[test]
+    fn test_empty_tier1_into_patterns_succeeds() {
+        let pf = PatternsFile {
+            version: 2,
+            tier1: vec![],
+            tier2: vec![],
+        };
+        let patterns = pf.into_patterns().unwrap();
+        assert_eq!(patterns.len(), 0);
+    }
+
+    #[test]
+    fn test_generate_missing_fills_all_fifteen() {
+        let mut pf = PatternsFile::new();
+        pf.generate_missing_tier1_salts();
+        assert_eq!(pf.tier1.len(), 15);
+        for def in crate::tier1::all_defs() {
+            assert!(pf.tier1.iter().any(|e| e.identifier == def.identifier));
+        }
+    }
+
+    #[test]
+    fn test_generate_missing_does_not_overwrite() {
+        let custom_salt = [0xAB; 32];
+        let mut pf = PatternsFile::new();
+        pf.tier1.push(Tier1Entry {
+            identifier: "anthropic".into(),
+            salt: custom_salt,
+            segments: None,
+        });
+        pf.generate_missing_tier1_salts();
+        let entry = pf
+            .tier1
+            .iter()
+            .find(|e| e.identifier == "anthropic")
+            .unwrap();
+        assert_eq!(entry.salt, custom_salt);
+    }
+
+    #[test]
+    fn test_invalid_tier2_exact_length_zero() {
+        let data = br#"
+version = 2
+tier1 = []
+
+[[tier2]]
+start_fragment = "aabb"
+end_fragment = "ccdd"
+exact_length = 0
+hmac_salt = "0000000000000000000000000000000000000000000000000000000000000000"
+hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
+preserve_prefix = 0
+preserve_suffix = 0
+"#;
+        let err = PatternsFile::deserialize(data).unwrap_err();
+        assert!(err.to_string().contains("exact_length"), "error: {err}");
+    }
+
+    #[test]
+    fn test_invalid_tier2_empty_start_fragment() {
+        let data = br#"
+version = 2
+tier1 = []
+
+[[tier2]]
+start_fragment = ""
+end_fragment = "ccdd"
+exact_length = 32
+hmac_salt = "0000000000000000000000000000000000000000000000000000000000000000"
+hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
+preserve_prefix = 0
+preserve_suffix = 0
+"#;
+        let err = PatternsFile::deserialize(data).unwrap_err();
+        assert!(err.to_string().contains("start_fragment"), "error: {err}");
+    }
+
+    #[test]
+    fn test_tier2_with_charset_round_trips() {
+        use crate::{RegistrationOptions, register_with_options};
+        let secret = b"my-custom-api-token-round-trip-test";
+        let opts = RegistrationOptions {
+            preserve_prefix: 3,
+            preserve_suffix: 0,
+            restrict_charset: false,
+        };
+        let pat = register_with_options(secret, &opts).unwrap();
+        let mut pf = PatternsFile::new();
+        pf.add_tier2_pattern(&pat, None).unwrap();
+        let bytes = pf.serialize().unwrap();
+        let pf2 = PatternsFile::deserialize(&bytes).unwrap();
+        assert_eq!(pf2.tier2.len(), 1);
+    }
+
+    #[test]
+    fn test_tier2_without_charset_uses_wide() {
+        use crate::{RegistrationOptions, register_with_options};
+        let secret = b"my-custom-api-token-wide-charset-test";
+        let opts = RegistrationOptions::default();
+        let pat = register_with_options(secret, &opts).unwrap();
+        let mut pf = PatternsFile::new();
+        pf.add_tier2_pattern(&pat, None).unwrap();
+        assert!(pf.tier2[0].charset.is_none());
+    }
+
+    #[test]
+    fn test_duplicate_identifier_rejected() {
+        // tier2 must come before [[tier1]] sections in TOML
+        let pf_data = br#"
+version = 2
+tier2 = []
+
+[[tier1]]
+identifier = "my_pattern"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
+
+[[tier1]]
+identifier = "my_pattern"
+salt = "0000000000000000000000000000000000000000000000000000000000000002"
+segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
+"#;
+        let err = PatternsFile::deserialize(pf_data).unwrap_err();
+        assert!(err.to_string().contains("duplicate Tier 1 identifier"));
+    }
+
+    #[test]
+    fn test_duplicate_label_rejected() {
+        let pf_data = br#"
+version = 2
+tier1 = []
+
+[[tier2]]
+label = "my-secret"
+start_fragment = "aabbccdd"
+end_fragment = "eeff0011"
+exact_length = 32
+hmac_salt = "0000000000000000000000000000000000000000000000000000000000000000"
+hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
+preserve_prefix = 0
+preserve_suffix = 0
+
+[[tier2]]
+label = "my-secret"
+start_fragment = "11223344"
+end_fragment = "55667788"
+exact_length = 16
+hmac_salt = "0000000000000000000000000000000000000000000000000000000000000001"
+hmac_digest = "0000000000000000000000000000000000000000000000000000000000000001"
+preserve_prefix = 0
+preserve_suffix = 0
+"#;
+        let err = PatternsFile::deserialize(pf_data).unwrap_err();
+        assert!(err.to_string().contains("duplicate Tier 2 label"));
+    }
+
+    #[test]
+    fn test_version_1_error_message() {
+        let data = b"version = 1\ntier1 = []\ntier2 = []\n";
+        let err = PatternsFile::deserialize(data).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unsupported"), "error: {msg}");
+        assert!(msg.contains("expected 2"), "error: {msg}");
+    }
+
+    #[test]
+    fn test_user_defined_tier1_into_patterns() {
+        use crate::segment::SegmentDef;
+        let pf = PatternsFile {
+            version: 2,
+            tier1: vec![Tier1Entry {
+                identifier: "custom".into(),
+                salt: [0xAA; 32],
+                segments: Some(vec![
+                    SegmentDef::Literal {
+                        value: "tok_".into(),
+                    },
+                    SegmentDef::Variable {
+                        charset: "alphanumeric".into(),
+                        min: 20,
+                        max: 20,
+                    },
+                ]),
+            }],
+            tier2: vec![],
+        };
+        let patterns = pf.into_patterns().unwrap();
+        assert_eq!(patterns.len(), 1);
+    }
+
+    #[test]
+    fn test_user_defined_without_segments_errors() {
+        let pf = PatternsFile {
+            version: 2,
+            tier1: vec![Tier1Entry {
+                identifier: "unknown_thing".into(),
+                salt: [0u8; 32],
+                segments: None,
+            }],
+            tier2: vec![],
+        };
+        let err = pf
+            .into_patterns()
+            .err()
+            .expect("expected MissingSegments error");
+        assert!(err.to_string().contains("requires a segments field"));
+    }
 }

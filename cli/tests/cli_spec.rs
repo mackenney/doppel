@@ -4,3 +4,6 @@
 
 #[path = "cli_spec/inv_cli.rs"]
 mod inv_cli;
+
+#[path = "cli_spec/inv_management.rs"]
+mod inv_management;

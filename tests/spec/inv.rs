@@ -773,3 +773,84 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
         "INV-27: registration must succeed (got warning)"
     );
 }
+
+#[test]
+fn test_inv30_user_tier1_requires_variable_segment() {
+    // INV-30: "A user-defined Tier 1 pattern MUST specify at least one Variable segment"
+    use its_classified::{PatternsFile, segment::SegmentDef};
+    let mut pf = PatternsFile::new();
+    pf.generate_missing_tier1_salts();
+    let result = pf.add_tier1_entry(
+        "pure_literal".into(),
+        vec![SegmentDef::Literal {
+            value: "just-a-prefix".into(),
+        }],
+        [0u8; 32],
+    );
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("at least one variable segment"),
+        "INV-30: pure literal segment list must be rejected"
+    );
+}
+
+#[test]
+fn test_inv31_duplicate_identifier_rejected() {
+    // INV-31: "A user-defined Tier 1 identifier MUST be unique within the patterns file"
+    use its_classified::{PatternsFile, segment::SegmentDef};
+    let mut pf = PatternsFile::new();
+    pf.generate_missing_tier1_salts();
+    let segs = vec![SegmentDef::Variable {
+        charset: "alphanumeric".into(),
+        min: 10,
+        max: 10,
+    }];
+    pf.add_tier1_entry("my_custom".into(), segs.clone(), [1u8; 32])
+        .unwrap();
+    let err = pf
+        .add_tier1_entry("my_custom".into(), segs, [2u8; 32])
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("duplicate"),
+        "INV-31: duplicate identifier must be rejected"
+    );
+}
+
+#[test]
+fn test_inv32_missing_builtin_is_allowed() {
+    // INV-32: "Removing a built-in Tier 1 identifier from the patterns file is permitted"
+    use its_classified::PatternsFile;
+    let pf = PatternsFile {
+        version: 2,
+        tier1: vec![],
+        tier2: vec![],
+    };
+    let patterns = pf.into_patterns().unwrap();
+    assert_eq!(
+        patterns.len(),
+        0,
+        "INV-32: empty tier1 must produce zero patterns"
+    );
+}
+
+#[test]
+fn test_inv33_version_must_be_2() {
+    // INV-33: "The patterns file version MUST be 2"
+    use its_classified::PatternsFile;
+    let data = b"version = 1\ntier1 = []\ntier2 = []\n";
+    let err = PatternsFile::deserialize(data).unwrap_err();
+    assert!(
+        err.to_string().contains("unsupported"),
+        "INV-33: version 1 must be rejected"
+    );
+
+    let data = b"version = 3\ntier1 = []\ntier2 = []\n";
+    let err = PatternsFile::deserialize(data).unwrap_err();
+    assert!(
+        err.to_string().contains("unsupported"),
+        "INV-33: version 3 must be rejected"
+    );
+}

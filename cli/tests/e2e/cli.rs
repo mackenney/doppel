@@ -284,7 +284,7 @@ fn test_e2e_unscrub_missing_env_var_fails() {
 
 #[test]
 fn test_e2e_init_creates_patterns_file() {
-    let path = tmp_path("init-test-patterns.json");
+    let path = tmp_path("init-test-patterns.toml");
     let _ = std::fs::remove_file(&path);
 
     let output = Command::new(bin())
@@ -295,11 +295,13 @@ fn test_e2e_init_creates_patterns_file() {
     assert!(output.status.success(), "init must succeed");
     assert!(path.exists(), "patterns file must be created");
 
-    let data = std::fs::read(&path).unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&data).unwrap();
-    assert_eq!(json["version"], 1);
-    assert_eq!(json["tier1"].as_object().unwrap().len(), 15);
-    assert!(json["tier2"].as_array().unwrap().is_empty());
+    let content = std::fs::read_to_string(&path).unwrap();
+    let val: toml::Value = content.parse().unwrap();
+    assert_eq!(val["version"].as_integer(), Some(2));
+    let tier1 = val["tier1"].as_array().unwrap();
+    assert_eq!(tier1.len(), 15);
+    let tier2 = val["tier2"].as_array().unwrap();
+    assert!(tier2.is_empty());
 
     #[cfg(unix)]
     {
@@ -313,7 +315,7 @@ fn test_e2e_init_creates_patterns_file() {
 
 #[test]
 fn test_e2e_init_refuses_existing_file() {
-    let path = tmp_path("init-existing-patterns.json");
+    let path = tmp_path("init-existing-patterns.toml");
     std::fs::write(&path, b"existing").unwrap();
 
     let output = Command::new(bin())
@@ -333,7 +335,7 @@ fn test_e2e_init_refuses_existing_file() {
 
 #[test]
 fn test_e2e_init_force_overwrites() {
-    let path = tmp_path("init-force-patterns.json");
+    let path = tmp_path("init-force-patterns.toml");
     std::fs::write(&path, b"garbage").unwrap();
 
     let output = Command::new(bin())
@@ -342,9 +344,9 @@ fn test_e2e_init_force_overwrites() {
         .expect("failed to run init");
 
     assert!(output.status.success(), "init --force must succeed");
-    let data = std::fs::read(&path).unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&data).unwrap();
-    assert_eq!(json["version"], 1);
+    let content = std::fs::read_to_string(&path).unwrap();
+    let val: toml::Value = content.parse().unwrap();
+    assert_eq!(val["version"].as_integer(), Some(2));
 
     cleanup(&[&path]);
 }
@@ -420,7 +422,13 @@ fn test_e2e_register_tier2_round_trip() {
     let secret = b"my-custom-api-token-that-is-long-enough-for-test";
 
     let mut register_child = Command::new(bin())
-        .args(["register", "--patterns", patterns_path.to_str().unwrap()])
+        .args([
+            "register",
+            "--patterns",
+            patterns_path.to_str().unwrap(),
+            "--label",
+            "my-token-label",
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -532,7 +540,13 @@ fn test_e2e_register_empty_stdin() {
     let patterns_path = create_test_patterns_file("register-empty");
 
     let output = Command::new(bin())
-        .args(["register", "--patterns", patterns_path.to_str().unwrap()])
+        .args([
+            "register",
+            "--patterns",
+            patterns_path.to_str().unwrap(),
+            "--label",
+            "test-label",
+        ])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
