@@ -30,4 +30,4 @@ _(none)_
 
 - No CI configuration (out of scope for initial-implementation plan)
 - No CLI pattern registration surface — no `--patterns` file, no Tier 2 secret input; CLI hardcodes `patterns::all()` with no user control
-- Tier 1 salt is ephemeral (`OnceLock` + `OsRng` on first access): same secret produces a different fake on every process restart, violating INV-13 across process boundaries; salt must be explicit and stable (stored in patterns file)
+- Tier 1 and Tier 2 salts are ephemeral: Tier 1 uses `OnceLock` + `OsRng` on first access; Tier 2 generates a fresh `hmac_salt` on every `register()` call. Both produce a different fake for the same secret on every process restart, violating INV-13 across process boundaries. Both salts must be explicit, caller-supplied values loaded from (and written back to) the patterns file so fakes are stable across runs.
