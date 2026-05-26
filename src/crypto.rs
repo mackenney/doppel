@@ -75,7 +75,7 @@ pub(crate) fn verify_hmac(salt: &[u8], data: &[u8], expected: &[u8; 32]) -> bool
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("AEAD tag verification failed")]
     AeadTagFailure,
     #[error("invalid nonce length")]

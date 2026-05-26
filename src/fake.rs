@@ -3,7 +3,7 @@ use rand::{RngCore, SeedableRng, rngs::StdRng};
 use sha2::Sha256;
 
 #[derive(Debug, thiserror::Error)]
-pub enum FakeError {
+pub(crate) enum FakeError {
     #[error(
         "could not generate a fake distinct from original after {attempts} attempts (charset too small)"
     )]

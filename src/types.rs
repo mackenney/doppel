@@ -55,11 +55,24 @@ pub struct ScrubResult {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ScrubError {
-    #[error("encryption failed: {0}")]
-    Crypto(#[from] crate::crypto::Error),
-    #[error("fake generation failed: {0}")]
-    Fake(#[from] crate::fake::FakeError),
+    #[error("encryption failed: {msg}")]
+    Crypto { msg: String },
+    #[error("fake generation failed: {msg}")]
+    Fake { msg: String },
+}
+
+impl From<crate::crypto::Error> for ScrubError {
+    fn from(e: crate::crypto::Error) -> Self {
+        ScrubError::Crypto { msg: e.to_string() }
+    }
+}
+
+impl From<crate::fake::FakeError> for ScrubError {
+    fn from(e: crate::fake::FakeError) -> Self {
+        ScrubError::Fake { msg: e.to_string() }
+    }
 }
 
 /// Re-export Pattern from tier1 so callers can reach it via its_classified::types::Pattern.

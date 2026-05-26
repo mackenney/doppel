@@ -43,7 +43,7 @@ Each step file is self-contained. The subagent MUST:
 - Commit with the exact message specified in the step file.
 
 ## Steps
-- [ ] [step-01-workspace-cargo-split](./step-01-workspace-cargo-split.md) — Cargo workspace split: root = lib, cli/ = binary
+- [x] [step-01-workspace-cargo-split](./step-01-workspace-cargo-split.md) — Cargo workspace split: root = lib, cli/ = binary (commit 662cf67)
 - [ ] [step-02-pattern-opacity](./step-02-pattern-opacity.md) — Make Pattern opaque: #[non_exhaustive] + pub(crate) fields
 - [ ] [step-03-error-cleanup](./step-03-error-cleanup.md) — Flatten ScrubError: no internal type leakage
 - [ ] [step-04-lib-docs](./step-04-lib-docs.md) — Add crate-level docs and function examples
