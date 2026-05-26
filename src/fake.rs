@@ -279,7 +279,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_wide_charset_excludes_json_unsafe() {
         let wide = charsets::wide();
         assert!(

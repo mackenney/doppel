@@ -58,8 +58,8 @@ pub enum PatternsFileError {
     #[error("invalid Tier 2 entry at index {index}: {reason}")]
     InvalidTier2 { index: usize, reason: String },
 
-    #[error("Tier 1 salt initialization failed for class {class}: already set")]
-    SaltAlreadySet { class: String },
+    #[error("expected a Tier 2 pattern, got Tier 1")]
+    WrongPatternType,
 }
 
 impl PatternsFile {
@@ -92,6 +92,12 @@ impl PatternsFile {
         }
 
         for (i, entry) in self.tier2.iter().enumerate() {
+            if entry.start_fragment.is_empty() {
+                return Err(PatternsFileError::InvalidTier2 {
+                    index: i,
+                    reason: "start_fragment must not be empty".into(),
+                });
+            }
             if entry.exact_length == 0 {
                 return Err(PatternsFileError::InvalidTier2 {
                     index: i,
@@ -191,10 +197,7 @@ impl PatternsFile {
 
                 Ok(())
             }
-            _ => Err(PatternsFileError::InvalidTier2 {
-                index: self.tier2.len(),
-                reason: "expected a Tier 2 pattern".into(),
-            }),
+            _ => Err(PatternsFileError::WrongPatternType),
         }
     }
 
@@ -346,5 +349,14 @@ mod tests {
             pf2.tier2[0].charset.is_none(),
             "wide charset should not be serialized"
         );
+    }
+    #[test]
+    fn test_invalid_tier2_empty_start_fragment() {
+        let json = r#"{"version": 1, "tier1": {}, "tier2": [{"start_fragment": "", "end_fragment": "AA==", "exact_length": 1, "hmac_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "hmac_digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "preserve_prefix": 0, "preserve_suffix": 0}]}"#;
+        let result = PatternsFile::deserialize(json.as_bytes());
+        assert!(matches!(
+            result,
+            Err(PatternsFileError::InvalidTier2 { index: 0, .. })
+        ));
     }
 }

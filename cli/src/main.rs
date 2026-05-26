@@ -108,18 +108,20 @@ fn run_scrub(
 fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     use its_classified::PatternsFile;
 
-    if patterns_path.exists() && !force {
-        return Err(format!(
-            "patterns file already exists: {}\n  Use --force to overwrite (WARNING: regenerates all salts; existing fakes become invalid)",
-            patterns_path.display()
-        ).into());
-    }
-
     let mut pf = PatternsFile::new();
     pf.generate_missing_tier1_salts();
     let data = pf.serialize()?;
 
-    write_patterns_file(patterns_path, &data)?;
+    write_patterns_file(patterns_path, &data, !force).map_err(|e| -> Box<dyn std::error::Error> {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "patterns file already exists: {}\n  Use --force to overwrite (WARNING: regenerates all salts; existing fakes become invalid)",
+                patterns_path.display()
+            ).into()
+        } else {
+            e.into()
+        }
+    })?;
 
     eprintln!(
         "created patterns file: {} (15 Tier 1 classes, 0 Tier 2 entries)",
@@ -138,8 +140,8 @@ fn run_register(
     use its_classified::{PatternsFile, RegistrationOptions, register_with_options};
     use std::io::Read;
 
-    let mut secret = Vec::new();
-    std::io::stdin().read_to_end(&mut secret)?;
+    let mut secret = zeroize::Zeroizing::new(Vec::new());
+    std::io::stdin().read_to_end(&mut *secret)?;
 
     if secret.is_empty() {
         return Err("no secret provided on stdin".into());
@@ -168,7 +170,7 @@ fn run_register(
     pf.add_tier2_pattern(&pattern)?;
 
     let data = pf.serialize()?;
-    write_patterns_file(patterns_path, &data)?;
+    write_patterns_file(patterns_path, &data, false)?;
 
     let variable_len = secret.len() - preserve_prefix - preserve_suffix;
     eprintln!(
@@ -179,24 +181,51 @@ fn run_register(
     Ok(())
 }
 
-fn write_patterns_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
+fn write_patterns_file(path: &Path, data: &[u8], create_exclusive: bool) -> std::io::Result<()> {
     use std::io::Write;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.write_all(data)?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, data)?;
+    if create_exclusive {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // INV-21 equivalent: O_CREAT|O_EXCL is atomic — fails if file exists
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)?;
+            file.write_all(data)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)?;
+            file.write_all(data)?;
+        }
+    } else {
+        // Write to a .tmp sibling then rename (atomic on POSIX same-filesystem)
+        let tmp = path.with_extension("tmp");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(data)?;
+            // mode(0o600) only applies to new inodes; set explicitly for existing files
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp, data)?;
+        }
+        std::fs::rename(&tmp, path)?;
     }
 
     Ok(())

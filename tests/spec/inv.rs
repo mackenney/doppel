@@ -707,3 +707,69 @@ fn test_inv13_cross_serialization_fake_stability() {
         "INV-13: same secret through serialized patterns must produce same fake"
     );
 }
+
+#[test]
+fn test_inv25_register_empty_secret_returns_tooshort() {
+    // INV-25: empty secret MUST return TooShort, MUST NOT panic.
+    use its_classified::RegistrationError;
+    let result = its_classified::register(b"");
+    assert!(
+        matches!(result, Err(RegistrationError::TooShort)),
+        "INV-25: empty secret must yield TooShort"
+    );
+}
+
+#[test]
+fn test_inv25_register_no_variable_bytes_returns_error() {
+    // INV-25: preserve_prefix + preserve_suffix >= secret.len() → NoVariableBytes.
+    use its_classified::{RegistrationError, RegistrationOptions, register_with_options};
+    let secret = b"abcdefgh"; // 8 bytes
+    let opts = RegistrationOptions {
+        preserve_prefix: 5,
+        preserve_suffix: 3, // 5+3 == 8 == secret.len()
+        restrict_charset: false,
+    };
+    let result = register_with_options(secret, &opts);
+    assert!(
+        matches!(result, Err(RegistrationError::NoVariableBytes { .. })),
+        "INV-25: fully-preserved secret must yield NoVariableBytes"
+    );
+}
+
+#[test]
+fn test_inv26_register_short_variable_portion_succeeds() {
+    // INV-26: variable portion < 14 bytes → MUST emit log::warn diagnostic.
+    // This test verifies the function succeeds; log capture not yet wired.
+    // TODO: add log-capture assertion when a test logger harness is available.
+    use its_classified::{RegistrationOptions, register_with_options};
+    let secret = b"PREFIX_secret"; // 13 bytes, preserve_prefix=7 → variable=6 < 14
+    let opts = RegistrationOptions {
+        preserve_prefix: 7,
+        preserve_suffix: 0,
+        restrict_charset: false,
+    };
+    let result = register_with_options(secret, &opts);
+    assert!(
+        result.is_ok(),
+        "INV-26: registration with short variable portion must succeed (got warning)"
+    );
+}
+
+#[test]
+fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
+    // INV-27: alphanumeric secret + restrict_charset=false → MUST emit log::warn.
+    // This test verifies the function succeeds; log capture not yet wired.
+    // TODO: add log-capture assertion when a test logger harness is available.
+    use its_classified::{RegistrationOptions, register_with_options};
+    let secret = b"myAlphaNumericSecret123";
+    let opts = RegistrationOptions {
+        preserve_prefix: 0,
+        preserve_suffix: 0,
+        restrict_charset: false,
+    };
+    let result = register_with_options(secret, &opts);
+    assert!(
+        result.is_ok(),
+        "INV-27: registration must succeed (got warning)"
+    );
+}

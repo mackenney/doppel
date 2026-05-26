@@ -21,7 +21,7 @@
 
 The library's surface area is defined by three operations and three data abstractions:
 
-**Pattern** is an opaque detection descriptor. It encapsulates everything needed to find a specific secret or secret class in an arbitrary payload and replace it with a structurally-equivalent fake: the detection mechanism, character set, and the stable fake mapping — a per-secret fake deterministically derived from a stable salt embedded in the Pattern on each detection (both Tier 1 and Tier 2). Built-in Tier 1 definitions and Tier 2 registrations both produce Patterns; `scrub` treats them identically and is not aware of tier distinctions. Built-in Tier 1 Patterns are canonical singleton values — one per class.
+**Pattern** is an opaque detection descriptor. It encapsulates everything needed to find a specific secret or secret class in an arbitrary payload and replace it with a structurally-equivalent fake: the detection mechanism, character set, and the stable fake mapping — a per-secret fake deterministically derived from a stable salt embedded in the Pattern on each detection (both Tier 1 and Tier 2). Built-in `patterns::*()` functions return new `Pattern` values with freshly generated ephemeral salts; fakes are stable for the lifetime of one `Pattern` instance but differ across calls. For persistent cross-call and cross-process stability, use `PatternsFile::into_patterns()`. Built-in Tier 1 definitions and Tier 2 registrations both produce Patterns; `scrub` treats them identically and is not aware of tier distinctions.
 
 **`scrub`** receives a complete payload and a set of Patterns. It scans for secrets left-to-right, replaces each detected secret with the fake prescribed by the matching Pattern, and returns three things: the scrubbed payload, a set of substitution **entries**, and a **session key**. `scrub` MUST NOT modify bytes outside the detected secrets. `scrub` accepts a single complete payload buffer; streaming input is not part of the API.
 
@@ -47,7 +47,7 @@ The fake for a Tier 1 match reproduces every Literal segment verbatim and fills 
 
 The library MUST ship built-in Tier 1 definitions covering at minimum: Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys. Additional definitions MAY be added; the built-in set is not closed.
 
-Each built-in Tier 1 definition is a single canonical Pattern value; the library exposes one Pattern per class. A caller that reuses the same Pattern instance across `scrub` calls will always receive the same fake for the same secret, enabling cross-call stability.
+Each built-in `patterns::*()` function constructs a new `Pattern` with an ephemeral random salt. Reusing the same `Pattern` instance across `scrub` calls produces stable fakes for that session; calling `patterns::*()` again produces a distinct salt and therefore different fakes. For stable fakes across process restarts and across function calls, use `PatternsFile::into_patterns()`.
 
 ### Tier 2 — Registered Arbitrary Secrets
 
@@ -73,7 +73,7 @@ Registration MUST emit a `log::warn`-level diagnostic if the variable portion is
 The produced Pattern encapsulates:
 - **Detection fingerprint:** start fragment, end fragment, exact byte length, and an HMAC verification token (salt + digest). _(Domain constraint: HMAC provides confirmation that a structural candidate is the registered secret without requiring the full secret to be stored; the unique salt prevents precomputed lookup attacks against the stored digest.)_
 - **Preserved prefix/suffix lengths:** the byte counts declared non-secret by the caller.
-- **Fake derivation parameters:** the HMAC salt, preserved prefix/suffix lengths, and the resolved charset. The fake is derived deterministically at detection time from `HMAC(salt, candidate || attempt_counter)` → seeded PRNG. No pre-generated fake is stored in the Pattern.
+- **Fake derivation parameters:** the HMAC salt, preserved prefix/suffix lengths, and the resolved charset. The fake is derived deterministically at detection time from `HMAC(salt, candidate || attempt_counter)` → seeded PRNG. No fake is pre-computed at registration time; no fake bytes are stored in the Pattern.
 
 The salt MUST be unique per registration; salt reuse is prohibited.
 
@@ -85,13 +85,13 @@ A **patterns file** is a JSON document that carries all data needed to reconstru
 
 - **Version field** (`version: 1`). The library MUST reject unknown versions.
 - **Tier 1 entries**: a map of class identifier → 32-byte salt. All other Tier 1 fields (prefix, charset, length bounds) are compiled into the binary and not serialized. A patterns file MUST contain a salt for every built-in Tier 1 class; the library MUST return an error if any class is missing.
-- **Tier 2 entries**: an array of detection fingerprints (start/end fragments, exact length, HMAC salt, HMAC digest) plus derivation parameters (preserve_prefix, preserve_suffix, and optionally the resolved charset). No pre-generated fake bytes are stored.
+- **Tier 2 entries**: an array of detection fingerprints (start/end fragments, exact length, HMAC salt, HMAC digest) plus derivation parameters (preserve_prefix, preserve_suffix, and optionally the resolved charset). No fake bytes are stored in the file; fakes are derived at detection time.
 
-The patterns file MUST be treated with the same sensitivity as the secrets it detects — it contains detection fragments that serve as a detection oracle. On Unix systems, the file SHOULD be written with mode 0600. The library provides serialization/deserialization functions operating on `&[u8]`/`Vec<u8>`; filesystem operations are the caller's responsibility.
+The patterns file MUST be treated with the same sensitivity as the secrets it detects — it contains detection fragments that serve as a detection oracle. On Unix systems, the file SHOULD be written with mode 0600 (the CLI `init` and `register` commands MUST enforce this — see §CLI Contract). The library provides serialization/deserialization functions operating on `&[u8]`/`Vec<u8>`; filesystem operations are the caller's responsibility.
 
 ## Security Properties
 
-**Entries alone do not leak plaintext secret bytes (confidentiality).** Each entry contains only ciphertext and the pre-generated fake. Without the session key, the ciphertext is opaque. The fake, by default, is drawn from the standard wide charset with no connection to the secret's content; it reveals the exact byte length of the detected secret and nothing else. When `restrict_charset: true` is used, the fake also reveals the approximate character class of the secret — this is a documented trade-off the caller accepts by opting in. The entries are not confidentiality-sensitive in the default configuration.
+**Entries alone do not leak plaintext secret bytes (confidentiality).** Each entry contains only ciphertext and the fake bytes. Without the session key, the ciphertext is opaque. The fake, by default, is drawn from the standard wide charset with no connection to the secret's content; it reveals the exact byte length of the detected secret and nothing else. When `restrict_charset: true` is used, the fake also reveals the approximate character class of the secret — this is a documented trade-off the caller accepts by opting in. The entries are not confidentiality-sensitive in the default configuration.
 
 **Entries are integrity-protected (fake binding).** The AEAD tag covers the fake field as associated data (AAD). Replacing `Entry.fake` after `scrub` produces a tag mismatch at `unscrub` time; no plaintext is emitted. An attacker who can write the entries file but not the session key cannot redirect decryption to an arbitrary trigger.
 

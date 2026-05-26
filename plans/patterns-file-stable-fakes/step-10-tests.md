@@ -138,7 +138,7 @@ fn test_e2e_init_creates_patterns_file() {
     let data = std::fs::read(&path).unwrap();
     let json: serde_json::Value = serde_json::from_slice(&data).unwrap();
     assert_eq!(json["version"], 1);
-    assert_eq!(json["tier1"].as_object().unwrap().len(), 8);
+    assert_eq!(json["tier1"].as_object().unwrap().len(), 15);
     assert!(json["tier2"].as_array().unwrap().is_empty());
 
     #[cfg(unix)]
@@ -454,8 +454,6 @@ fn test_inv13_cross_serialization_fake_stability() {
     // INV-13: register → serialize patterns → deserialize → scrub → same fake
     use its_classified::{PatternsFile, register_with_options, RegistrationOptions, scrub};
 
-    its_classified::tier1::init_test_salts();
-
     let secret = b"my-custom-secret-for-cross-serial-test";
     let pat = register_with_options(secret, &RegistrationOptions::default()).unwrap();
 
@@ -465,7 +463,7 @@ fn test_inv13_cross_serialization_fake_stability() {
 
     // Scrub with original pattern
     let payload = [b"token: ".as_slice(), secret].concat();
-    let result1 = scrub(&payload, &[pat]).unwrap();
+    let result1 = scrub(&payload, &[pat.clone()]).unwrap();
 
     // Serialize + deserialize patterns file
     let bytes = pf.serialize().unwrap();
