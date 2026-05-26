@@ -18,15 +18,19 @@
 //! ```rust
 //! use its_classified::{scrub, unscrub, tier1::patterns};
 //!
-//! // 1. Scrub: detect and replace secrets
-//! let payload = b"safe payload with no secrets";
+//! // A synthetic Anthropic key embedded in a payload
+//! let payload = b"Authorization: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
+//!
+//! // 1. Scrub: detect and replace the key before sending to an external service
 //! let result = scrub(payload, &patterns::all()).unwrap();
+//! assert_eq!(result.entries.len(), 1); // one secret detected
+//! assert_ne!(result.payload.as_slice(), payload as &[u8]); // key replaced with a fake
 //!
-//! // result.payload  — scrubbed bytes (send to external service)
-//! // result.entries  — encrypted metadata (keep locally)
-//! // result.session_key — decryption key (keep locally, zeroized on drop)
+//! // result.payload     — send to external service (key replaced with a fake)
+//! // result.entries     — keep locally; needed to restore secrets in the response
+//! // result.session_key — keep locally; zeroized on drop
 //!
-//! // 2. Unscrub: restore originals in the response stream
+//! // 2. Unscrub: restore the original secret in the response stream
 //! let mut response = result.payload.as_slice();
 //! let mut restored = Vec::new();
 //! unscrub(
@@ -36,7 +40,7 @@
 //!     &result.session_key,
 //! )
 //! .unwrap();
-//! assert_eq!(restored, payload);
+//! assert_eq!(restored, payload.as_slice());
 //! ```
 
 pub(crate) mod crypto;

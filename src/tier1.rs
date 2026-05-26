@@ -119,10 +119,11 @@ pub(crate) static GCP_DEF: Tier1Def = Tier1Def {
     salt: OnceLock::new(),
 };
 
-/// A detection descriptor for scrub(). Opaque to callers.
+/// A detection descriptor for [`crate::scrub`].
 ///
-/// Tier1 variant is a reference to a static built-in definition.
-/// Tier2 variant is a heap-allocated registered pattern.
+/// Obtain via [`patterns`] functions or [`crate::register`]/[`crate::register_with_options`].
+/// Pass to [`crate::scrub`] — do not match on variants in stable code; the variant
+/// set may change in future versions.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum Pattern {
@@ -183,8 +184,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tier1_all_six_classes_present() {
-        // INV-22: all required classes present
+    fn test_tier1_all_eight_classes_present() {
+        // INV-22: all eight built-in classes present
         let all = patterns::all();
         assert!(
             all.iter()
@@ -201,6 +202,10 @@ mod tests {
         assert!(
             all.iter()
                 .any(|p| matches!(p, Pattern::Tier1(d) if d.prefix == b"AKIA"))
+        );
+        assert!(
+            all.iter()
+                .any(|p| matches!(p, Pattern::Tier1(d) if d.prefix == b"ASIA"))
         );
         assert!(
             all.iter()

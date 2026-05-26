@@ -1,6 +1,5 @@
 [workspace]
 members = [".", "cli"]
-default-members = [".", "cli"]
 
 [package]
 name = "its-classified"
