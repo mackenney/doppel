@@ -86,18 +86,18 @@ const MIN_VARIABLE_BYTES_WARNING: usize = 14;
 /// Opaque to callers — they receive a `Pattern::Tier2(Arc<Tier2Pat>)`.
 pub struct Tier2Pat {
     /// First N bytes of the original secret. Used to quickly identify candidates.
-    pub start_fragment: Vec<u8>,
+    pub(crate) start_fragment: Vec<u8>,
     /// Last M bytes of the original secret. Verified after start fragment matches.
-    pub end_fragment: Vec<u8>,
+    pub(crate) end_fragment: Vec<u8>,
     /// Exact byte length of the original secret.
-    pub exact_length: usize,
+    pub(crate) exact_length: usize,
     /// Unique random salt for this registration (INV-17: must not reuse).
-    pub hmac_salt: [u8; 32],
+    pub(crate) hmac_salt: [u8; 32],
     /// HMAC-SHA256(hmac_salt, original_secret) — confirmation token.
-    pub hmac_digest: [u8; 32],
+    pub(crate) hmac_digest: [u8; 32],
     /// Pre-generated fake, produced at registration time.
     /// Returned on all subsequent detections of this secret (INV-13 for Tier 2).
-    pub fake: Vec<u8>,
+    pub(crate) fake: Vec<u8>,
 }
 
 const START_FRAGMENT_LEN: usize = 8;

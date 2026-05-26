@@ -409,40 +409,52 @@ fn test_inv19_unscrub_exact_matching_only() {
 
 #[test]
 fn test_inv22_all_tier1_built_in_classes_present() {
-    // INV-22: built-in Tier 1 MUST cover Anthropic, OpenAI, AWS IAM, GitHub PAT (classic
-    //         and fine-grained), and GCP API keys.
+    // INV-22: built-in Tier 1 MUST cover Anthropic, OpenAI (classic + project),
+    //         AWS IAM (AKIA + ASIA), GitHub PAT (classic + fine-grained), and GCP API keys.
+    //
+    // Validates behaviorally: scrub a synthetic key of each class and assert detection.
+    let cases: &[(&str, &[u8])] = &[
+        // Anthropic: prefix "sk-ant-", min 80, max 120, url_safe_base64
+        (
+            "Anthropic",
+            b"sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // OpenAI classic: prefix "sk-", exactly 51, alphanumeric
+        (
+            "OpenAI classic",
+            b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // OpenAI project: prefix "sk-proj-", min 56, max 72, url_safe_base64
+        (
+            "OpenAI project",
+            b"sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // AWS AKIA: prefix "AKIA", exactly 20, uppercase_alphanumeric
+        ("AWS AKIA", b"AKIAAAAAAAAAAAAAAAAA"),
+        // AWS ASIA: prefix "ASIA", exactly 20, uppercase_alphanumeric
+        ("AWS ASIA", b"ASIAAAAAAAAAAAAAAAAA"),
+        // GitHub classic: prefix "ghp_", exactly 40, alphanumeric
+        (
+            "GitHub classic",
+            b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub fine-grained: prefix "github_pat_", min 82, max 100, url_safe_base64
+        (
+            "GitHub fine-grained",
+            b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GCP: prefix "AIza", exactly 39, url_safe_base64
+        ("GCP", b"AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+    ];
     let all = patterns::all();
-    let prefixes: Vec<&[u8]> = all
-        .iter()
-        .filter_map(|p| match p {
-            its_classified::types::Pattern::Tier1(d) => Some(d.prefix),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        prefixes.iter().any(|&p| p == b"sk-ant-"),
-        "INV-22: Anthropic missing"
-    );
-    assert!(
-        prefixes.iter().any(|&p| p == b"sk-" || p == b"sk-proj-"),
-        "INV-22: OpenAI missing"
-    );
-    assert!(
-        prefixes.iter().any(|&p| p == b"AKIA" || p == b"ASIA"),
-        "INV-22: AWS IAM missing"
-    );
-    assert!(
-        prefixes.iter().any(|&p| p == b"ghp_"),
-        "INV-22: GitHub classic missing"
-    );
-    assert!(
-        prefixes.iter().any(|&p| p == b"github_pat_"),
-        "INV-22: GitHub fine-grained missing"
-    );
-    assert!(
-        prefixes.iter().any(|&p| p == b"AIza"),
-        "INV-22: GCP missing"
-    );
+    for (name, secret) in cases {
+        let result = scrub(secret, &all).expect("scrub failed");
+        assert_eq!(
+            result.entries.len(),
+            1,
+            "INV-22: {name} key must be detected by patterns::all()"
+        );
+    }
 }
 
 #[test]

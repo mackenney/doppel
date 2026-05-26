@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// Structural definition of a Tier 1 built-in secret class.
 pub struct Tier1Def {
     /// Fixed literal prefix that a secret of this class starts with.
-    pub prefix: &'static [u8],
+    pub(crate) prefix: &'static [u8],
     /// Valid byte values for the payload portion (after the prefix).
     pub(crate) charset: fn() -> Vec<u8>,
     /// Minimum total length in bytes (including prefix).
@@ -124,6 +124,7 @@ pub(crate) static GCP_DEF: Tier1Def = Tier1Def {
 /// Tier1 variant is a reference to a static built-in definition.
 /// Tier2 variant is a heap-allocated registered pattern.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum Pattern {
     Tier1(&'static Tier1Def),
     Tier2(Arc<Tier2Pat>),
