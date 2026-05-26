@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
-/// A single structural element of a Tier 1 pattern.
+/// A single structural element of a built-in Tier 1 pattern.
 ///
 /// Patterns are sequences of segments matched left-to-right against the payload.
 /// Detection records how many bytes each Variable segment consumed; that per-segment
 /// length drives fake generation (SPEC.md §Tier 1).
+///
+/// This type uses static lifetime byte slices and function pointers; it is `Copy`
+/// and used in `const` arrays. The owned runtime equivalent is [`Segment`].
 #[derive(Clone, Copy)]
-pub(crate) enum Segment {
+pub(crate) enum BuiltinSegment {
     /// Fixed bytes that must appear verbatim at the current position.
     /// Reproduced verbatim in every fake (INV-28).
     Literal(&'static [u8]),
@@ -16,6 +19,95 @@ pub(crate) enum Segment {
         min: usize,
         max: usize,
     },
+}
+
+/// Owned segment used at runtime by `Tier1Def`, `match_segments`, and `derive_fake_tier1_segments`.
+///
+/// Unlike `BuiltinSegment`, this type is heap-allocated and serializable. It is the runtime
+/// representation for both built-in (converted from `BuiltinSegment` via `From`) and user-defined
+/// Tier 1 patterns.
+#[derive(Clone, Debug)]
+pub(crate) enum Segment {
+    Literal(Vec<u8>),
+    Variable {
+        charset: CharsetName,
+        min: usize,
+        max: usize,
+    },
+}
+
+impl From<&BuiltinSegment> for Segment {
+    fn from(b: &BuiltinSegment) -> Self {
+        match b {
+            BuiltinSegment::Literal(bytes) => Segment::Literal(bytes.to_vec()),
+            BuiltinSegment::Variable { charset, min, max } => {
+                let cs_bytes = charset();
+                let charset_name = resolve_charset_fn_to_name(&cs_bytes);
+                Segment::Variable {
+                    charset: charset_name,
+                    min: *min,
+                    max: *max,
+                }
+            }
+        }
+    }
+}
+
+fn resolve_charset_fn_to_name(bytes: &[u8]) -> CharsetName {
+    use crate::fake::charsets;
+    let candidates = [
+        (CharsetName::Alphanumeric, charsets::alphanumeric()),
+        (CharsetName::UrlSafeBase64, charsets::url_safe_base64()),
+        (
+            CharsetName::UppercaseAlphanumeric,
+            charsets::uppercase_alphanumeric(),
+        ),
+        (CharsetName::Digits, charsets::digits()),
+        (CharsetName::HexLower, charsets::hex_lower()),
+    ];
+    for (name, cs) in &candidates {
+        if cs.as_slice() == bytes {
+            return name.clone();
+        }
+    }
+    unreachable!("all built-in charsets must be known")
+}
+
+impl Segment {
+    /// Convert from a validated `SegmentDef` (patterns file representation).
+    /// The caller MUST have validated charset names via `validate_segment_defs` first.
+    pub(crate) fn from_def(def: &SegmentDef) -> Result<Self, SegmentDefError> {
+        match def {
+            SegmentDef::Literal { value } => Ok(Segment::Literal(value.as_bytes().to_vec())),
+            SegmentDef::Variable { charset, min, max } => {
+                let charset_name = CharsetName::from_name(charset).ok_or_else(|| {
+                    SegmentDefError::UnknownCharset {
+                        index: 0,
+                        name: charset.clone(),
+                    }
+                })?;
+                Ok(Segment::Variable {
+                    charset: charset_name,
+                    min: *min,
+                    max: *max,
+                })
+            }
+        }
+    }
+
+    /// Convert to the serializable `SegmentDef` representation.
+    pub(crate) fn to_def(&self) -> SegmentDef {
+        match self {
+            Segment::Literal(bytes) => SegmentDef::Literal {
+                value: String::from_utf8_lossy(bytes).into_owned(),
+            },
+            Segment::Variable { charset, min, max } => SegmentDef::Variable {
+                charset: charset.as_str().to_string(),
+                min: *min,
+                max: *max,
+            },
+        }
+    }
 }
 
 /// Result of a successful Tier 1 pattern match.
@@ -218,5 +310,31 @@ mod tests {
         }];
         let err = validate_segment_defs(&defs).unwrap_err();
         assert!(err.to_string().contains("unknown charset \"bogus\""));
+    }
+
+    #[test]
+    fn builtin_to_owned_conversion() {
+        use crate::fake::charsets;
+        let builtin_lit = BuiltinSegment::Literal(b"sk-ant-");
+        let owned = Segment::from(&builtin_lit);
+        match owned {
+            Segment::Literal(v) => assert_eq!(v, b"sk-ant-"),
+            _ => panic!("expected Literal"),
+        }
+
+        let builtin_var = BuiltinSegment::Variable {
+            charset: charsets::alphanumeric,
+            min: 10,
+            max: 20,
+        };
+        let owned = Segment::from(&builtin_var);
+        match owned {
+            Segment::Variable { charset, min, max } => {
+                assert_eq!(charset, CharsetName::Alphanumeric);
+                assert_eq!(min, 10);
+                assert_eq!(max, 20);
+            }
+            _ => panic!("expected Variable"),
+        }
     }
 }

@@ -1,4 +1,4 @@
-use crate::segment::Segment;
+use crate::segment::BuiltinSegment;
 use hmac::{Hmac, Mac};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use sha2::Sha256;
@@ -168,7 +168,7 @@ pub(crate) fn derive_fake_tier2_deterministic(
 /// same fake (INV-13). Resamples if fake == original (INV-15).
 pub(crate) fn derive_fake_tier1_segments(
     salt: &[u8; 32],
-    segments: &[Segment],
+    segments: &[BuiltinSegment],
     variable_lengths: &[usize],
     original: &[u8],
 ) -> Result<Vec<u8>, FakeError> {
@@ -181,7 +181,7 @@ pub(crate) fn derive_fake_tier1_segments(
         variable_lengths.len(),
         segments
             .iter()
-            .filter(|s| matches!(s, Segment::Variable { .. }))
+            .filter(|s| matches!(s, BuiltinSegment::Variable { .. }))
             .count(),
         "variable_lengths.len() must equal number of Variable segments"
     );
@@ -191,8 +191,8 @@ pub(crate) fn derive_fake_tier1_segments(
         let mut len = 0usize;
         for seg in segments {
             match seg {
-                Segment::Literal(bytes) => len += bytes.len(),
-                Segment::Variable { .. } => {
+                BuiltinSegment::Literal(bytes) => len += bytes.len(),
+                BuiltinSegment::Variable { .. } => {
                     len += variable_lengths[var_idx];
                     var_idx += 1;
                 }
@@ -216,8 +216,8 @@ pub(crate) fn derive_fake_tier1_segments(
 
         for seg in segments {
             match seg {
-                Segment::Literal(bytes) => fake.extend_from_slice(bytes),
-                Segment::Variable { charset, .. } => {
+                BuiltinSegment::Literal(bytes) => fake.extend_from_slice(bytes),
+                BuiltinSegment::Variable { charset, .. } => {
                     let cs = charset();
                     let var_len = variable_lengths[var_idx];
                     var_idx += 1;
@@ -246,9 +246,9 @@ pub(crate) fn derive_fake_tier1_segments(
     })
 }
 
-fn any_charset_is_empty(segments: &[Segment]) -> bool {
+fn any_charset_is_empty(segments: &[BuiltinSegment]) -> bool {
     segments.iter().any(|seg| {
-        if let Segment::Variable { charset, .. } = seg {
+        if let BuiltinSegment::Variable { charset, .. } = seg {
             charset().is_empty()
         } else {
             false
@@ -296,13 +296,13 @@ mod tests {
     fn test_derive_fake_tier1_segments_stability() {
         let salt = [42u8; 32];
         let segs = [
-            Segment::Literal(b"sk-ant-api03-"),
-            Segment::Variable {
+            BuiltinSegment::Literal(b"sk-ant-api03-"),
+            BuiltinSegment::Variable {
                 charset: charsets::url_safe_base64,
                 min: 93,
                 max: 93,
             },
-            Segment::Literal(b"AA"),
+            BuiltinSegment::Literal(b"AA"),
         ];
         let var_lens = [93usize];
         let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -315,13 +315,13 @@ mod tests {
     fn test_derive_fake_tier1_segments_literal_reproduced() {
         let salt = [1u8; 32];
         let segs = [
-            Segment::Literal(b"sk-ant-api03-"),
-            Segment::Variable {
+            BuiltinSegment::Literal(b"sk-ant-api03-"),
+            BuiltinSegment::Variable {
                 charset: charsets::url_safe_base64,
                 min: 93,
                 max: 93,
             },
-            Segment::Literal(b"AA"),
+            BuiltinSegment::Literal(b"AA"),
         ];
         let var_lens = [93usize];
         let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -339,20 +339,20 @@ mod tests {
     fn test_derive_fake_tier1_segments_variable_bytes_in_charset() {
         let salt = [2u8; 32];
         let segs = [
-            Segment::Literal(b"xoxb-"),
-            Segment::Variable {
+            BuiltinSegment::Literal(b"xoxb-"),
+            BuiltinSegment::Variable {
                 charset: charsets::digits,
                 min: 10,
                 max: 13,
             },
-            Segment::Literal(b"-"),
-            Segment::Variable {
+            BuiltinSegment::Literal(b"-"),
+            BuiltinSegment::Variable {
                 charset: charsets::digits,
                 min: 10,
                 max: 13,
             },
-            Segment::Literal(b"-"),
-            Segment::Variable {
+            BuiltinSegment::Literal(b"-"),
+            BuiltinSegment::Variable {
                 charset: charsets::alphanumeric,
                 min: 24,
                 max: 24,

@@ -1,5 +1,5 @@
 use crate::fake::charsets;
-use crate::segment::{MatchCapture, Segment};
+use crate::segment::{MatchCapture, BuiltinSegment};
 use crate::tier2::Tier2Pat;
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ pub struct Tier1Def {
     pub(crate) identifier: &'static str,
     /// Ordered sequence of structural segments for this secret class.
     /// See SPEC.md §Tier 1.
-    pub(crate) segments: &'static [Segment],
+    pub(crate) segments: &'static [BuiltinSegment],
     /// Derivation salt for fake generation. Zero in static template definitions;
     /// set to a real (random or loaded) value when constructing a Pattern.
     pub(crate) salt: [u8; 32],
@@ -40,14 +40,14 @@ impl Tier1Def {
 fn match_segments(
     payload: &[u8],
     cur: usize,
-    segs: &[Segment],
+    segs: &[BuiltinSegment],
     var_lens: &mut Vec<usize>,
 ) -> Option<usize> {
     if segs.is_empty() {
         return Some(cur);
     }
     match &segs[0] {
-        Segment::Literal(bytes) => {
+        BuiltinSegment::Literal(bytes) => {
             let end = cur + bytes.len();
             if payload.get(cur..end)? == *bytes {
                 match_segments(payload, end, &segs[1..], var_lens)
@@ -55,7 +55,7 @@ fn match_segments(
                 None
             }
         }
-        Segment::Variable { charset, min, max } => {
+        BuiltinSegment::Variable { charset, min, max } => {
             let cs = charset();
             // Try lengths from max down to min (longest-first, INV-18).
             for var_len in (*min..=*max).rev() {
@@ -81,14 +81,14 @@ fn match_segments(
 // match because it finds T3BlbkFJ at the correct offset; OPENAI_CLASSIC_DEF fails because
 // 'proj-' contains '-' which is not alphanumeric. The scrub engine picks the longest match (INV-18).
 
-const ANTHROPIC_SEGS: [Segment; 3] = [
-    Segment::Literal(b"sk-ant-api03-"),
-    Segment::Variable {
+const ANTHROPIC_SEGS: [BuiltinSegment; 3] = [
+    BuiltinSegment::Literal(b"sk-ant-api03-"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 93,
         max: 93,
     },
-    Segment::Literal(b"AA"),
+    BuiltinSegment::Literal(b"AA"),
 ];
 pub(crate) static ANTHROPIC_DEF: Tier1Def = Tier1Def {
     identifier: "anthropic",
@@ -98,9 +98,9 @@ pub(crate) static ANTHROPIC_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const OPENAI_CLASSIC_SEGS: [Segment; 2] = [
-    Segment::Literal(b"sk-"),
-    Segment::Variable {
+const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk-"),
+    BuiltinSegment::Variable {
         charset: charsets::alphanumeric,
         min: 48,
         max: 48,
@@ -113,15 +113,15 @@ pub(crate) static OPENAI_CLASSIC_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const OPENAI_PROJECT_SEGS: [Segment; 4] = [
-    Segment::Literal(b"sk-proj-"),
-    Segment::Variable {
+const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
+    BuiltinSegment::Literal(b"sk-proj-"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 58,
         max: 74,
     },
-    Segment::Literal(b"T3BlbkFJ"),
-    Segment::Variable {
+    BuiltinSegment::Literal(b"T3BlbkFJ"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 58,
         max: 74,
@@ -138,9 +138,9 @@ pub(crate) static OPENAI_PROJECT_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const AWS_AKIA_SEGS: [Segment; 2] = [
-    Segment::Literal(b"AKIA"),
-    Segment::Variable {
+const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"AKIA"),
+    BuiltinSegment::Variable {
         charset: charsets::uppercase_alphanumeric,
         min: 16,
         max: 16,
@@ -153,9 +153,9 @@ pub(crate) static AWS_AKIA_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const AWS_ASIA_SEGS: [Segment; 2] = [
-    Segment::Literal(b"ASIA"),
-    Segment::Variable {
+const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ASIA"),
+    BuiltinSegment::Variable {
         charset: charsets::uppercase_alphanumeric,
         min: 16,
         max: 16,
@@ -168,9 +168,9 @@ pub(crate) static AWS_ASIA_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const GITHUB_CLASSIC_SEGS: [Segment; 2] = [
-    Segment::Literal(b"ghp_"),
-    Segment::Variable {
+const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ghp_"),
+    BuiltinSegment::Variable {
         charset: charsets::alphanumeric,
         min: 36,
         max: 36,
@@ -183,15 +183,15 @@ pub(crate) static GITHUB_CLASSIC_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const GITHUB_FG_SEGS: [Segment; 4] = [
-    Segment::Literal(b"github_pat_"),
-    Segment::Variable {
+const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
+    BuiltinSegment::Literal(b"github_pat_"),
+    BuiltinSegment::Variable {
         charset: charsets::alphanumeric,
         min: 22,
         max: 22,
     },
-    Segment::Literal(b"_"),
-    Segment::Variable {
+    BuiltinSegment::Literal(b"_"),
+    BuiltinSegment::Variable {
         charset: charsets::alphanumeric,
         min: 59,
         max: 59,
@@ -205,9 +205,9 @@ pub(crate) static GITHUB_FG_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const GCP_SEGS: [Segment; 2] = [
-    Segment::Literal(b"AIza"),
-    Segment::Variable {
+const GCP_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"AIza"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 35,
         max: 35,
@@ -220,9 +220,9 @@ pub(crate) static GCP_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const OPENROUTER_SEGS: [Segment; 2] = [
-    Segment::Literal(b"sk-or-v1-"),
-    Segment::Variable {
+const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk-or-v1-"),
+    BuiltinSegment::Variable {
         charset: charsets::hex_lower,
         min: 64,
         max: 64,
@@ -236,15 +236,15 @@ pub(crate) static OPENROUTER_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const OPENAI_SVCACCT_SEGS: [Segment; 4] = [
-    Segment::Literal(b"sk-svcacct-"),
-    Segment::Variable {
+const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
+    BuiltinSegment::Literal(b"sk-svcacct-"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 58,
         max: 74,
     },
-    Segment::Literal(b"T3BlbkFJ"),
-    Segment::Variable {
+    BuiltinSegment::Literal(b"T3BlbkFJ"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 58,
         max: 74,
@@ -258,9 +258,9 @@ pub(crate) static OPENAI_SVCACCT_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const GOOGLE_OAUTH_SEGS: [Segment; 2] = [
-    Segment::Literal(b"GOCSPX-"),
-    Segment::Variable {
+const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"GOCSPX-"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 28,
         max: 28,
@@ -274,21 +274,21 @@ pub(crate) static GOOGLE_OAUTH_SECRET_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const SLACK_BOT_SEGS: [Segment; 6] = [
-    Segment::Literal(b"xoxb-"),
-    Segment::Variable {
+const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
+    BuiltinSegment::Literal(b"xoxb-"),
+    BuiltinSegment::Variable {
         charset: charsets::digits,
         min: 10,
         max: 13,
     },
-    Segment::Literal(b"-"),
-    Segment::Variable {
+    BuiltinSegment::Literal(b"-"),
+    BuiltinSegment::Variable {
         charset: charsets::digits,
         min: 10,
         max: 13,
     },
-    Segment::Literal(b"-"),
-    Segment::Variable {
+    BuiltinSegment::Literal(b"-"),
+    BuiltinSegment::Variable {
         charset: charsets::alphanumeric,
         min: 24,
         max: 24,
@@ -302,14 +302,14 @@ pub(crate) static SLACK_BOT_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const ANTHROPIC_ADMIN01_SEGS: [Segment; 3] = [
-    Segment::Literal(b"sk-ant-admin01-"),
-    Segment::Variable {
+const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
+    BuiltinSegment::Literal(b"sk-ant-admin01-"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 93,
         max: 93,
     },
-    Segment::Literal(b"AA"),
+    BuiltinSegment::Literal(b"AA"),
 ];
 pub(crate) static ANTHROPIC_ADMIN01_DEF: Tier1Def = Tier1Def {
     identifier: "anthropic_admin01",
@@ -319,14 +319,14 @@ pub(crate) static ANTHROPIC_ADMIN01_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const ANTHROPIC_ADMIN03_SEGS: [Segment; 3] = [
-    Segment::Literal(b"sk-ant-admin03-"),
-    Segment::Variable {
+const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
+    BuiltinSegment::Literal(b"sk-ant-admin03-"),
+    BuiltinSegment::Variable {
         charset: charsets::url_safe_base64,
         min: 93,
         max: 93,
     },
-    Segment::Literal(b"AA"),
+    BuiltinSegment::Literal(b"AA"),
 ];
 pub(crate) static ANTHROPIC_ADMIN03_DEF: Tier1Def = Tier1Def {
     identifier: "anthropic_admin03",
@@ -336,9 +336,9 @@ pub(crate) static ANTHROPIC_ADMIN03_DEF: Tier1Def = Tier1Def {
     salt: [0u8; 32],
 };
 
-const LINEAR_SEGS: [Segment; 2] = [
-    Segment::Literal(b"lin_api_"),
-    Segment::Variable {
+const LINEAR_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"lin_api_"),
+    BuiltinSegment::Variable {
         charset: charsets::alphanumeric,
         min: 40,
         max: 40,
@@ -555,7 +555,7 @@ mod tests {
             .iter()
             .filter_map(|p| match p {
                 Pattern::Tier1(d) => match d.segments.first()? {
-                    Segment::Literal(b) => Some(*b),
+                    BuiltinSegment::Literal(b) => Some(*b),
                     _ => None,
                 },
                 _ => None,
