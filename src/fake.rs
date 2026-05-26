@@ -99,8 +99,16 @@ pub(crate) fn derive_fake_tier1_segments(
 ) -> Result<Vec<u8>, FakeError> {
     assert!(!segments.is_empty(), "segment list must not be empty");
     assert!(
-        !charset_is_empty(segments),
+        !any_charset_is_empty(segments),
         "all Variable segments must have non-empty charsets"
+    );
+    debug_assert_eq!(
+        variable_lengths.len(),
+        segments
+            .iter()
+            .filter(|s| matches!(s, Segment::Variable { .. }))
+            .count(),
+        "variable_lengths.len() must equal number of Variable segments"
     );
 
     let total_len: usize = {
@@ -163,7 +171,7 @@ pub(crate) fn derive_fake_tier1_segments(
     })
 }
 
-fn charset_is_empty(segments: &[Segment]) -> bool {
+fn any_charset_is_empty(segments: &[Segment]) -> bool {
     segments.iter().any(|seg| {
         if let Segment::Variable { charset, .. } = seg {
             charset().is_empty()

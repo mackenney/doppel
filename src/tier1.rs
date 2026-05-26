@@ -139,7 +139,10 @@ const OPENAI_PROJECT_SEGS: [Segment; 4] = [
     },
 ];
 pub(crate) static OPENAI_PROJECT_DEF: Tier1Def = Tier1Def {
-    // sk-proj-<58|74 url_safe_b64>T3BlbkFJ<58|74 url_safe_b64> = 132 or 164 chars
+    // sk-proj-<58|74 url_safe_b64>T3BlbkFJ<58|74 url_safe_b64> = 132 or 164 chars total.
+    // The pre-Aug-2024 56-char format (sk-proj-<48 url_safe_b64>, no T3BlbkFJ) is intentionally
+    // not detected: those keys are ~2 years old and structurally indistinguishable from noise
+    // without the embedded marker. Best-effort coverage per SPEC.md §Known Limitations.
     // Source: gitleaks openai-api-key rule + OpenAI community reports.
     segments: &OPENAI_PROJECT_SEGS,
     salt: OnceLock::new(),
