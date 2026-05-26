@@ -3,3 +3,6 @@
 
 #[path = "integration/round_trip.rs"]
 mod round_trip;
+
+#[path = "integration/inv9_gap.rs"]
+mod inv9_gap;
