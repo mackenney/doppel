@@ -15,7 +15,6 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## Queued
 
-_(none)_
 
 ## Completed
 
@@ -25,6 +24,7 @@ _(none)_
 - `exploit-aad-tampering` — 6 PoC tests: fake-swap, stealth Unicode trigger, prefix-shadow DoS+redirect, batch exfil, e2e; 72/72 pass; commit 7005d46
 - `workspace-lib-split` — workspace split, Pattern opacity, ScrubError cleanup, lib docs, review fixes; commit 4b47145
 - `exploit-tier2-leakage` — start_fragment leakage PoC confirmed; fix: wide-charset default, opt-in prefix/suffix; commit 662fca8
+- `tier1-segments` — segment-list model for Tier 1 detection (INV-28, INV-29, VC-13); fixes Anthropic AA suffix, OpenAI T3BlbkFJ, GitHub FG `_` separator, Slack digit structure; commit 895e596
 
 ## Known Gaps
 

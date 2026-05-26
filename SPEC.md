@@ -39,11 +39,11 @@ These operations and data abstractions are the complete public surface. The only
 
 ### Tier 1 — Known Secret Classes
 
-Tier 1 covers secrets whose format is structurally well-known: a fixed literal prefix followed by a payload of a defined character set and length range.
+Tier 1 covers secrets whose format is structurally well-known. Each Tier 1 pattern is defined as an ordered sequence of structural segments. A segment is either a **Literal** — a fixed byte sequence that must appear exactly at the current position — or a **Variable** — a character set with a minimum and maximum length, where every byte must belong to that set.
 
-Detection is structural: at each byte position, test whether any registered prefix matches; on a hit, verify that the following bytes satisfy the character set for the required length range. No full regular expression engine is required or used.
+Detection is structural: at each byte position, walk the segment sequence against the payload. A Literal segment must match its fixed bytes exactly. A Variable segment consumes bytes that all belong to the segment's character set, within the segment's length range; when a Variable segment is followed by a Literal, the boundary is found by searching for that Literal within the valid range — this handles embedded fixed markers within an otherwise variable payload. No full regular expression engine is used; detection is a bounded linear scan with no backtracking. Detection records how many bytes each Variable segment consumed; that per-segment length drives fake generation.
 
-The fake for a Tier 1 match preserves the detected prefix exactly and fills the remaining positions with characters drawn from the same character set, sampled from a CSPRNG. The fake has the same total byte length as the original.
+The fake for a Tier 1 match reproduces every Literal segment verbatim and fills each Variable segment with the same number of bytes drawn from that segment's character set, sampled from a CSPRNG. The fake has the same total byte length as the original.
 
 The library MUST ship built-in Tier 1 definitions covering at minimum: Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys. Additional definitions MAY be added; the built-in set is not closed.
 
@@ -91,7 +91,7 @@ The Pattern produced by registration is an opaque value the caller receives and 
 
 **Per-entry AEAD encryption.** Each substitution entry is independently encrypted with its own AEAD tag under the session key. `unscrub` decrypts entries one by one as their corresponding fakes are matched in the response stream — it does NOT decrypt the entire entries set upfront. _(Domain constraint: the 192-bit nonce eliminates birthday-bound collision risk for randomly-generated nonces; the AEAD construction provides both confidentiality and ciphertext integrity in a single pass. Cipher agility is deliberately absent — algorithm negotiation introduces downgrade risk and implementation complexity with no benefit in a single-purpose library.)_ Restored plaintext MUST NOT be emitted before the AEAD tag of the matching entry passes verification. A tag failure MUST produce an error; the stream MUST NOT continue with the raw fake or any partially-decrypted bytes in place.
 
-**Tier 1 fake plausibility does not compromise security of the credential value.** Tier 1 fakes preserve the detected structural prefix exactly (e.g., `sk-ant-api03-`) and fill the remaining positions with characters from the same character set. The prefix and character class are visible in the fake by design — this is what enables the model to reason about format — but the credential bytes (everything after the prefix) are replaced with CSPRNG output and carry no information about the original.
+**Tier 1 fake plausibility does not compromise security of the credential value.** Tier 1 fakes reproduce every Literal segment's fixed bytes exactly at the corresponding positions (e.g., the `sk-ant-api03-` prefix and the `AA` terminal marker of an Anthropic key) and fill each Variable segment with characters drawn from that segment's character set. The literal bytes are visible in the fake by design — this is what enables the model to reason about format — but the variable bytes are replaced with CSPRNG output and carry no information about the original.
 
 **Tier 2 detection fragments are confined to the Pattern.** Reliable detection of unstructured secrets requires storing enough of the secret to find it quickly. The start and end fragments live exclusively in the caller-held Pattern and never appear in the entries file. The cost of detection is borne by the Pattern (which may be persisted and should be treated as sensitive), not by the entries.
 
@@ -118,8 +118,8 @@ All fakes MUST satisfy:
 
 **Tier 1 fakes** additionally MUST satisfy:
 
-- **Same prefix:** the fake begins with the exact structural prefix bytes of the matched Pattern.
-- **Same charset:** every non-prefix byte is drawn from the Pattern's character set.
+- **Same Literal segments:** the fake reproduces every Literal segment's fixed bytes verbatim at the corresponding byte positions.
+- **Same charset per Variable segment:** every byte in a Variable segment of the fake is drawn exclusively from that segment's own character set.
 
 **Tier 2 fakes** are structured as:
 
@@ -169,6 +169,8 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 25. Tier 2 `register` MUST return `RegistrationError::TooShort` for empty secrets, `RegistrationError::NoVariableBytes` when `preserve_prefix + preserve_suffix >= secret.len()`, and `RegistrationError::CollisionLimit` when fake generation exhausts retries. It MUST NOT panic on any input.
 26. Tier 2 `register` MUST emit a `log::warn`-level diagnostic when the variable portion of the registered secret is shorter than 14 bytes.
 27. Tier 2 `register` MUST emit a `log::warn`-level diagnostic when the secret's observed byte set is a subset of `[A-Za-z0-9]` and `restrict_charset` is `false`.
+28. Every Literal segment in a matched Tier 1 Pattern MUST appear verbatim at the corresponding byte positions of the fake.
+29. Every Variable segment in a Tier 1 fake MUST contain only bytes drawn from that segment's own character set.
 
 ## Verifiable Conditions
 
@@ -184,6 +186,7 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 10. Multiple occurrences of the same secret within a single payload each produce the same fake bytes in the scrubbed output.
 11. A Tier 2 candidate that shares start and end fragments with a registered secret but does not match the HMAC passes through the scrubbed payload unchanged.
 12. Given an empty set of patterns, `scrub` returns the payload unchanged and an empty entries set.
+13. Given a Tier 1 secret whose pattern contains a Literal segment that is not the leading element (e.g., a fixed suffix or an embedded marker), the fake produced by `scrub` reproduces that Literal segment verbatim at the correct byte position.
 
 ## Known Limitations / Accepted Trade-offs
 
