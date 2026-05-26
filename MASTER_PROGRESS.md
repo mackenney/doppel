@@ -30,3 +30,4 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 - No CI configuration (out of scope for initial-implementation plan)
 - _(All other gaps — Tier 1/2 salt stability, Tier 2 fake derivation, CLI pattern registration, patterns file — are addressed by the `patterns-file-stable-fakes` plan)_
+- **Built-in Tier 1 patterns are exemplary, not authoritative.** The 15 compiled-in definitions (`anthropic`, `openai_classic`, etc.) exist for testing and as a template starting point. Long-term, the library should ship a canonical `patterns.json` template that users copy and maintain; the compiled-in set should not be treated as the production list. Making pattern management fully user-driven (no compiled-in defaults, library provides only the segment/salt machinery) is a future design decision.

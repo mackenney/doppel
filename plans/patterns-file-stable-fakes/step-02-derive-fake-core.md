@@ -9,19 +9,19 @@ Make fakes deterministic across process restarts, add a patterns file format, an
 Wave 0. This step creates the shared derivation primitive that both Tier 1 and the new Tier 2 deterministic derivation will use. It has no dependencies and runs in parallel with step-01.
 
 ### This Step
-Extract the HMAC→StdRng→rejection-sampling logic from `derive_fake_tier1` into a shared internal helper `derive_fake_core`. Rewrite `derive_fake_tier1` as a thin wrapper. Add `derive_fake_tier2_deterministic` as a second wrapper that supports both prefix and suffix preservation. Add unit tests for the new functions.
+Extract the HMAC→StdRng→rejection-sampling logic (prefix + variable bytes + suffix shape) into a shared internal helper `derive_fake_core`. Add `derive_fake_tier2_deterministic` as a thin wrapper over it that supports prefix and suffix preservation. Add unit tests for the new functions. **Do not touch `derive_fake_tier1_segments`** — that function handles the segment-list model used by Tier 1 and is not replaced by this step.
 
 ## Prerequisites
 - None
 
 ## Files to Read Before Starting
-- `/home/ignacio/pr/its-classified/src/fake.rs` — full file, 298 lines. Contains `derive_fake_tier1` (lines 78–127) and `generate_fake_tier2` (lines 139–184).
+- `/home/ignacio/pr/its-classified/src/fake.rs` — full file. Contains `derive_fake_tier1_segments` (the segment-model Tier 1 function, do not modify), `generate_fake_tier2` (the RNG-based Tier 2 registration function, still needed — do not remove), and the test suite.
 
 ## Implementation
 
 ### Task 1: Add `derive_fake_core` function
 
-In `src/fake.rs`, add a new private function **above** `derive_fake_tier1` (before line 72):
+In `src/fake.rs`, add a new private function **above** `derive_fake_tier1_segments` (before the `/// Derive a structurally-equivalent fake for a Tier 1 secret` doc comment):
 
 ```rust
 fn derive_fake_core(
@@ -78,27 +78,9 @@ fn derive_fake_core(
 }
 ```
 
-### Task 2: Rewrite `derive_fake_tier1` as a wrapper
+### Task 2: Add `derive_fake_tier2_deterministic`
 
-Replace the body of `derive_fake_tier1` (lines 78–127) with a single call to `derive_fake_core`:
-
-```rust
-pub(crate) fn derive_fake_tier1(
-    salt: &[u8; 32],
-    prefix: &[u8],
-    charset: &[u8],
-    target_len: usize,
-    original: &[u8],
-) -> Result<Vec<u8>, FakeError> {
-    derive_fake_core(salt, original, prefix, &[], charset, target_len)
-}
-```
-
-The function signature stays the same — only the body changes. This keeps all existing callers working.
-
-### Task 3: Add `derive_fake_tier2_deterministic`
-
-Add a new public(crate) function after `derive_fake_tier1`:
+Add a new public(crate) function after `derive_fake_core` (before `derive_fake_tier1_segments`):
 
 ```rust
 /// Derive a deterministic fake for a Tier 2 secret at match time.
@@ -117,7 +99,7 @@ pub(crate) fn derive_fake_tier2_deterministic(
 }
 ```
 
-### Task 4: Add unit tests
+### Task 3: Add unit tests
 
 Add the following tests to the `#[cfg(test)] mod tests` block in `src/fake.rs`:
 
@@ -147,39 +129,29 @@ fn test_derive_fake_tier2_deterministic_stability() {
     let fake2 = derive_fake_tier2_deterministic(&salt, original, prefix, suffix, &charset, original.len()).unwrap();
     assert_eq!(fake1, fake2, "same inputs must produce same fake (INV-13)");
 }
-
-#[test]
-fn test_derive_fake_tier1_unchanged_after_refactor() {
-    // Verify that the refactored derive_fake_tier1 produces the same output
-    // as the shared derive_fake_core when called with no suffix.
-    let salt = [42u8; 32];
-    let prefix = b"sk-ant-";
-    let charset = charsets::alphanumeric();
-    let original = b"sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-    let via_tier1 = derive_fake_tier1(&salt, prefix, &charset, original.len(), original).unwrap();
-    let via_core = derive_fake_core(&salt, original, prefix, &[], &charset, original.len()).unwrap();
-    assert_eq!(via_tier1, via_core, "tier1 wrapper must produce identical output to core");
-}
 ```
 
-### Task 5: Verify existing tests still pass
+### Task 4: Verify existing tests still pass
 
-Run the existing `fake.rs` unit tests to confirm no regression:
+Run the full `fake.rs` unit tests to confirm no regression:
 
 ```sh
 cargo nextest run --lib -p its-classified -- fake::tests
 ```
 
+All existing tests (`test_derive_fake_tier1_segments_stability`, `test_generate_fake_tier2_*`, etc.) must continue to pass. Do not remove any existing function or test.
+
 ## Acceptance Criteria
 
 These must ALL pass before reporting complete:
 
-- [ ] `cargo nextest run --lib -p its-classified -- fake::tests 2>&1 | tail -1` contains "test result: ok" or shows all tests passing (0 failures)
+- [ ] `cargo nextest run --lib -p its-classified -- fake::tests 2>&1 | tail -3` shows 0 failures
 - [ ] `grep -c "fn derive_fake_core" /home/ignacio/pr/its-classified/src/fake.rs` outputs `1`
 - [ ] `grep -c "fn derive_fake_tier2_deterministic" /home/ignacio/pr/its-classified/src/fake.rs` outputs `1`
 - [ ] `grep -c "fn test_derive_fake_tier2_deterministic_stability" /home/ignacio/pr/its-classified/src/fake.rs` outputs `1`
-- [ ] `grep -c "fn test_derive_fake_tier1_unchanged_after_refactor" /home/ignacio/pr/its-classified/src/fake.rs` outputs `1`
-- [ ] `cargo nextest run --lib -p its-classified -- fake::tests::test_derive_fake_tier1_stability 2>&1 | grep -c "PASS"` outputs `1` (pre-existing test still passes)
+- [ ] `grep -c "fn test_derive_fake_core_prefix_and_suffix" /home/ignacio/pr/its-classified/src/fake.rs` outputs `1`
+- [ ] `grep -c "fn derive_fake_tier1_segments" /home/ignacio/pr/its-classified/src/fake.rs` outputs `1` (must not have been removed)
+- [ ] `cargo nextest run --lib -p its-classified -- fake::tests::test_derive_fake_tier1_segments_stability 2>&1 | grep -c "PASS"` outputs `1` (pre-existing test still passes)
 
 ## Reviewer Instructions
 
@@ -187,8 +159,8 @@ You are reviewing Step 02. Verify:
 1. Run `cargo nextest run --lib -p its-classified -- fake::tests` — all tests must pass
 2. Check `src/fake.rs` for:
    - `derive_fake_core` is a private `fn` (no `pub`)
-   - `derive_fake_tier1` body is a single call to `derive_fake_core` with `suffix: &[]`
    - `derive_fake_tier2_deterministic` is `pub(crate)` and calls `derive_fake_core`
+   - `derive_fake_tier1_segments` is UNCHANGED (still present, segment-model Tier 1 path)
    - `generate_fake_tier2` (the RNG-based one) is UNCHANGED (still present, still used by registration)
 3. Run `cargo clippy -p its-classified --lib 2>&1 | grep -c "warning"` — should be 0 new warnings
 Report: "PASS" with each criterion confirmed, or "FAIL: <criterion> — <what's wrong>"

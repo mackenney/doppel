@@ -329,7 +329,7 @@ mod tests {
         let bytes = pf.serialize().unwrap();
         let pf2 = PatternsFile::deserialize(&bytes).unwrap();
         assert_eq!(pf2.version, 1);
-        assert_eq!(pf2.tier1.len(), 8);
+        assert_eq!(pf2.tier1.len(), 15);
         assert!(pf2.tier2.is_empty());
         for (k, v) in &pf.tier1 {
             assert_eq!(&pf2.tier1[k].salt, &v.salt);
@@ -362,14 +362,16 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_missing_fills_all_eight() {
+    fn test_generate_missing_fills_all_fifteen() {
         let mut pf = PatternsFile::new();
         pf.generate_missing_tier1_salts();
-        assert_eq!(pf.tier1.len(), 8);
+        assert_eq!(pf.tier1.len(), 15);
         let expected_ids = [
-            "anthropic", "openai_classic", "openai_project",
+            "anthropic", "anthropic_admin01", "anthropic_admin03",
+            "openai_classic", "openai_project", "openai_svcacct",
             "aws_akia", "aws_asia", "github_classic",
-            "github_fine_grained", "gcp",
+            "github_fine_grained", "gcp", "openrouter",
+            "google_oauth_secret", "slack_bot", "linear",
         ];
         for id in &expected_ids {
             assert!(pf.tier1.contains_key(*id), "missing class: {id}");
@@ -383,7 +385,7 @@ mod tests {
         pf.tier1.insert("anthropic".into(), Tier1Entry { salt: fixed_salt });
         pf.generate_missing_tier1_salts();
         assert_eq!(pf.tier1["anthropic"].salt, fixed_salt);
-        assert_eq!(pf.tier1.len(), 8);
+        assert_eq!(pf.tier1.len(), 15);
     }
 
     #[test]
@@ -511,7 +513,7 @@ You are reviewing Step 08. Verify:
 4. `PatternsFile::serialize` and `PatternsFile::deserialize` work (test passes)
 5. `PatternsFile::into_patterns` validates all Tier 1 classes present, constructs patterns
 6. `PatternsFile::add_tier2_pattern` extracts fields from `Pattern::Tier2`
-7. `PatternsFile::generate_missing_tier1_salts` fills all 8 classes
+7. `PatternsFile::generate_missing_tier1_salts` fills all 15 classes
 8. `src/serde_helpers.rs` contains `base64_vec`, `base64_32`, `base64_vec_option`
 9. `src/types.rs` uses shared `base64_serde` from `serde_helpers` — no duplicated module
 10. Binary fields use base64 encoding in JSON (check serialized output)

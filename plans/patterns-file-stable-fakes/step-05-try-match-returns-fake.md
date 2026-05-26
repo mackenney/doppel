@@ -90,7 +90,7 @@ pub(crate) fn try_match(&self, payload: &[u8], pos: usize) -> Result<Option<(usi
 
 ### Task 2: Update `Match` struct in `scrub.rs`
 
-In `src/scrub.rs`, locate the `Match` struct (line 10). Add a field:
+In `src/scrub.rs`, locate the `Match` struct. Add `derived_fake` alongside the existing `tier1_capture` field — **do not remove `tier1_capture`**, it is still read by `generate_fake_for_match` for Tier 1 fakes:
 
 ```rust
 struct Match<'a> {
@@ -98,6 +98,7 @@ struct Match<'a> {
     end: usize,
     is_tier1: bool,
     pattern_ref: PatternRef<'a>,
+    tier1_capture: Option<crate::segment::MatchCapture>,
     derived_fake: Option<Vec<u8>>,
 }
 ```
@@ -137,16 +138,17 @@ This means `find_best_match` also needs to change its return type. Currently it 
 fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> Option<Result<Match<'a>, FakeError>>
 ```
 
-Update the Tier 1 branch to wrap in `Ok`:
+Update the Tier 1 branch to retain `tier1_capture` and use `capture.end` (note: `def.try_match()` returns `Option<MatchCapture>`, not `Option<usize>`):
 
 ```rust
-Pattern::Tier1(def) => def.try_match(payload, pos).map(|end| Ok(Match {
+Pattern::Tier1(def) => def.try_match(payload, pos).map(|capture| Match {
     start: pos,
-    end,
+    end: capture.end,
     is_tier1: true,
     pattern_ref: PatternRef::Tier1(def),
+    tier1_capture: Some(capture),
     derived_fake: None,
-})),
+}),
 ```
 
 Update the candidate comparison and return logic. The full rewritten function:
@@ -157,11 +159,12 @@ fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> R
 
     for pattern in patterns {
         let candidate = match pattern {
-            Pattern::Tier1(def) => def.try_match(payload, pos).map(|end| Match {
+            Pattern::Tier1(def) => def.try_match(payload, pos).map(|capture| Match {
                 start: pos,
-                end,
+                end: capture.end,
                 is_tier1: true,
                 pattern_ref: PatternRef::Tier1(def),
+                tier1_capture: Some(capture),
                 derived_fake: None,
             }),
             Pattern::Tier2(arc) => match arc.try_match(payload, pos)? {
@@ -170,6 +173,7 @@ fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> R
                     end,
                     is_tier1: false,
                     pattern_ref: PatternRef::Tier2(arc.as_ref()),
+                    tier1_capture: None,
                     derived_fake: Some(fake),
                 }),
                 None => None,
