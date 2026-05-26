@@ -47,13 +47,16 @@
 
 pub(crate) mod crypto;
 pub(crate) mod fake;
+pub mod patterns_file;
 pub(crate) mod scrub;
 pub(crate) mod segment;
+pub(crate) mod serde_helpers;
 pub mod tier1;
 pub(crate) mod tier2;
 pub mod types;
 pub(crate) mod unscrub;
 
+pub use patterns_file::{PatternsFile, PatternsFileError, Tier1Entry, Tier2Entry};
 pub use scrub::scrub;
 pub use tier1::patterns;
 pub use tier2::{RegistrationError, RegistrationOptions, register, register_with_options};

@@ -78,16 +78,4 @@ impl From<crate::fake::FakeError> for ScrubError {
 /// Re-export Pattern from tier1 so callers can reach it via its_classified::types::Pattern.
 pub use crate::tier1::Pattern;
 
-mod base64_serde {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S: Serializer>(bytes: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
-        STANDARD.encode(bytes).serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        let s = String::deserialize(d)?;
-        STANDARD.decode(&s).map_err(serde::de::Error::custom)
-    }
-}
+use crate::serde_helpers::base64_vec as base64_serde;
