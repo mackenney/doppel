@@ -234,10 +234,21 @@ impl PatternsFile {
     }
 
     /// Extract a Tier 2 entry from a Pattern and append it to this file.
-    /// Returns error if the pattern is not Tier 2.
-    pub fn add_tier2_pattern(&mut self, pattern: &Pattern) -> Result<(), PatternsFileError> {
+    /// Returns error if the pattern is not Tier 2 or if the label is a duplicate.
+    pub fn add_tier2_pattern(
+        &mut self,
+        pattern: &Pattern,
+        label: Option<String>,
+    ) -> Result<(), PatternsFileError> {
         match pattern {
             Pattern::Tier2(arc) => {
+                if let Some(ref l) = label {
+                    let duplicate = self.tier2.iter().any(|e| e.label.as_deref() == Some(l));
+                    if duplicate {
+                        return Err(PatternsFileError::DuplicateLabel { label: l.clone() });
+                    }
+                }
+
                 let p = arc.as_ref();
                 let charset = if p.charset == crate::fake::charsets::wide() {
                     None
@@ -246,7 +257,7 @@ impl PatternsFile {
                 };
 
                 self.tier2.push(Tier2Entry {
-                    label: None,
+                    label,
                     start_fragment: p.start_fragment.clone(),
                     end_fragment: p.end_fragment.clone(),
                     exact_length: p.exact_length,
@@ -261,6 +272,33 @@ impl PatternsFile {
             }
             _ => Err(PatternsFileError::WrongPatternType),
         }
+    }
+
+    /// Add a user-defined Tier 1 entry to this patterns file.
+    ///
+    /// The caller provides a pre-generated salt. Validates:
+    /// - Identifier uniqueness (INV-31)
+    /// - Segment list validity (INV-30: at least one Variable, valid charsets, min <= max)
+    pub fn add_tier1_entry(
+        &mut self,
+        identifier: String,
+        segments: Vec<SegmentDef>,
+        salt: [u8; 32],
+    ) -> Result<(), PatternsFileError> {
+        let duplicate = self.tier1.iter().any(|e| e.identifier == identifier);
+        if duplicate {
+            return Err(PatternsFileError::DuplicateIdentifier { identifier });
+        }
+
+        crate::segment::validate_segment_defs(&segments)?;
+
+        self.tier1.push(Tier1Entry {
+            identifier,
+            salt,
+            segments: Some(segments),
+        });
+
+        Ok(())
     }
 
     /// Fill in salts for any built-in Tier 1 classes not already in the file.
@@ -280,6 +318,34 @@ impl PatternsFile {
                 });
             }
         }
+    }
+
+    /// Fill in salts and segment definitions for any built-in Tier 1 classes not in the file.
+    /// Unlike `generate_missing_tier1_salts`, this also embeds the compiled-in segment
+    /// definitions so the output file is self-describing (used by `init`).
+    pub fn generate_missing_tier1_salts_with_segments(&mut self) {
+        use rand::RngCore;
+
+        for def in tier1::all_defs() {
+            let already_present = self.tier1.iter().any(|e| e.identifier == def.identifier);
+            if !already_present {
+                let mut salt = [0u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut salt);
+
+                let seg_defs: Vec<SegmentDef> = def.segments.iter().map(|s| s.to_def()).collect();
+
+                self.tier1.push(Tier1Entry {
+                    identifier: def.identifier.clone(),
+                    salt,
+                    segments: Some(seg_defs),
+                });
+            }
+        }
+    }
+
+    /// Check if an identifier matches a compiled-in Tier 1 definition.
+    pub fn is_builtin_identifier(identifier: &str) -> bool {
+        tier1::all_defs().iter().any(|d| d.identifier == identifier)
     }
 }
 

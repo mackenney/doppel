@@ -167,7 +167,7 @@ fn run_register(
         restrict_charset,
     };
     let pattern = register_with_options(&secret, &opts)?;
-    pf.add_tier2_pattern(&pattern)?;
+    pf.add_tier2_pattern(&pattern, None)?;
 
     let data = pf.serialize()?;
     write_patterns_file(patterns_path, &data, false)?;

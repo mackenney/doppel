@@ -691,7 +691,7 @@ fn test_inv13_cross_serialization_fake_stability() {
 
     let mut pf = PatternsFile::new();
     pf.generate_missing_tier1_salts();
-    pf.add_tier2_pattern(&pat).unwrap();
+    pf.add_tier2_pattern(&pat, None).unwrap();
 
     let payload = [b"token: ".as_slice(), secret].concat();
     let result1 = scrub(&payload, &[pat.clone()]).unwrap();
