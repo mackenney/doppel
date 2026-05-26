@@ -125,7 +125,7 @@ Every implementation MUST pass these specific scenarios:
 ## Run Commands
 
 ```sh
-cargo nextest run                                                            # all workspace tests
+cargo nextest run --workspace                                                 # all tests (lib + cli), 79 total
 cargo nextest run -p its-classified --test spec                              # lib spec invariants
 cargo nextest run -p its-classified-cli --test cli_spec                      # CLI spec invariants
 cargo nextest run -p its-classified --test integration                       # integration only
