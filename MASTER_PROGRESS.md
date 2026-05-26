@@ -32,4 +32,4 @@ _(none)_
 ## Known Gaps
 
 - No CI configuration (out of scope for initial-implementation plan)
-- `UnscrubError::Build(aho_corasick::BuildError)` exposes a third-party type in the public API — no active plan
+
