@@ -15,6 +15,9 @@ struct Cli {
 enum Commands {
     /// Scrub secrets from stdin. Writes scrubbed payload to stdout.
     Scrub {
+        /// Path to the patterns file (created by `init`).
+        #[arg(long)]
+        patterns: PathBuf,
         /// Path to write the entries file (ciphertext; not sensitive).
         #[arg(long)]
         entries: PathBuf,
@@ -30,16 +33,67 @@ enum Commands {
         entries: PathBuf,
         // NO --key flag — INV-20: key via ITS_CLASSIFIED_KEY env var only
     },
+    /// Create a new patterns file with all built-in Tier 1 definitions and stable salts.
+    Init {
+        /// Path to create the patterns file.
+        #[arg(long)]
+        patterns: PathBuf,
+        /// Overwrite if file exists (WARNING: regenerates all salts; existing fakes become invalid).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Register a Tier 2 secret (read from stdin) into an existing patterns file.
+    Register {
+        /// Path to the patterns file to update.
+        #[arg(long)]
+        patterns: PathBuf,
+        /// Bytes at start of secret to preserve verbatim in the fake.
+        #[arg(long, default_value_t = 0)]
+        preserve_prefix: usize,
+        /// Bytes at end of secret to preserve verbatim in the fake.
+        #[arg(long, default_value_t = 0)]
+        preserve_suffix: usize,
+        /// Draw fake bytes from the secret's own charset only.
+        #[arg(long)]
+        restrict_charset: bool,
+    },
 }
 
-fn run_scrub(entries_path: &Path, key_out_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::{scrub, tier1::patterns, types::Entry};
+fn run_scrub(
+    patterns_path: &Path,
+    entries_path: &Path,
+    key_out_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use its_classified::{PatternsFile, scrub, types::Entry};
     use std::io::{self, Read, Write};
+
+    let file_data = std::fs::read(patterns_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "patterns file not found: {}\n  tip: create it with: its-classified init --patterns {}",
+                patterns_path.display(),
+                patterns_path.display()
+            )
+        } else {
+            format!("failed to read patterns file: {}", e)
+        }
+    })?;
+
+    let pf = PatternsFile::deserialize(&file_data)
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    let patterns = pf.into_patterns().map_err(|e| {
+        format!(
+            "failed to load patterns from {}: {}",
+            patterns_path.display(),
+            e
+        )
+    })?;
 
     let mut payload = Vec::new();
     io::stdin().read_to_end(&mut payload)?;
 
-    let result = scrub(&payload, &patterns::all())?;
+    let result = scrub(&payload, &patterns)?;
 
     io::stdout().write_all(&result.payload)?;
 
@@ -47,6 +101,103 @@ fn run_scrub(entries_path: &Path, key_out_path: &Path) -> Result<(), Box<dyn std
     std::fs::write(entries_path, &entries_json)?;
 
     write_key_file(key_out_path, result.session_key.as_bytes())?;
+
+    Ok(())
+}
+
+fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use its_classified::PatternsFile;
+
+    if patterns_path.exists() && !force {
+        return Err(format!(
+            "patterns file already exists: {}\n  Use --force to overwrite (WARNING: regenerates all salts; existing fakes become invalid)",
+            patterns_path.display()
+        ).into());
+    }
+
+    let mut pf = PatternsFile::new();
+    pf.generate_missing_tier1_salts();
+    let data = pf.serialize()?;
+
+    write_patterns_file(patterns_path, &data)?;
+
+    eprintln!(
+        "created patterns file: {} (15 Tier 1 classes, 0 Tier 2 entries)",
+        patterns_path.display()
+    );
+
+    Ok(())
+}
+
+fn run_register(
+    patterns_path: &Path,
+    preserve_prefix: usize,
+    preserve_suffix: usize,
+    restrict_charset: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use its_classified::{PatternsFile, RegistrationOptions, register_with_options};
+    use std::io::Read;
+
+    let mut secret = Vec::new();
+    std::io::stdin().read_to_end(&mut secret)?;
+
+    if secret.is_empty() {
+        return Err("no secret provided on stdin".into());
+    }
+
+    let file_data = std::fs::read(patterns_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "patterns file not found: {}\n  tip: create it with: its-classified init --patterns {}",
+                patterns_path.display(),
+                patterns_path.display()
+            )
+        } else {
+            format!("failed to read patterns file: {}", e)
+        }
+    })?;
+
+    let mut pf = PatternsFile::deserialize(&file_data)?;
+
+    let opts = RegistrationOptions {
+        preserve_prefix,
+        preserve_suffix,
+        restrict_charset,
+    };
+    let pattern = register_with_options(&secret, &opts)?;
+    pf.add_tier2_pattern(&pattern)?;
+
+    let data = pf.serialize()?;
+    write_patterns_file(patterns_path, &data)?;
+
+    let variable_len = secret.len() - preserve_prefix - preserve_suffix;
+    eprintln!(
+        "registered 1 Tier 2 secret (variable portion: {} bytes)",
+        variable_len
+    );
+
+    Ok(())
+}
+
+fn write_patterns_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(data)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, data)?;
+    }
 
     Ok(())
 }
@@ -139,8 +290,24 @@ fn hex_nibble(b: u8) -> Result<u8, ()> {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Scrub { entries, key_out } => run_scrub(&entries, &key_out),
+        Commands::Scrub {
+            patterns,
+            entries,
+            key_out,
+        } => run_scrub(&patterns, &entries, &key_out),
         Commands::Unscrub { entries } => run_unscrub(&entries),
+        Commands::Init { patterns, force } => run_init(&patterns, force),
+        Commands::Register {
+            patterns,
+            preserve_prefix,
+            preserve_suffix,
+            restrict_charset,
+        } => run_register(
+            &patterns,
+            preserve_prefix,
+            preserve_suffix,
+            restrict_charset,
+        ),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
