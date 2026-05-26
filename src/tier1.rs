@@ -477,7 +477,7 @@ mod tests {
             b"lin_api_",
         ] {
             assert!(
-                leading_lits.iter().any(|l| *l == *expected),
+                leading_lits.contains(expected),
                 "missing leading literal: {}",
                 std::str::from_utf8(expected).unwrap()
             );
