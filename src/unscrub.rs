@@ -11,8 +11,14 @@ pub enum UnscrubError {
     AeadTagFailure { entry_index: usize },
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("failed to build Aho-Corasick automaton: {0}")]
-    Build(#[from] aho_corasick::BuildError),
+    #[error("failed to build Aho-Corasick automaton: {msg}")]
+    Build { msg: String },
+}
+
+impl From<aho_corasick::BuildError> for UnscrubError {
+    fn from(e: aho_corasick::BuildError) -> Self {
+        UnscrubError::Build { msg: e.to_string() }
+    }
 }
 
 const CHUNK_SIZE: usize = 4096;
@@ -61,7 +67,7 @@ pub fn unscrub<R: Read, W: Write>(
     let ac = AhoCorasick::builder()
         .match_kind(MatchKind::LeftmostFirst)
         .build(&fakes)
-        .map_err(UnscrubError::Build)?;
+        .map_err(UnscrubError::from)?;
 
     // max_hold: maximum fake length; we must not emit bytes that could be the start of a fake
     let max_hold: usize = entries.iter().map(|e| e.fake.len()).max().unwrap_or(0);
