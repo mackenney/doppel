@@ -49,7 +49,7 @@ pub(crate) mod crypto;
 pub(crate) mod fake;
 pub mod patterns_file;
 pub(crate) mod scrub;
-pub(crate) mod segment;
+pub mod segment;
 pub(crate) mod serde_helpers;
 pub mod tier1;
 pub(crate) mod tier2;

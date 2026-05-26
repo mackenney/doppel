@@ -12,6 +12,7 @@ doc = false
 its-classified = { path = ".." }
 clap = { version = "4", features = ["derive"] }
 zeroize = "1"
+rand = { version = "0.8", features = ["std", "std_rng"] }
 
 [dev-dependencies]
 tempfile = "3"

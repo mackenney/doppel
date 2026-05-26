@@ -47,6 +47,9 @@ enum Commands {
         /// Path to the patterns file to update.
         #[arg(long)]
         patterns: PathBuf,
+        /// Human-readable label for this secret (unique within the patterns file).
+        #[arg(long)]
+        label: String,
         /// Bytes at start of secret to preserve verbatim in the fake.
         #[arg(long, default_value_t = 0)]
         preserve_prefix: usize,
@@ -57,6 +60,91 @@ enum Commands {
         #[arg(long)]
         restrict_charset: bool,
     },
+    /// Define a user Tier 1 pattern (structural pattern with named segments).
+    Define {
+        /// Path to the patterns file to update.
+        #[arg(long)]
+        patterns: PathBuf,
+        /// Unique identifier for this pattern (e.g. MY_API_KEY).
+        #[arg(long)]
+        identifier: String,
+        /// Segment spec: "literal:<value>" or "variable:<charset>:<min>:<max>".
+        #[arg(long, required = true, num_args = 1)]
+        segment: Vec<String>,
+    },
+    /// List all Tier 1 patterns and Tier 2 secrets in a patterns file.
+    List {
+        /// Path to the patterns file.
+        #[arg(long)]
+        patterns: PathBuf,
+    },
+    /// Show details for a single Tier 1 pattern or Tier 2 secret.
+    Inspect {
+        /// Path to the patterns file.
+        #[arg(long)]
+        patterns: PathBuf,
+        /// Identifier of the Tier 1 pattern to inspect.
+        #[arg(long, group = "target")]
+        identifier: Option<String>,
+        /// Label of the Tier 2 secret to inspect.
+        #[arg(long, group = "target")]
+        label: Option<String>,
+    },
+    /// Remove a Tier 1 pattern or Tier 2 secret from a patterns file.
+    Remove {
+        /// Path to the patterns file.
+        #[arg(long)]
+        patterns: PathBuf,
+        /// Identifier of the Tier 1 pattern to remove.
+        #[arg(long, group = "target")]
+        identifier: Option<String>,
+        /// Label of the Tier 2 secret to remove.
+        #[arg(long, group = "target")]
+        label: Option<String>,
+    },
+}
+
+const INIT_COMMENT_BLOCK: &str = r#"
+# Tier 2 secrets are registered via the CLI:
+#
+#   echo -n 'my-secret-value' | its-classified register \
+#     --patterns <this-file> \
+#     --label my-secret \
+#     --preserve-prefix 0 \
+#     --preserve-suffix 0
+#
+# Each [[tier2]] entry contains:
+#   label             - human-readable identifier (unique, required by CLI)
+#   start_fragment    - first bytes of the secret (hex; detection anchor)
+#   end_fragment      - last bytes of the secret (hex; detection anchor)
+#   exact_length      - total byte length of the secret
+#   hmac_salt         - unique salt for HMAC verification (hex)
+#   hmac_digest       - HMAC digest for candidate confirmation (hex)
+#   preserve_prefix   - bytes at start preserved verbatim in fake
+#   preserve_suffix   - bytes at end preserved verbatim in fake
+#   charset           - (optional) byte set for fake generation; omit for wide default
+#
+# User-defined Tier 1 patterns can be added via:
+#
+#   its-classified define --patterns <this-file> \
+#     --identifier MY_PATTERN \
+#     --segment literal:prefix_ \
+#     --segment variable:alphanumeric:32:32
+"#;
+
+fn read_patterns_file(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    std::fs::read(path).map_err(|e| -> Box<dyn std::error::Error> {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "patterns file not found: {}\n  tip: create it with: its-classified init --patterns {}",
+                path.display(),
+                path.display()
+            )
+            .into()
+        } else {
+            format!("failed to read patterns file: {}", e).into()
+        }
+    })
 }
 
 fn run_scrub(
@@ -67,17 +155,7 @@ fn run_scrub(
     use its_classified::{PatternsFile, scrub, types::Entry};
     use std::io::{self, Read, Write};
 
-    let file_data = std::fs::read(patterns_path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            format!(
-                "patterns file not found: {}\n  tip: create it with: its-classified init --patterns {}",
-                patterns_path.display(),
-                patterns_path.display()
-            )
-        } else {
-            format!("failed to read patterns file: {}", e)
-        }
-    })?;
+    let file_data = read_patterns_file(patterns_path)?;
 
     let pf = PatternsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
@@ -109,23 +187,30 @@ fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error:
     use its_classified::PatternsFile;
 
     let mut pf = PatternsFile::new();
-    pf.generate_missing_tier1_salts();
-    let data = pf.serialize()?;
+    pf.generate_missing_tier1_salts_with_segments();
+    let mut data = pf.serialize()?;
 
-    write_patterns_file(patterns_path, &data, !force).map_err(|e| -> Box<dyn std::error::Error> {
-        if e.kind() == std::io::ErrorKind::AlreadyExists {
-            format!(
-                "patterns file already exists: {}\n  Use --force to overwrite (WARNING: regenerates all salts; existing fakes become invalid)",
-                patterns_path.display()
-            ).into()
-        } else {
-            e.into()
-        }
-    })?;
+    data.extend_from_slice(INIT_COMMENT_BLOCK.as_bytes());
 
+    write_patterns_file(patterns_path, &data, !force).map_err(
+        |e| -> Box<dyn std::error::Error> {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                format!(
+                    "patterns file already exists: {}\n  Use --force to overwrite (WARNING: regenerates all salts; existing fakes become invalid)",
+                    patterns_path.display()
+                )
+                .into()
+            } else {
+                e.into()
+            }
+        },
+    )?;
+
+    let count = pf.tier1.len();
     eprintln!(
-        "created patterns file: {} (15 Tier 1 classes, 0 Tier 2 entries)",
-        patterns_path.display()
+        "created patterns file: {} ({} Tier 1 patterns, 0 Tier 2 secrets)",
+        patterns_path.display(),
+        count
     );
 
     Ok(())
@@ -133,6 +218,7 @@ fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error:
 
 fn run_register(
     patterns_path: &Path,
+    label: &str,
     preserve_prefix: usize,
     preserve_suffix: usize,
     restrict_charset: bool,
@@ -147,18 +233,7 @@ fn run_register(
         return Err("no secret provided on stdin".into());
     }
 
-    let file_data = std::fs::read(patterns_path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            format!(
-                "patterns file not found: {}\n  tip: create it with: its-classified init --patterns {}",
-                patterns_path.display(),
-                patterns_path.display()
-            )
-        } else {
-            format!("failed to read patterns file: {}", e)
-        }
-    })?;
-
+    let file_data = read_patterns_file(patterns_path)?;
     let mut pf = PatternsFile::deserialize(&file_data)?;
 
     let opts = RegistrationOptions {
@@ -167,16 +242,305 @@ fn run_register(
         restrict_charset,
     };
     let pattern = register_with_options(&secret, &opts)?;
-    pf.add_tier2_pattern(&pattern, None)?;
+    pf.add_tier2_pattern(&pattern, Some(label.to_string()))?;
 
     let data = pf.serialize()?;
     write_patterns_file(patterns_path, &data, false)?;
 
     let variable_len = secret.len() - preserve_prefix - preserve_suffix;
     eprintln!(
-        "registered 1 Tier 2 secret (variable portion: {} bytes)",
-        variable_len
+        "registered Tier 2 secret: {} (variable portion: {} bytes)",
+        label, variable_len
     );
+
+    Ok(())
+}
+
+fn run_define(
+    patterns_path: &Path,
+    identifier: &str,
+    segment_specs: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use its_classified::PatternsFile;
+    use rand::RngCore;
+
+    let seg_defs: Vec<its_classified::segment::SegmentDef> = segment_specs
+        .iter()
+        .enumerate()
+        .map(|(i, spec)| parse_segment_spec(spec, i))
+        .collect::<Result<_, _>>()?;
+
+    let file_data = read_patterns_file(patterns_path)?;
+    let mut pf = PatternsFile::deserialize(&file_data)
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    let mut salt = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+
+    pf.add_tier1_entry(identifier.to_string(), seg_defs, salt)?;
+
+    let data = pf.serialize()?;
+    write_patterns_file(patterns_path, &data, false)?;
+
+    let seg_count = segment_specs.len();
+    eprintln!(
+        "defined Tier 1 pattern: {} ({} segments)",
+        identifier, seg_count
+    );
+
+    Ok(())
+}
+
+fn parse_segment_spec(
+    spec: &str,
+    index: usize,
+) -> Result<its_classified::segment::SegmentDef, String> {
+    use its_classified::segment::SegmentDef;
+
+    let (seg_type, rest) = spec.split_once(':').ok_or_else(|| {
+        format!(
+            "invalid segment spec \"{}\"; expected \"literal:<value>\" or \"variable:<charset>:<min>:<max>\"",
+            spec
+        )
+    })?;
+
+    match seg_type {
+        "literal" => Ok(SegmentDef::Literal {
+            value: rest.to_string(),
+        }),
+        "variable" => {
+            let parts: Vec<&str> = rest.splitn(3, ':').collect();
+            if parts.len() != 3 {
+                return Err(format!(
+                    "invalid segment spec \"{}\"; expected \"variable:<charset>:<min>:<max>\"",
+                    spec
+                ));
+            }
+            let charset = parts[0].to_string();
+            let min: usize = parts[1]
+                .parse()
+                .map_err(|_| format!("segment {}: min is not a valid number", index))?;
+            let max: usize = parts[2]
+                .parse()
+                .map_err(|_| format!("segment {}: max is not a valid number", index))?;
+            Ok(SegmentDef::Variable { charset, min, max })
+        }
+        _ => Err(format!(
+            "invalid segment spec \"{}\"; expected \"literal:<value>\" or \"variable:<charset>:<min>:<max>\"",
+            spec
+        )),
+    }
+}
+
+fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use its_classified::PatternsFile;
+
+    let file_data = read_patterns_file(patterns_path)?;
+    let pf = PatternsFile::deserialize(&file_data)
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    println!("Tier 1 patterns:");
+    if pf.tier1.is_empty() {
+        println!("  (none)");
+    } else {
+        let max_id_len = pf
+            .tier1
+            .iter()
+            .map(|e| e.identifier.len())
+            .max()
+            .unwrap_or(0);
+        let col_width = max_id_len.max(10).min(40);
+        for entry in &pf.tier1 {
+            let desc = format_tier1_segments(entry);
+            println!("  {:width$}  {}", entry.identifier, desc, width = col_width);
+        }
+    }
+
+    println!();
+    println!("Tier 2 secrets:");
+    if pf.tier2.is_empty() {
+        println!("  (none)");
+    } else {
+        for entry in &pf.tier2 {
+            let label_str = entry.label.as_deref().unwrap_or("(unlabeled)");
+            let charset_desc = format_charset_summary(&entry.charset);
+            println!(
+                "  {}  length={}  charset={}",
+                label_str, entry.exact_length, charset_desc
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn format_tier1_segments(entry: &its_classified::Tier1Entry) -> String {
+    match &entry.segments {
+        Some(defs) => defs
+            .iter()
+            .map(|d| match d {
+                its_classified::segment::SegmentDef::Literal { value } => {
+                    format!("\"{}\"", value)
+                }
+                its_classified::segment::SegmentDef::Variable { charset, min, max } => {
+                    if min == max {
+                        format!("<{} {}>", min, charset)
+                    } else {
+                        format!("<{}-{} {}>", min, max, charset)
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        None => "(built-in, segments not in file)".to_string(),
+    }
+}
+
+fn format_charset_summary(charset: &Option<Vec<u8>>) -> String {
+    match charset {
+        None => "wide".to_string(),
+        Some(cs) => format!("custom ({} chars)", cs.len()),
+    }
+}
+
+fn run_inspect(
+    patterns_path: &Path,
+    identifier: Option<&str>,
+    label: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use its_classified::PatternsFile;
+
+    let file_data = read_patterns_file(patterns_path)?;
+    let pf = PatternsFile::deserialize(&file_data)
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    if let Some(id) = identifier {
+        let entry = pf
+            .tier1
+            .iter()
+            .find(|e| e.identifier == id)
+            .ok_or_else(|| format!("no Tier 1 pattern with identifier \"{}\"", id))?;
+
+        let is_builtin = its_classified::PatternsFile::is_builtin_identifier(id);
+        let type_str = if is_builtin {
+            "built-in"
+        } else {
+            "user-defined"
+        };
+        let salt_fingerprint = hex_encode(&entry.salt[..4]);
+
+        println!("Tier 1 pattern: {}", id);
+        println!("  Type: {}", type_str);
+        println!("  Salt: {}...", salt_fingerprint);
+        println!("  Segments:");
+
+        match &entry.segments {
+            Some(defs) => {
+                for (i, d) in defs.iter().enumerate() {
+                    match d {
+                        its_classified::segment::SegmentDef::Literal { value } => {
+                            println!("    {}. literal \"{}\"", i + 1, value);
+                        }
+                        its_classified::segment::SegmentDef::Variable { charset, min, max } => {
+                            println!(
+                                "    {}. variable charset={} min={} max={}",
+                                i + 1,
+                                charset,
+                                min,
+                                max
+                            );
+                        }
+                    }
+                }
+            }
+            None => {
+                println!("    (compiled-in; not stored in file)");
+            }
+        }
+    } else if let Some(lbl) = label {
+        let entry = pf
+            .tier2
+            .iter()
+            .find(|e| e.label.as_deref() == Some(lbl))
+            .ok_or_else(|| format!("no Tier 2 secret with label \"{}\"", lbl))?;
+
+        let variable = entry.exact_length - entry.preserve_prefix - entry.preserve_suffix;
+        let charset_desc = format_charset_summary(&entry.charset);
+        let salt_fingerprint = hex_encode(&entry.hmac_salt[..4]);
+
+        println!("Tier 2 secret: {}", lbl);
+        println!("  Length: {} bytes", entry.exact_length);
+        println!("  Preserve prefix: {} bytes", entry.preserve_prefix);
+        println!("  Preserve suffix: {} bytes", entry.preserve_suffix);
+        println!("  Variable portion: {} bytes", variable);
+        println!("  Charset: {}", charset_desc);
+        println!("  Salt: {}...", salt_fingerprint);
+    } else {
+        return Err("specify --identifier or --label".into());
+    }
+
+    Ok(())
+}
+
+fn run_remove(
+    patterns_path: &Path,
+    identifier: Option<&str>,
+    label: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use its_classified::PatternsFile;
+
+    let file_data = read_patterns_file(patterns_path)?;
+    let mut pf = PatternsFile::deserialize(&file_data)
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    if let Some(id) = identifier {
+        let pos = pf
+            .tier1
+            .iter()
+            .position(|e| e.identifier == id)
+            .ok_or_else(|| {
+                format!(
+                    "no Tier 1 pattern with identifier \"{}\" in {}",
+                    id,
+                    patterns_path.display()
+                )
+            })?;
+
+        if PatternsFile::is_builtin_identifier(id) {
+            eprintln!(
+                "warning: removing built-in Tier 1 pattern \"{}\"; scrub will no longer detect this secret class",
+                id
+            );
+        }
+
+        pf.tier1.remove(pos);
+
+        let data = pf.serialize()?;
+        write_patterns_file(patterns_path, &data, false)?;
+
+        eprintln!("removed Tier 1 pattern: {}", id);
+    } else if let Some(lbl) = label {
+        let pos = pf
+            .tier2
+            .iter()
+            .position(|e| e.label.as_deref() == Some(lbl))
+            .ok_or_else(|| {
+                format!(
+                    "no Tier 2 secret with label \"{}\" in {}",
+                    lbl,
+                    patterns_path.display()
+                )
+            })?;
+
+        pf.tier2.remove(pos);
+
+        let data = pf.serialize()?;
+        write_patterns_file(patterns_path, &data, false)?;
+
+        eprintln!("removed Tier 2 secret: {}", lbl);
+    } else {
+        return Err("specify --identifier or --label".into());
+    }
 
     Ok(())
 }
@@ -328,15 +692,33 @@ fn main() {
         Commands::Init { patterns, force } => run_init(&patterns, force),
         Commands::Register {
             patterns,
+            label,
             preserve_prefix,
             preserve_suffix,
             restrict_charset,
         } => run_register(
             &patterns,
+            &label,
             preserve_prefix,
             preserve_suffix,
             restrict_charset,
         ),
+        Commands::Define {
+            patterns,
+            identifier,
+            segment,
+        } => run_define(&patterns, &identifier, &segment),
+        Commands::List { patterns } => run_list(&patterns),
+        Commands::Inspect {
+            patterns,
+            identifier,
+            label,
+        } => run_inspect(&patterns, identifier.as_deref(), label.as_deref()),
+        Commands::Remove {
+            patterns,
+            identifier,
+            label,
+        } => run_remove(&patterns, identifier.as_deref(), label.as_deref()),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
