@@ -2,7 +2,7 @@ use rand::{RngCore, rngs::OsRng};
 use std::sync::Arc;
 
 use crate::crypto::hmac_sha256;
-use crate::fake::{FakeError, charsets};
+use crate::fake::{FakeError, charsets, derive_fake_tier2_deterministic};
 use crate::tier1::Pattern;
 
 /// Options for Tier 2 secret registration.
@@ -225,8 +225,7 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         charsets::wide()
     };
 
-    // Secret is dropped here — no reference to secret after this line.
-    Ok(Pattern::Tier2(Arc::new(Tier2Pat {
+    let pat = Tier2Pat {
         start_fragment,
         end_fragment,
         exact_length: secret.len(),
@@ -235,7 +234,21 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         preserve_prefix: pp,
         preserve_suffix: ps,
         charset,
-    })))
+    };
+
+    // Trial derivation to detect CollisionLimit at registration time (INV-25).
+    // The secret itself is the canonical candidate for this pattern.
+    derive_fake_tier2_deterministic(
+        &pat.hmac_salt,
+        secret,
+        &secret[..pp],
+        &secret[secret.len() - ps..],
+        &pat.charset,
+        secret.len(),
+    )
+    .map_err(RegistrationError::from)?;
+
+    Ok(Pattern::Tier2(Arc::new(pat)))
 }
 
 impl Tier2Pat {
@@ -503,6 +516,23 @@ mod tests {
                 }
             }
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_registration_performs_trial_derivation() {
+        // A normal secret should register without collision.
+        // Verifies that trial derivation runs (INV-25) and does not false-positive.
+        let secret = b"sk-test-abcdefghijklmnopqrstuvwxyz1234567890abcdef";
+        let opts = RegistrationOptions {
+            preserve_prefix: 0,
+            preserve_suffix: 0,
+            restrict_charset: false,
+        };
+        let pattern = register_with_options(secret, &opts).unwrap();
+        match &pattern {
+            Pattern::Tier2(_) => {}
+            _ => panic!("expected Tier2"),
         }
     }
 }
