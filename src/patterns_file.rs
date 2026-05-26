@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::serde_helpers::{base64_32, base64_vec, base64_vec_option};
+use crate::segment::SegmentDef;
+use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
 use crate::tier1::{self, Pattern, Tier1Def};
 use crate::tier2::Tier2Pat;
 
@@ -11,35 +12,40 @@ use crate::tier2::Tier2Pat;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatternsFile {
     pub version: u64,
-    pub tier1: HashMap<String, Tier1Entry>,
+    pub tier1: Vec<Tier1Entry>,
     pub tier2: Vec<Tier2Entry>,
 }
 
 /// A Tier 1 entry: just the salt (all other fields are compiled in).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tier1Entry {
-    #[serde(with = "base64_32")]
+    pub identifier: String,
+    #[serde(with = "hex_32")]
     pub salt: [u8; 32],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<SegmentDef>>,
 }
 
 /// A Tier 2 entry: detection fingerprint + derivation parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tier2Entry {
-    #[serde(with = "base64_vec")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(with = "hex_vec")]
     pub start_fragment: Vec<u8>,
-    #[serde(with = "base64_vec")]
+    #[serde(with = "hex_vec")]
     pub end_fragment: Vec<u8>,
     pub exact_length: usize,
-    #[serde(with = "base64_32")]
+    #[serde(with = "hex_32")]
     pub hmac_salt: [u8; 32],
-    #[serde(with = "base64_32")]
+    #[serde(with = "hex_32")]
     pub hmac_digest: [u8; 32],
     pub preserve_prefix: usize,
     pub preserve_suffix: usize,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "base64_vec_option"
+        with = "hex_vec_option"
     )]
     pub charset: Option<Vec<u8>>,
 }
@@ -66,8 +72,8 @@ impl PatternsFile {
     /// Create an empty patterns file (version 1, no entries).
     pub fn new() -> Self {
         Self {
-            version: 1,
-            tier1: HashMap::new(),
+            version: 2,
+            tier1: Vec::new(),
             tier2: Vec::new(),
         }
     }
@@ -185,6 +191,7 @@ impl PatternsFile {
                 };
 
                 self.tier2.push(Tier2Entry {
+                    label: None,
                     start_fragment: p.start_fragment.clone(),
                     end_fragment: p.end_fragment.clone(),
                     exact_length: p.exact_length,
