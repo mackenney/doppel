@@ -1,16 +1,16 @@
 use crate::fake::charsets;
-use crate::segment::{MatchCapture, BuiltinSegment};
+use crate::segment::{BuiltinSegment, MatchCapture, Segment};
 use crate::tier2::Tier2Pat;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 /// Structural definition of a Tier 1 built-in secret class.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Tier1Def {
     /// Stable string identifier for this class, used as the key in patterns files.
-    pub(crate) identifier: &'static str,
+    pub(crate) identifier: String,
     /// Ordered sequence of structural segments for this secret class.
     /// See SPEC.md §Tier 1.
-    pub(crate) segments: &'static [BuiltinSegment],
+    pub(crate) segments: Arc<[Segment]>,
     /// Derivation salt for fake generation. Zero in static template definitions;
     /// set to a real (random or loaded) value when constructing a Pattern.
     pub(crate) salt: [u8; 32],
@@ -26,7 +26,7 @@ impl Tier1Def {
     /// `T3BlbkFJ` that are themselves valid Variable-charset bytes.
     pub(crate) fn try_match(&self, payload: &[u8], pos: usize) -> Option<MatchCapture> {
         let mut variable_lengths = Vec::new();
-        let end = match_segments(payload, pos, self.segments, &mut variable_lengths)?;
+        let end = match_segments(payload, pos, &self.segments, &mut variable_lengths)?;
         Some(MatchCapture {
             end,
             variable_lengths,
@@ -40,23 +40,23 @@ impl Tier1Def {
 fn match_segments(
     payload: &[u8],
     cur: usize,
-    segs: &[BuiltinSegment],
+    segs: &[Segment],
     var_lens: &mut Vec<usize>,
 ) -> Option<usize> {
     if segs.is_empty() {
         return Some(cur);
     }
     match &segs[0] {
-        BuiltinSegment::Literal(bytes) => {
+        Segment::Literal(bytes) => {
             let end = cur + bytes.len();
-            if payload.get(cur..end)? == *bytes {
+            if payload.get(cur..end)? == bytes.as_slice() {
                 match_segments(payload, end, &segs[1..], var_lens)
             } else {
                 None
             }
         }
-        BuiltinSegment::Variable { charset, min, max } => {
-            let cs = charset();
+        Segment::Variable { charset, min, max } => {
+            let cs = charset.resolve();
             // Try lengths from max down to min (longest-first, INV-18).
             for var_len in (*min..=*max).rev() {
                 let end = cur + var_len;
@@ -90,13 +90,17 @@ const ANTHROPIC_SEGS: [BuiltinSegment; 3] = [
     },
     BuiltinSegment::Literal(b"AA"),
 ];
-pub(crate) static ANTHROPIC_DEF: Tier1Def = Tier1Def {
-    identifier: "anthropic",
+static ANTHROPIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "anthropic".into(),
     // sk-ant-api03-<93 url_safe_base64>AA = 108 chars total
     // Source: gitleaks `sk-ant-api03-[a-zA-Z0-9_\-]{93}AA`
-    segments: &ANTHROPIC_SEGS,
+    segments: ANTHROPIC_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"sk-"),
@@ -106,12 +110,16 @@ const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
         max: 48,
     },
 ];
-pub(crate) static OPENAI_CLASSIC_DEF: Tier1Def = Tier1Def {
-    identifier: "openai_classic",
+static OPENAI_CLASSIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "openai_classic".into(),
     // sk-<48 alphanumeric> = 51 chars total
-    segments: &OPENAI_CLASSIC_SEGS,
+    segments: OPENAI_CLASSIC_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
     BuiltinSegment::Literal(b"sk-proj-"),
@@ -127,16 +135,20 @@ const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
         max: 74,
     },
 ];
-pub(crate) static OPENAI_PROJECT_DEF: Tier1Def = Tier1Def {
-    identifier: "openai_project",
+static OPENAI_PROJECT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "openai_project".into(),
     // sk-proj-<58|74 url_safe_b64>T3BlbkFJ<58|74 url_safe_b64> = 132 or 164 chars total.
     // The pre-Aug-2024 56-char format (sk-proj-<48 url_safe_b64>, no T3BlbkFJ) is intentionally
     // not detected: those keys are ~2 years old and structurally indistinguishable from noise
     // without the embedded marker. Best-effort coverage per SPEC.md §Known Limitations.
     // Source: gitleaks openai-api-key rule + OpenAI community reports.
-    segments: &OPENAI_PROJECT_SEGS,
+    segments: OPENAI_PROJECT_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"AKIA"),
@@ -146,12 +158,16 @@ const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
         max: 16,
     },
 ];
-pub(crate) static AWS_AKIA_DEF: Tier1Def = Tier1Def {
-    identifier: "aws_akia",
+static AWS_AKIA_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "aws_akia".into(),
     // AKIA<16 uppercase_alphanumeric> = 20 chars total
-    segments: &AWS_AKIA_SEGS,
+    segments: AWS_AKIA_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"ASIA"),
@@ -161,12 +177,16 @@ const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
         max: 16,
     },
 ];
-pub(crate) static AWS_ASIA_DEF: Tier1Def = Tier1Def {
-    identifier: "aws_asia",
+static AWS_ASIA_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "aws_asia".into(),
     // ASIA<16 uppercase_alphanumeric> = 20 chars total
-    segments: &AWS_ASIA_SEGS,
+    segments: AWS_ASIA_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"ghp_"),
@@ -176,12 +196,16 @@ const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
         max: 36,
     },
 ];
-pub(crate) static GITHUB_CLASSIC_DEF: Tier1Def = Tier1Def {
-    identifier: "github_classic",
+static GITHUB_CLASSIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "github_classic".into(),
     // ghp_<36 alphanumeric> = 40 chars total
-    segments: &GITHUB_CLASSIC_SEGS,
+    segments: GITHUB_CLASSIC_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
     BuiltinSegment::Literal(b"github_pat_"),
@@ -197,13 +221,17 @@ const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
         max: 59,
     },
 ];
-pub(crate) static GITHUB_FG_DEF: Tier1Def = Tier1Def {
-    identifier: "github_fine_grained",
+static GITHUB_FG_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "github_fine_grained".into(),
     // github_pat_<22 alnum>_<59 alnum> = 93 chars total
     // Source: gitleaks `github_pat_\w{82}` (82 = 22 + 1 separator + 59)
-    segments: &GITHUB_FG_SEGS,
+    segments: GITHUB_FG_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const GCP_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"AIza"),
@@ -213,12 +241,16 @@ const GCP_SEGS: [BuiltinSegment; 2] = [
         max: 35,
     },
 ];
-pub(crate) static GCP_DEF: Tier1Def = Tier1Def {
-    identifier: "gcp",
+static GCP_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "gcp".into(),
     // AIza<35 url_safe_base64> = 39 chars total
-    segments: &GCP_SEGS,
+    segments: GCP_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"sk-or-v1-"),
@@ -228,13 +260,17 @@ const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
         max: 64,
     },
 ];
-pub(crate) static OPENROUTER_DEF: Tier1Def = Tier1Def {
-    identifier: "openrouter",
+static OPENROUTER_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "openrouter".into(),
     // sk-or-v1-<64 hex_lower> = 73 chars total
     // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}`
-    segments: &OPENROUTER_SEGS,
+    segments: OPENROUTER_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
     BuiltinSegment::Literal(b"sk-svcacct-"),
@@ -250,13 +286,17 @@ const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
         max: 74,
     },
 ];
-pub(crate) static OPENAI_SVCACCT_DEF: Tier1Def = Tier1Def {
-    identifier: "openai_svcacct",
+static OPENAI_SVCACCT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "openai_svcacct".into(),
     // sk-svcacct-<58|74>T3BlbkFJ<58|74> = 135 or 167 chars total
     // Source: gitleaks `sk-(?:proj|svcacct|admin)-...T3BlbkFJ...`
-    segments: &OPENAI_SVCACCT_SEGS,
+    segments: OPENAI_SVCACCT_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"GOCSPX-"),
@@ -266,13 +306,17 @@ const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
         max: 28,
     },
 ];
-pub(crate) static GOOGLE_OAUTH_SECRET_DEF: Tier1Def = Tier1Def {
-    identifier: "google_oauth_secret",
+static GOOGLE_OAUTH_SECRET_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "google_oauth_secret".into(),
     // GOCSPX-<28 url_safe_base64> = 35 chars total
     // Source: secretgate docs "GOCSPX- + 28 chars"
-    segments: &GOOGLE_OAUTH_SEGS,
+    segments: GOOGLE_OAUTH_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
     BuiltinSegment::Literal(b"xoxb-"),
@@ -294,13 +338,17 @@ const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
         max: 24,
     },
 ];
-pub(crate) static SLACK_BOT_DEF: Tier1Def = Tier1Def {
-    identifier: "slack_bot",
+static SLACK_BOT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "slack_bot".into(),
     // xoxb-<10-13 digits>-<10-13 digits>-<24 alnum> = 51-57 chars total
     // Source: gitleaks `xoxb-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*`
-    segments: &SLACK_BOT_SEGS,
+    segments: SLACK_BOT_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
     BuiltinSegment::Literal(b"sk-ant-admin01-"),
@@ -311,13 +359,17 @@ const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
     },
     BuiltinSegment::Literal(b"AA"),
 ];
-pub(crate) static ANTHROPIC_ADMIN01_DEF: Tier1Def = Tier1Def {
-    identifier: "anthropic_admin01",
+static ANTHROPIC_ADMIN01_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "anthropic_admin01".into(),
     // sk-ant-admin01-<93 url_safe_base64>AA = 110 chars total
     // Source: gitleaks `sk-ant-admin01-[a-zA-Z0-9_\-]{93}AA`
-    segments: &ANTHROPIC_ADMIN01_SEGS,
+    segments: ANTHROPIC_ADMIN01_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
     BuiltinSegment::Literal(b"sk-ant-admin03-"),
@@ -328,13 +380,17 @@ const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
     },
     BuiltinSegment::Literal(b"AA"),
 ];
-pub(crate) static ANTHROPIC_ADMIN03_DEF: Tier1Def = Tier1Def {
-    identifier: "anthropic_admin03",
+static ANTHROPIC_ADMIN03_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "anthropic_admin03".into(),
     // sk-ant-admin03-<93 url_safe_base64>AA = 110 chars total
     // Source: Anthropic Terraform provider docs
-    segments: &ANTHROPIC_ADMIN03_SEGS,
+    segments: ANTHROPIC_ADMIN03_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
 const LINEAR_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"lin_api_"),
@@ -344,31 +400,37 @@ const LINEAR_SEGS: [BuiltinSegment; 2] = [
         max: 40,
     },
 ];
-pub(crate) static LINEAR_DEF: Tier1Def = Tier1Def {
-    identifier: "linear",
+static LINEAR_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+    identifier: "linear".into(),
     // lin_api_<40 alphanumeric> = 48 chars total
     // Source: gitleaks `lin_api_(?i)[a-z0-9]{40}`
-    segments: &LINEAR_SEGS,
+    segments: LINEAR_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
     salt: [0u8; 32],
-};
+});
 
-static ALL_TIER1_DEFS: [&Tier1Def; 15] = [
-    &ANTHROPIC_DEF,
-    &ANTHROPIC_ADMIN01_DEF,
-    &ANTHROPIC_ADMIN03_DEF,
-    &OPENAI_CLASSIC_DEF,
-    &OPENAI_PROJECT_DEF,
-    &OPENAI_SVCACCT_DEF,
-    &AWS_AKIA_DEF,
-    &AWS_ASIA_DEF,
-    &GITHUB_CLASSIC_DEF,
-    &GITHUB_FG_DEF,
-    &GCP_DEF,
-    &OPENROUTER_DEF,
-    &GOOGLE_OAUTH_SECRET_DEF,
-    &SLACK_BOT_DEF,
-    &LINEAR_DEF,
-];
+static ALL_TIER1_DEFS: LazyLock<Vec<&'static Tier1Def>> = LazyLock::new(|| {
+    vec![
+        &*ANTHROPIC_DEF,
+        &*ANTHROPIC_ADMIN01_DEF,
+        &*ANTHROPIC_ADMIN03_DEF,
+        &*OPENAI_CLASSIC_DEF,
+        &*OPENAI_PROJECT_DEF,
+        &*OPENAI_SVCACCT_DEF,
+        &*AWS_AKIA_DEF,
+        &*AWS_ASIA_DEF,
+        &*GITHUB_CLASSIC_DEF,
+        &*GITHUB_FG_DEF,
+        &*GCP_DEF,
+        &*OPENROUTER_DEF,
+        &*GOOGLE_OAUTH_SECRET_DEF,
+        &*SLACK_BOT_DEF,
+        &*LINEAR_DEF,
+    ]
+});
 
 /// Returns references to all 15 built-in Tier 1 definitions.
 /// Used by patterns file loading to iterate and inject salts.
@@ -408,105 +470,105 @@ pub mod patterns {
     pub fn anthropic() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..ANTHROPIC_DEF
+            ..ANTHROPIC_DEF.clone()
         })
     }
 
     pub fn anthropic_admin01() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..ANTHROPIC_ADMIN01_DEF
+            ..ANTHROPIC_ADMIN01_DEF.clone()
         })
     }
 
     pub fn anthropic_admin03() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..ANTHROPIC_ADMIN03_DEF
+            ..ANTHROPIC_ADMIN03_DEF.clone()
         })
     }
 
     pub fn openai_classic() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..OPENAI_CLASSIC_DEF
+            ..OPENAI_CLASSIC_DEF.clone()
         })
     }
 
     pub fn openai_project() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..OPENAI_PROJECT_DEF
+            ..OPENAI_PROJECT_DEF.clone()
         })
     }
 
     pub fn openai_svcacct() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..OPENAI_SVCACCT_DEF
+            ..OPENAI_SVCACCT_DEF.clone()
         })
     }
 
     pub fn aws_akia() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..AWS_AKIA_DEF
+            ..AWS_AKIA_DEF.clone()
         })
     }
 
     pub fn aws_asia() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..AWS_ASIA_DEF
+            ..AWS_ASIA_DEF.clone()
         })
     }
 
     pub fn github_classic() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..GITHUB_CLASSIC_DEF
+            ..GITHUB_CLASSIC_DEF.clone()
         })
     }
 
     pub fn github_fine_grained() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..GITHUB_FG_DEF
+            ..GITHUB_FG_DEF.clone()
         })
     }
 
     pub fn gcp() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..GCP_DEF
+            ..GCP_DEF.clone()
         })
     }
 
     pub fn openrouter() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..OPENROUTER_DEF
+            ..OPENROUTER_DEF.clone()
         })
     }
 
     pub fn google_oauth_secret() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..GOOGLE_OAUTH_SECRET_DEF
+            ..GOOGLE_OAUTH_SECRET_DEF.clone()
         })
     }
 
     pub fn slack_bot() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..SLACK_BOT_DEF
+            ..SLACK_BOT_DEF.clone()
         })
     }
 
     pub fn linear() -> Pattern {
         Pattern::Tier1(Tier1Def {
             salt: random_salt(),
-            ..LINEAR_DEF
+            ..LINEAR_DEF.clone()
         })
     }
 
@@ -545,6 +607,7 @@ pub mod patterns {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::segment::Segment;
 
     #[test]
     fn test_tier1_all_classes_present() {
@@ -555,7 +618,7 @@ mod tests {
             .iter()
             .filter_map(|p| match p {
                 Pattern::Tier1(d) => match d.segments.first()? {
-                    BuiltinSegment::Literal(b) => Some(*b),
+                    Segment::Literal(b) => Some(b.as_slice()),
                     _ => None,
                 },
                 _ => None,
@@ -679,7 +742,7 @@ mod tests {
     fn test_all_defs_identifiers_unique() {
         let defs = all_defs();
         assert_eq!(defs.len(), 15, "must have 15 built-in Tier 1 defs");
-        let mut ids: Vec<&str> = defs.iter().map(|d| d.identifier).collect();
+        let mut ids: Vec<&str> = defs.iter().map(|d| d.identifier.as_str()).collect();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 15, "all identifiers must be unique");

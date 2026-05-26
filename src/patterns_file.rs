@@ -137,15 +137,15 @@ impl PatternsFile {
         let mut patterns = Vec::new();
 
         for def in tier1::all_defs() {
-            let entry = self.tier1.get(def.identifier).ok_or_else(|| {
+            let entry = self.tier1.get(def.identifier.as_str()).ok_or_else(|| {
                 PatternsFileError::MissingTier1Class {
-                    class: def.identifier.to_string(),
+                    class: def.identifier.clone(),
                 }
             })?;
 
             patterns.push(Pattern::Tier1(Tier1Def {
                 salt: entry.salt,
-                ..**def
+                ..(*def).clone()
             }));
         }
 

@@ -1,4 +1,4 @@
-use crate::segment::BuiltinSegment;
+use crate::segment::Segment;
 use hmac::{Hmac, Mac};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use sha2::Sha256;
@@ -168,7 +168,7 @@ pub(crate) fn derive_fake_tier2_deterministic(
 /// same fake (INV-13). Resamples if fake == original (INV-15).
 pub(crate) fn derive_fake_tier1_segments(
     salt: &[u8; 32],
-    segments: &[BuiltinSegment],
+    segments: &[Segment],
     variable_lengths: &[usize],
     original: &[u8],
 ) -> Result<Vec<u8>, FakeError> {
@@ -181,7 +181,7 @@ pub(crate) fn derive_fake_tier1_segments(
         variable_lengths.len(),
         segments
             .iter()
-            .filter(|s| matches!(s, BuiltinSegment::Variable { .. }))
+            .filter(|s| matches!(s, Segment::Variable { .. }))
             .count(),
         "variable_lengths.len() must equal number of Variable segments"
     );
@@ -191,8 +191,8 @@ pub(crate) fn derive_fake_tier1_segments(
         let mut len = 0usize;
         for seg in segments {
             match seg {
-                BuiltinSegment::Literal(bytes) => len += bytes.len(),
-                BuiltinSegment::Variable { .. } => {
+                Segment::Literal(bytes) => len += bytes.len(),
+                Segment::Variable { .. } => {
                     len += variable_lengths[var_idx];
                     var_idx += 1;
                 }
@@ -216,9 +216,9 @@ pub(crate) fn derive_fake_tier1_segments(
 
         for seg in segments {
             match seg {
-                BuiltinSegment::Literal(bytes) => fake.extend_from_slice(bytes),
-                BuiltinSegment::Variable { charset, .. } => {
-                    let cs = charset();
+                Segment::Literal(bytes) => fake.extend_from_slice(bytes),
+                Segment::Variable { charset, .. } => {
+                    let cs = charset.resolve();
                     let var_len = variable_lengths[var_idx];
                     var_idx += 1;
                     let cs_len = cs.len() as u32;
@@ -246,10 +246,10 @@ pub(crate) fn derive_fake_tier1_segments(
     })
 }
 
-fn any_charset_is_empty(segments: &[BuiltinSegment]) -> bool {
+fn any_charset_is_empty(segments: &[Segment]) -> bool {
     segments.iter().any(|seg| {
-        if let BuiltinSegment::Variable { charset, .. } = seg {
-            charset().is_empty()
+        if let Segment::Variable { charset, .. } = seg {
+            charset.resolve().is_empty()
         } else {
             false
         }
@@ -259,6 +259,7 @@ fn any_charset_is_empty(segments: &[BuiltinSegment]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::segment::{CharsetName, Segment};
 
     #[test]
     fn test_hmac_verify_correct() {
@@ -296,13 +297,13 @@ mod tests {
     fn test_derive_fake_tier1_segments_stability() {
         let salt = [42u8; 32];
         let segs = [
-            BuiltinSegment::Literal(b"sk-ant-api03-"),
-            BuiltinSegment::Variable {
-                charset: charsets::url_safe_base64,
+            Segment::Literal(b"sk-ant-api03-".to_vec()),
+            Segment::Variable {
+                charset: CharsetName::UrlSafeBase64,
                 min: 93,
                 max: 93,
             },
-            BuiltinSegment::Literal(b"AA"),
+            Segment::Literal(b"AA".to_vec()),
         ];
         let var_lens = [93usize];
         let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -315,13 +316,13 @@ mod tests {
     fn test_derive_fake_tier1_segments_literal_reproduced() {
         let salt = [1u8; 32];
         let segs = [
-            BuiltinSegment::Literal(b"sk-ant-api03-"),
-            BuiltinSegment::Variable {
-                charset: charsets::url_safe_base64,
+            Segment::Literal(b"sk-ant-api03-".to_vec()),
+            Segment::Variable {
+                charset: CharsetName::UrlSafeBase64,
                 min: 93,
                 max: 93,
             },
-            BuiltinSegment::Literal(b"AA"),
+            Segment::Literal(b"AA".to_vec()),
         ];
         let var_lens = [93usize];
         let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -339,21 +340,21 @@ mod tests {
     fn test_derive_fake_tier1_segments_variable_bytes_in_charset() {
         let salt = [2u8; 32];
         let segs = [
-            BuiltinSegment::Literal(b"xoxb-"),
-            BuiltinSegment::Variable {
-                charset: charsets::digits,
+            Segment::Literal(b"xoxb-".to_vec()),
+            Segment::Variable {
+                charset: CharsetName::Digits,
                 min: 10,
                 max: 13,
             },
-            BuiltinSegment::Literal(b"-"),
-            BuiltinSegment::Variable {
-                charset: charsets::digits,
+            Segment::Literal(b"-".to_vec()),
+            Segment::Variable {
+                charset: CharsetName::Digits,
                 min: 10,
                 max: 13,
             },
-            BuiltinSegment::Literal(b"-"),
-            BuiltinSegment::Variable {
-                charset: charsets::alphanumeric,
+            Segment::Literal(b"-".to_vec()),
+            Segment::Variable {
+                charset: CharsetName::Alphanumeric,
                 min: 24,
                 max: 24,
             },
