@@ -52,3 +52,52 @@ Execute the initial-implementation plan (11 steps, 7 waves).
 - Integration: 13/13 ✅
 - E2E (feature-gated): 5/5 ✅
 - Total: 70 tests, all pass
+
+---
+
+# Exploit Tier-2 Leakage — Step 01
+
+## Task
+Passive start fragment extraction PoC (step-01-passive-extraction.md).
+
+## Status
+✅ Complete — commit `c90ffcf`
+
+## What was done
+- Read `src/tier2.rs`, `src/fake.rs`, `src/types.rs` to understand start_fragment embedding
+- Created `src/bin/gen_exploit_fixture.rs` — Rust binary that registers a 22-byte secret,
+  runs `scrub()`, and serializes entries JSON to stdout
+- Created `artifacts/exploit-tier2/extract_fragments.py` — PoC extractor (JSON + base64 only)
+- Created `artifacts/exploit-tier2/verify_extraction.py` — verification harness
+- Generated `artifacts/exploit-tier2/sample_entries.json` with 2 entries
+- Ran both Python scripts; all checks passed
+
+## Key finding
+- `fake[:8]` == `secret[:8]` confirmed for 22-byte secret (library-generated entry)
+- 100% recovery confirmed for 6-byte secret (synthetic entry; library panics for ≤ 8-byte
+  secrets because `payload_len = 0` makes fake always equal original)
+- Additional finding: the panic for short secrets is itself an implementation gap
+
+---
+
+# Exploit Tier-2 Leakage — Step 03
+
+## Task
+Charset inference from fake suffix (step-03-charset-inference.md).
+
+## Status
+✅ Complete — commit pending
+
+## What was done
+- Created `src/bin/gen_exploit_fixture_extended.rs` — registers 3 secrets of known
+  charset types (custom, hex_lower, alphanumeric) and serializes entries JSON to stdout
+- Generated `artifacts/exploit-tier2/sample_entries_extended.json` (3 entries)
+- Created `artifacts/exploit-tier2/charset_inference.py` — PoC charset inference script
+- Ran inference on both fixtures; hex_lower entry shows 16^8 = 4,294,967,296 ✓
+- Wrote `artifacts/exploit-tier2/charset_inference_results.md` with findings
+- All 68 tests pass
+
+## Key finding
+- `fake[8:]` leaks the secret's charset via subset matching against known patterns
+- hex_lower secrets: brute-force reduced from ~2^52 (printable) to 2^32 (20 bits)
+- Limitation: random sampling may miss charset bytes → occasional misclassification
