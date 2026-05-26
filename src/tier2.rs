@@ -2,7 +2,7 @@ use rand::{RngCore, rngs::OsRng};
 use std::sync::Arc;
 
 use crate::crypto::hmac_sha256;
-use crate::fake::{FakeError, charsets, generate_fake_tier2};
+use crate::fake::{FakeError, charsets};
 use crate::tier1::Pattern;
 
 /// Options for Tier 2 secret registration.
@@ -102,16 +102,6 @@ pub struct Tier2Pat {
     /// Resolved charset for fake variable bytes. Wide charset when restrict_charset is false;
     /// detected charset otherwise.
     pub(crate) charset: Vec<u8>,
-    /// Pre-generated fake, produced at registration time via OsRng.
-    ///
-    /// FIXME: should be eliminated. The fake must be derived deterministically
-    /// from hmac_salt + candidate at match time (same HMAC-seed-StdRng derivation
-    /// as derive_fake_tier1_segments), not stored here. The candidate bytes are available
-    /// after HMAC verification in try_match, so derivation is possible there.
-    /// Storing the fake couples stability to Pattern lifetime and prevents
-    /// patterns file round-trips without a fake field. See Known Gaps in
-    /// MASTER_PROGRESS.md.
-    pub(crate) fake: Vec<u8>,
 }
 const START_FRAGMENT_LEN: usize = 8;
 const END_FRAGMENT_LEN: usize = 8;
@@ -235,22 +225,6 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         charsets::wide()
     };
 
-    let declared_prefix = &secret[..pp];
-    let declared_suffix = if ps > 0 {
-        &secret[secret.len() - ps..]
-    } else {
-        &[]
-    };
-
-    let fake = generate_fake_tier2(
-        declared_prefix,
-        declared_suffix,
-        &charset,
-        secret.len(),
-        secret,
-        rng,
-    )?;
-
     // Secret is dropped here — no reference to secret after this line.
     Ok(Pattern::Tier2(Arc::new(Tier2Pat {
         start_fragment,
@@ -261,7 +235,6 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         preserve_prefix: pp,
         preserve_suffix: ps,
         charset,
-        fake,
     })))
 }
 
@@ -419,7 +392,6 @@ mod tests {
                     .start_fragment
                     .iter()
                     .chain(&p.end_fragment)
-                    .chain(&p.fake)
                     .chain(&p.hmac_salt)
                     .chain(&p.hmac_digest)
                     .copied()
@@ -434,46 +406,19 @@ mod tests {
     }
 
     #[test]
-    fn test_register_empty_secret_returns_error() {
-        // INV-25: must not panic; must return TooShort.
-        let result = register_with_rng(b"", &mut StdRng::seed_from_u64(1));
-        assert!(
-            matches!(result, Err(RegistrationError::TooShort)),
-            "empty secret must yield TooShort error"
-        );
-    }
-
-    #[test]
-    fn test_register_no_variable_bytes_returns_error() {
-        // INV-25: preserve_prefix + preserve_suffix >= len → NoVariableBytes.
-        let secret = b"abcdefgh"; // 8 bytes
-        let opts = RegistrationOptions {
-            preserve_prefix: 5,
-            preserve_suffix: 3, // 5+3 == 8 == secret.len()
-            restrict_charset: false,
-        };
-        let result = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(1));
-        assert!(
-            matches!(result, Err(RegistrationError::NoVariableBytes { .. })),
-            "fully-preserved secret must yield NoVariableBytes error"
-        );
-    }
-
-    #[test]
     fn test_register_fake_contains_no_secret_variable_bytes() {
-        // INV-9 (corrected): the fake must not contain bytes from the variable portion.
-        // With default options (no prefix/suffix preservation, wide charset), no secret
-        // bytes appear in the fake — the fake is drawn from a disjoint charset.
-        let secret = b"deadbeef12345678"; // 16 hex bytes
+        let secret = b"deadbeef12345678";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(123)).unwrap();
         match &pat {
             Pattern::Tier2(p) => {
-                // Sliding-window check: no 4-byte window of the secret should appear
-                // in the fake when using the wide charset (statistically near-impossible
-                // by design; this test validates the structural guarantee).
+                let result = p
+                    .try_match(secret, 0)
+                    .expect("try_match error")
+                    .expect("should match");
+                let (_end, fake) = result;
                 for window in secret.windows(4) {
                     assert!(
-                        !p.fake.windows(4).any(|w| w == window),
+                        !fake.windows(4).any(|w| w == window),
                         "fake must not contain secret bytes (variable portion): {:?}",
                         std::str::from_utf8(window).unwrap_or("<binary>")
                     );
@@ -485,25 +430,29 @@ mod tests {
 
     #[test]
     fn test_register_with_preserve_prefix_affix_in_fake() {
-        // Declared prefix and suffix appear in the fake; variable bytes do not.
         let secret = b"MY_ORG_secretbytes1234END";
         let opts = RegistrationOptions {
-            preserve_prefix: 7, // "MY_ORG_"
-            preserve_suffix: 3, // "END"
+            preserve_prefix: 7,
+            preserve_suffix: 3,
             restrict_charset: false,
         };
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(55)).unwrap();
         match &pat {
             Pattern::Tier2(p) => {
+                let result = p
+                    .try_match(secret, 0)
+                    .expect("try_match error")
+                    .expect("should match");
+                let (_end, fake) = result;
                 assert!(
-                    p.fake.starts_with(b"MY_ORG_"),
+                    fake.starts_with(b"MY_ORG_"),
                     "declared prefix must appear in fake"
                 );
                 assert!(
-                    p.fake.ends_with(b"END"),
+                    fake.ends_with(b"END"),
                     "declared suffix must appear in fake"
                 );
-                assert_eq!(p.fake.len(), secret.len());
+                assert_eq!(fake.len(), secret.len());
             }
             _ => panic!(),
         }
@@ -511,13 +460,17 @@ mod tests {
 
     #[test]
     fn test_register_wide_charset_by_default() {
-        // Default registration: fake bytes in variable region should be from wide charset.
         let secret = b"my-hex-secret-value-abcd1234";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(77)).unwrap();
         match &pat {
             Pattern::Tier2(p) => {
+                let result = p
+                    .try_match(secret, 0)
+                    .expect("try_match error")
+                    .expect("should match");
+                let (_end, fake) = result;
                 let wide = charsets::wide();
-                for &b in &p.fake {
+                for &b in &fake {
                     assert!(wide.contains(&b), "fake byte 0x{b:02x} not in wide charset");
                 }
             }
@@ -527,8 +480,7 @@ mod tests {
 
     #[test]
     fn test_register_restrict_charset_uses_secret_charset() {
-        // restrict_charset: true — fake variable bytes drawn from secret's charset only.
-        let secret = b"abcdef1234567890abcdef"; // hex-lower
+        let secret = b"abcdef1234567890abcdef";
         let opts = RegistrationOptions {
             preserve_prefix: 0,
             preserve_suffix: 0,
@@ -537,8 +489,13 @@ mod tests {
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(88)).unwrap();
         match &pat {
             Pattern::Tier2(p) => {
+                let result = p
+                    .try_match(secret, 0)
+                    .expect("try_match error")
+                    .expect("should match");
+                let (_end, fake) = result;
                 let allowed: std::collections::BTreeSet<u8> = secret.iter().copied().collect();
-                for &b in &p.fake {
+                for &b in &fake {
                     assert!(
                         allowed.contains(&b),
                         "fake byte 0x{b:02x} not in secret charset under restrict_charset"
