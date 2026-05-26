@@ -3,6 +3,12 @@ name = "its-classified"
 version = "0.1.0"
 edition = "2024"
 
+[profile.dev]
+debug = 2
+
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 [[bin]]
 name = "its-classified"
 path = "src/main.rs"
