@@ -440,6 +440,51 @@ fn test_inv21_cli_scrub_key_file_mode_0600() {
 }
 
 #[test]
+fn test_inv21_key_file_refuses_pre_existing_path() {
+    // INV-21: create_new (O_EXCL) MUST cause scrub to fail rather than write the
+    // session key into a pre-existing inode whose permissions the attacker controls.
+    #[cfg(unix)]
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entries_path = dir.path().join("entries.json");
+        let key_path = dir.path().join("key.txt");
+
+        // Attacker pre-creates the file with world-readable permissions.
+        std::fs::write(&key_path, b"").expect("pre-create");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644))
+                .expect("chmod");
+        }
+
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
+            .args([
+                "scrub",
+                "--entries",
+                entries_path.to_str().unwrap(),
+                "--key-out",
+                key_path.to_str().unwrap(),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write;
+                c.stdin.as_mut().unwrap().write_all(b"no secrets")?;
+                c.wait()
+            })
+            .expect("failed to run scrub");
+
+        assert!(
+            !status.success(),
+            "INV-21: scrub MUST fail when --key-out path already exists (O_EXCL prevents mode race)"
+        );
+    }
+}
+
+#[test]
 fn test_inv22_all_tier1_built_in_classes_present() {
     // INV-22: built-in Tier 1 MUST cover Anthropic, OpenAI, AWS IAM, GitHub PAT (classic
     //         and fine-grained), and GCP API keys.

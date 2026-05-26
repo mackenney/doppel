@@ -61,9 +61,8 @@ fn write_key_file(path: &Path, key_bytes: &[u8; 32]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600) // INV-21: MUST be 0600
+            .create_new(true) // INV-21: O_EXCL ensures mode applies to a fresh inode
+            .mode(0o600)
             .open(path)?;
         file.write_all(hex_key.as_bytes())?;
         file.write_all(b"\n")?;
