@@ -95,8 +95,15 @@ pub struct Tier2Pat {
     pub(crate) hmac_salt: [u8; 32],
     /// HMAC-SHA256(hmac_salt, original_secret) — confirmation token.
     pub(crate) hmac_digest: [u8; 32],
-    /// Pre-generated fake, produced at registration time.
-    /// Returned on all subsequent detections of this secret (INV-13 for Tier 2).
+    /// Pre-generated fake, produced at registration time via OsRng.
+    ///
+    /// FIXME: should be eliminated. The fake must be derived deterministically
+    /// from hmac_salt + candidate at match time (same HMAC-seed-StdRng derivation
+    /// as derive_fake_tier1), not stored here. The candidate bytes are available
+    /// after HMAC verification in try_match, so derivation is possible there.
+    /// Storing the fake couples stability to Pattern lifetime and prevents
+    /// patterns file round-trips without a fake field. See Known Gaps in
+    /// MASTER_PROGRESS.md.
     pub(crate) fake: Vec<u8>,
 }
 
