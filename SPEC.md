@@ -25,7 +25,7 @@ The library's surface area is defined by three operations and three data abstrac
 
 **`scrub`** receives a complete payload and a set of Patterns. It scans for secrets left-to-right, replaces each detected secret with the fake prescribed by the matching Pattern, and returns three things: the scrubbed payload, a set of substitution **entries**, and a **session key**. `scrub` MUST NOT modify bytes outside the detected secrets. `scrub` accepts a single complete payload buffer; streaming input is not part of the API.
 
-**Entries** are the set of substitution records produced by one `scrub` call — one record per distinct secret detected. Each entry holds the fake bytes and the ciphertext of the original secret, encrypted under the session key. Entries are not sensitive on their own: without the session key, the ciphertext is opaque. An observer who sees the entries learns nothing about the secret payload — the bytes after the prefix that constitute the credential value. The prefix, length, and character class are visible in the fake by design, since this is what enables the model to reason about the secret's format.
+**Entries** are the set of substitution records produced by one `scrub` call — one record per distinct secret detected. Each entry holds the fake bytes and the ciphertext of the original secret, encrypted under the session key. Entries are not confidentiality-sensitive on their own: without the session key, the ciphertext is opaque. An observer who sees the entries learns nothing about the secret payload — the bytes after the prefix that constitute the credential value. The prefix, length, and character class are visible in the fake by design, since this is what enables the model to reason about the secret's format.
 
 **Session key** is a 32-byte random value generated fresh at `scrub` time. It is the sole decryption gate for the entries produced in that call. The session key is sensitive and ephemeral: it exists in process memory for one request/response cycle only, MUST NOT be written to disk, and MUST NOT appear in logs or any serialized form. Entries and session key are explicitly separate values with separate sensitivity levels and separate lifetimes.
 
@@ -69,7 +69,9 @@ The Pattern produced by registration is an opaque value the caller receives and 
 
 ## Security Properties
 
-**Entries alone do not leak secrets.** Each entry contains only ciphertext. Without the session key, the entries reveal nothing about the secret payload — the bytes after the prefix that constitute the credential value. The entries are not sensitive.
+**Entries alone do not leak secrets (confidentiality).** Each entry contains only ciphertext. Without the session key, the entries reveal nothing about the secret payload — the bytes after the prefix that constitute the credential value. The entries are not confidentiality-sensitive.
+
+**Entries are integrity-protected (fake binding).** The AEAD tag covers the fake field as associated data (AAD). Replacing `Entry.fake` after `scrub` produces a tag mismatch at `unscrub` time; no plaintext is emitted. An attacker who can write the entries file but not the session key cannot redirect decryption to an arbitrary trigger.
 
 **Scrubbed payload alone does not leak secrets.** The scrubbed output contains only structurally-equivalent fakes. There are no tokens, markers, indices, or side-channels in the scrubbed payload that reference the original bytes.
 
@@ -114,7 +116,7 @@ The CLI exposes `scrub` and `unscrub` at the process boundary.
 
 **`unscrub`:** reads the response stream from stdin incrementally and writes output to stdout as each chunk resolves. It MUST NOT buffer stdin to completion before writing to stdout. The session key MUST be supplied via the `ITS_CLASSIFIED_KEY` environment variable. A `--key` command-line flag MUST NOT exist. _(Domain constraint: command-line arguments are visible in process listings, `/proc`, and shell history; the environment variable is the only acceptable delivery mechanism.)_
 
-The entries file written by `scrub` contains ciphertext only and is not sensitive on its own. Deletion of the session key file after `unscrub` completes is the caller's responsibility; the CLI `unscrub` command has no mechanism to locate the file and does not perform this deletion. See Known Limitations.
+The entries file written by `scrub` contains ciphertext only and is not confidentiality-sensitive on its own. It is integrity-protected: the AEAD tag binds each entry's fake field to its ciphertext, so a tampered entries file produces a decryption error rather than silent secret exfiltration. Deletion of the session key file after `unscrub` completes is the caller's responsibility; the CLI `unscrub` command has no mechanism to locate the file and does not perform this deletion. See Known Limitations.
 
 ## Behavioral Invariants
 
@@ -141,6 +143,7 @@ The entries file written by `scrub` contains ciphertext only and is not sensitiv
 21. The CLI `scrub` command MUST create the session key output file with permission mode 0600.
 22. The built-in Tier 1 set MUST cover Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys.
 23. `scrub` called on a payload containing no detectable secrets MUST return the payload bytes unchanged and an empty entries set.
+24. The AEAD tag for each entry MUST cover the entry's fake field as associated data (AAD). Replacing `Entry.fake` after encryption MUST cause `unscrub` to return an error; no original secret bytes MUST be emitted.
 
 ## Verifiable Conditions
 

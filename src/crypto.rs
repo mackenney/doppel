@@ -29,8 +29,10 @@ pub(crate) fn encrypt_secret(
     let cipher = XChaCha20Poly1305::new_from_slice(session_key.as_bytes())
         .expect("32-byte key is always valid for XChaCha20Poly1305");
     let mut buffer = plaintext.to_vec();
+    // AAD = fake bytes: binds the fake field to the ciphertext tag.
+    // Tampering fake after encrypt causes AeadTagFailure at decrypt time.
     cipher
-        .encrypt_in_place(&nonce, b"", &mut buffer)
+        .encrypt_in_place(&nonce, &fake, &mut buffer)
         .map_err(|_| Error::EncryptionFailed)?;
     Ok(Entry {
         fake,
@@ -51,8 +53,9 @@ pub(crate) fn decrypt_entry(session_key: &SessionKey, entry: &Entry) -> Result<V
     let cipher = XChaCha20Poly1305::new_from_slice(session_key.as_bytes())
         .expect("32-byte key is always valid for XChaCha20Poly1305");
     let mut buffer = entry.ciphertext.clone();
+    // AAD must match the fake used at encrypt time; any tamper breaks the tag.
     cipher
-        .decrypt_in_place(&nonce, b"", &mut buffer)
+        .decrypt_in_place(&nonce, &entry.fake, &mut buffer)
         .map_err(|_| Error::AeadTagFailure)?;
     Ok(buffer)
 }
@@ -118,5 +121,18 @@ mod tests {
         let entry = encrypt_secret(&key, fake, plaintext).unwrap();
         let json = Entry::serialize_entries(&[entry]).unwrap();
         assert!(!json.windows(32).any(|w| w == key.as_bytes().as_slice()));
+    }
+
+    #[test]
+    fn test_tampered_fake_returns_err() {
+        // Fake is bound to the ciphertext via AAD. Replacing fake after
+        // encrypt must break the AEAD tag and return Err — no plaintext out.
+        let key = generate_session_key();
+        let plaintext = b"secret";
+        let fake = b"original-fake".to_vec();
+        let mut entry = encrypt_secret(&key, fake, plaintext).unwrap();
+        entry.fake = b"attacker-trigger".to_vec();
+        let result = decrypt_entry(&key, &entry);
+        assert!(result.is_err(), "tampered fake must return Err");
     }
 }

@@ -501,3 +501,38 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
         "INV-23: empty patterns → entries empty"
     );
 }
+
+// INV-AAD: AEAD tag covers the fake field (AAD binding).
+// Replacing Entry.fake after scrub MUST cause decrypt_entry to return
+// AeadTagFailure — unscrub MUST NOT emit the original secret.
+#[test]
+fn test_inv_aad_fake_binding() {
+    let secret = SYNTH_ANTHROPIC;
+    let payload = [b"token: ".as_slice(), secret].concat();
+    let scrub_result = scrub(&payload, &[patterns::anthropic()]).unwrap();
+
+    // Tamper: replace fake with attacker-controlled trigger.
+    let mut tampered = scrub_result.entries.clone();
+    tampered[0].fake = b"ATTACKER_TRIGGER".to_vec();
+
+    // Victim runs unscrub against tampered entries.
+    let response = b"response contains ATTACKER_TRIGGER here";
+    let mut input = response.as_slice();
+    let mut output = Vec::new();
+    let result = unscrub(
+        &mut input,
+        &mut output,
+        &tampered,
+        &scrub_result.session_key,
+    );
+
+    // AAD mismatch must produce an error — secret must not appear in output.
+    assert!(
+        result.is_err(),
+        "INV-AAD: tampered fake must cause AeadTagFailure, not silent exfiltration"
+    );
+    assert!(
+        !output.windows(secret.len()).any(|w| w == secret),
+        "INV-AAD: original secret must not appear in output after fake tamper"
+    );
+}
