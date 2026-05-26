@@ -1,3 +1,4 @@
+use crate::segment::Segment;
 use hmac::{Hmac, Mac};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use sha2::Sha256;
@@ -58,6 +59,11 @@ pub(crate) mod charsets {
         v
     }
 
+    /// [0-9]
+    pub fn digits() -> Vec<u8> {
+        (b'0'..=b'9').collect()
+    }
+
     /// Detect charset from observed bytes (for Tier 2 `restrict_charset` mode).
     pub fn detect(bytes: &[u8]) -> Vec<u8> {
         let present: std::collections::BTreeSet<u8> = bytes.iter().copied().collect();
@@ -74,6 +80,97 @@ pub(crate) mod charsets {
             .filter(|&b| b != b'\"' && b != b'\\')
             .collect()
     }
+}
+
+/// Derive a structurally-equivalent fake for a Tier 1 secret using the segment model.
+///
+/// Walks `segments` in order:
+/// - `Literal` bytes are reproduced verbatim (INV-28).
+/// - `Variable` segments are filled with CSPRNG bytes from the segment's charset,
+///   sampling exactly `variable_lengths[i]` bytes for the i-th Variable segment (INV-29).
+///
+/// Deterministic: same (salt, segments, variable_lengths, original) always produces the
+/// same fake (INV-13). Resamples if fake == original (INV-15).
+pub(crate) fn derive_fake_tier1_segments(
+    salt: &[u8; 32],
+    segments: &[Segment],
+    variable_lengths: &[usize],
+    original: &[u8],
+) -> Result<Vec<u8>, FakeError> {
+    assert!(!segments.is_empty(), "segment list must not be empty");
+    assert!(
+        !charset_is_empty(segments),
+        "all Variable segments must have non-empty charsets"
+    );
+
+    let total_len: usize = {
+        let mut var_idx = 0usize;
+        let mut len = 0usize;
+        for seg in segments {
+            match seg {
+                Segment::Literal(bytes) => len += bytes.len(),
+                Segment::Variable { .. } => {
+                    len += variable_lengths[var_idx];
+                    var_idx += 1;
+                }
+            }
+        }
+        len
+    };
+
+    const MAX_ATTEMPTS: u32 = 1_000;
+
+    for attempt in 0u32..MAX_ATTEMPTS {
+        let mut mac =
+            <Hmac<Sha256> as Mac>::new_from_slice(salt).expect("HMAC accepts any key size");
+        mac.update(original);
+        mac.update(&attempt.to_le_bytes());
+        let seed_bytes: [u8; 32] = mac.finalize().into_bytes().into();
+
+        let mut rng = StdRng::from_seed(seed_bytes);
+        let mut fake = Vec::with_capacity(total_len);
+        let mut var_idx = 0usize;
+
+        for seg in segments {
+            match seg {
+                Segment::Literal(bytes) => fake.extend_from_slice(bytes),
+                Segment::Variable { charset, .. } => {
+                    let cs = charset();
+                    let var_len = variable_lengths[var_idx];
+                    var_idx += 1;
+                    let cs_len = cs.len() as u32;
+                    let threshold = u32::MAX - (u32::MAX % cs_len);
+                    for _ in 0..var_len {
+                        let idx = loop {
+                            let r = rng.next_u32();
+                            if r < threshold {
+                                break (r % cs_len) as usize;
+                            }
+                        };
+                        fake.push(cs[idx]);
+                    }
+                }
+            }
+        }
+
+        if fake != original {
+            return Ok(fake);
+        }
+    }
+
+    Err(FakeError::CollisionLimit {
+        attempts: MAX_ATTEMPTS,
+    })
+}
+
+fn charset_is_empty(segments: &[Segment]) -> bool {
+    segments.iter().any(|seg| {
+        if let Segment::Variable { charset, .. } = seg {
+            charset().is_empty()
+        } else {
+            false
+        }
+    })
 }
 
 /// Derive a structurally-equivalent fake for a Tier 1 secret.
@@ -301,5 +398,94 @@ mod tests {
             "wide charset must not contain backslash"
         );
         assert!(wide.len() >= 60, "wide charset should be substantial");
+    }
+
+    #[test]
+    fn test_derive_fake_tier1_segments_stability() {
+        let salt = [42u8; 32];
+        let segs = [
+            Segment::Literal(b"sk-ant-api03-"),
+            Segment::Variable {
+                charset: charsets::url_safe_base64,
+                min: 93,
+                max: 93,
+            },
+            Segment::Literal(b"AA"),
+        ];
+        let var_lens = [93usize];
+        let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let f1 = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
+        let f2 = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
+        assert_eq!(f1, f2, "INV-13: stability");
+    }
+
+    #[test]
+    fn test_derive_fake_tier1_segments_literal_reproduced() {
+        let salt = [1u8; 32];
+        let segs = [
+            Segment::Literal(b"sk-ant-api03-"),
+            Segment::Variable {
+                charset: charsets::url_safe_base64,
+                min: 93,
+                max: 93,
+            },
+            Segment::Literal(b"AA"),
+        ];
+        let var_lens = [93usize];
+        let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let fake = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
+        assert_eq!(fake.len(), original.len(), "same length");
+        assert!(
+            fake.starts_with(b"sk-ant-api03-"),
+            "INV-28: leading literal preserved"
+        );
+        assert!(fake.ends_with(b"AA"), "INV-28: trailing literal preserved");
+        assert_ne!(fake, original.as_slice(), "INV-15: fake != original");
+    }
+
+    #[test]
+    fn test_derive_fake_tier1_segments_variable_bytes_in_charset() {
+        let salt = [2u8; 32];
+        let segs = [
+            Segment::Literal(b"xoxb-"),
+            Segment::Variable {
+                charset: charsets::digits,
+                min: 10,
+                max: 13,
+            },
+            Segment::Literal(b"-"),
+            Segment::Variable {
+                charset: charsets::digits,
+                min: 10,
+                max: 13,
+            },
+            Segment::Literal(b"-"),
+            Segment::Variable {
+                charset: charsets::alphanumeric,
+                min: 24,
+                max: 24,
+            },
+        ];
+        let var_lens = [10usize, 10usize, 24usize];
+        let original = b"xoxb-1234567890-1234567890-AAAAAAAAAAAAAAAAAAAAAAAA";
+        let fake = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
+        assert_eq!(fake.len(), original.len());
+        assert!(fake.starts_with(b"xoxb-"), "INV-28: prefix literal");
+        let digits_cs = charsets::digits();
+        assert!(
+            fake[5..15].iter().all(|b| digits_cs.contains(b)),
+            "INV-29: seg1 digits"
+        );
+        assert_eq!(&fake[15..16], b"-", "INV-28: inner literal");
+        assert!(
+            fake[16..26].iter().all(|b| digits_cs.contains(b)),
+            "INV-29: seg3 digits"
+        );
+        assert_eq!(&fake[26..27], b"-", "INV-28: inner literal");
+        let alnum_cs = charsets::alphanumeric();
+        assert!(
+            fake[27..51].iter().all(|b| alnum_cs.contains(b)),
+            "INV-29: seg5 alnum"
+        );
     }
 }

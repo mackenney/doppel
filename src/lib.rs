@@ -46,6 +46,7 @@
 pub(crate) mod crypto;
 pub(crate) mod fake;
 pub(crate) mod scrub;
+pub(crate) mod segment;
 pub mod tier1;
 pub(crate) mod tier2;
 pub mod types;
