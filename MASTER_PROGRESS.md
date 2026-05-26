@@ -2,7 +2,7 @@
 
 ## Status
 
-Complete
+All planned work complete — no active or queued plans
 
 ## Objective
 
@@ -15,7 +15,7 @@ _(none)_
 
 ## Queued
 
-- `exploit-tier2-leakage` — recover secret bytes from fake prefix in entries.json; MEDIUM → [plans/exploit-tier2-leakage/](plans/exploit-tier2-leakage/PROGRESS.md)
+_(none)_
 
 ## Completed
 
@@ -24,6 +24,7 @@ _(none)_
 - `exploit-filesystem-race` — key file 0644 mode race confirmed + /proc/environ leak confirmed; chained PoC decrypts entries.json; commit 3c0560b
 - `exploit-aad-tampering` — 6 PoC tests: fake-swap, stealth Unicode trigger, prefix-shadow DoS+redirect, batch exfil, e2e; 72/72 pass; commit 7005d46
 - `workspace-lib-split` — workspace split, Pattern opacity, ScrubError cleanup, lib docs, review fixes; commit 4b47145
+- `exploit-tier2-leakage` — start_fragment leakage PoC confirmed; fix: wide-charset default, opt-in prefix/suffix; commit 662fca8
 
 ## Known Gaps
 
