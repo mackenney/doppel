@@ -19,7 +19,7 @@
 //! use its_classified::{scrub, unscrub, tier1::patterns};
 //!
 //! // A synthetic Anthropic key embedded in a payload
-//! let payload = b"Authorization: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
+//! let payload = b"Authorization: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 //!
 //! // 1. Scrub: detect and replace the key before sending to an external service
 //! let result = scrub(payload, &patterns::all()).unwrap();

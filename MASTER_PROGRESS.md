@@ -2,7 +2,7 @@
 
 ## Status
 
-All planned work complete — no active or queued plans
+In Progress
 
 ## Objective
 
@@ -11,7 +11,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## In Progress
 
-_(none)_
+- `patterns-file-stable-fakes` — deterministic fakes across process restarts (INV-13 fix), patterns file serde, CLI init/register; plan at `plans/patterns-file-stable-fakes/`
 
 ## Queued
 
@@ -29,6 +29,4 @@ _(none)_
 ## Known Gaps
 
 - No CI configuration (out of scope for initial-implementation plan)
-- No CLI pattern registration surface — no `--patterns` file, no Tier 2 secret input; CLI hardcodes `patterns::all()` with no user control
-- Tier 1 and Tier 2 salts are ephemeral: Tier 1 uses `OnceLock` + `OsRng` on first access; Tier 2 generates a fresh `hmac_salt` on every `register()` call. Both produce a different fake for the same secret on every process restart, violating INV-13 across process boundaries. Both salts must be explicit, caller-supplied values loaded from the patterns file.
-- Tier 2 fake generation is non-deterministic (`OsRng`-driven, stored in `Tier2Pat.fake`) instead of being derived from salt + secret like Tier 1. It should use the same `HMAC(salt, candidate || attempt) → StdRng` derivation as `derive_fake_tier1` — the candidate is available at match time after HMAC verification, so the fake can be derived there and `Tier2Pat.fake` eliminated entirely. This also removes the need for a `fake` field in patterns file Tier 2 entries.
+- _(All other gaps — Tier 1/2 salt stability, Tier 2 fake derivation, CLI pattern registration, patterns file — are addressed by the `patterns-file-stable-fakes` plan)_

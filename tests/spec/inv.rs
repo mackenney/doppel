@@ -1,12 +1,12 @@
 use its_classified::{register, scrub, tier1::patterns, types::Entry, unscrub};
 
 // Synthetic test keys — NOT real credentials. Format matches real format for structural testing.
-const SYNTH_ANTHROPIC: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
+const SYNTH_ANTHROPIC: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const SYNTH_AWS_AKIA: &[u8] = b"AKIAIOSFODNN7EXAMPLE";
 const SYNTH_GITHUB_CLASSIC: &[u8] = b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 #[allow(dead_code)]
 const SYNTH_GITHUB_FG: &[u8] =
-    b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 #[allow(dead_code)]
 const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
@@ -317,7 +317,7 @@ fn test_inv15_fake_not_equal_to_original() {
             "INV-15: fake must not equal original"
         );
         assert!(
-            fake.starts_with(b"sk-ant-"),
+            fake.starts_with(b"sk-ant-api03-"),
             "INV-15: fake must preserve prefix"
         );
         assert_eq!(
@@ -414,17 +414,17 @@ fn test_inv22_all_tier1_built_in_classes_present() {
     //
     // Validates behaviorally: scrub a synthetic key of each class and assert detection.
     let cases: &[(&str, &[u8])] = &[
-        // Anthropic: prefix "sk-ant-", min 80, max 120, url_safe_base64
+        // Anthropic: prefix "sk-ant-api03-", exactly 108, url_safe_base64
         (
             "Anthropic",
-            b"sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
         // OpenAI classic: prefix "sk-", exactly 51, alphanumeric
         (
             "OpenAI classic",
             b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
-        // OpenAI project: prefix "sk-proj-", min 56, max 72, url_safe_base64
+        // OpenAI project: prefix "sk-proj-", 56–164, url_safe_base64
         (
             "OpenAI project",
             b"sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -438,13 +438,18 @@ fn test_inv22_all_tier1_built_in_classes_present() {
             "GitHub classic",
             b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
-        // GitHub fine-grained: prefix "github_pat_", min 82, max 100, url_safe_base64
+        // GitHub fine-grained: prefix "github_pat_", exactly 93, url_safe_base64
         (
             "GitHub fine-grained",
-            b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
-        // GCP: prefix "AIza", exactly 39, url_safe_base64
+        // GCP/Gemini: prefix "AIza", exactly 39, url_safe_base64
         ("GCP", b"AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        // OpenRouter: prefix "sk-or-v1-", exactly 73, hex_lower
+        (
+            "OpenRouter",
+            b"sk-or-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
     ];
     let all = patterns::all();
     for (name, secret) in cases {

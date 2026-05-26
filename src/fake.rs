@@ -51,6 +51,13 @@ pub(crate) mod charsets {
         v
     }
 
+    /// [0-9a-f] (lowercase hex)
+    pub fn hex_lower() -> Vec<u8> {
+        let mut v: Vec<u8> = (b'0'..=b'9').chain(b'a'..=b'f').collect();
+        v.sort_unstable();
+        v
+    }
+
     /// Detect charset from observed bytes (for Tier 2 `restrict_charset` mode).
     pub fn detect(bytes: &[u8]) -> Vec<u8> {
         let present: std::collections::BTreeSet<u8> = bytes.iter().copied().collect();

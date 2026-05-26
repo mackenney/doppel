@@ -81,7 +81,7 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
 /// ```
 /// use its_classified::{scrub, tier1::patterns};
 ///
-/// let payload = b"key: sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+/// let payload = b"key: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 /// let result = scrub(payload, &patterns::all()).unwrap();
 /// assert_eq!(result.entries.len(), 1);
 /// assert_ne!(result.payload, payload.to_vec());
@@ -136,7 +136,7 @@ mod tests {
     use super::*;
     use crate::tier1::patterns;
 
-    const TEST_ANTHROPIC_KEY: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
+    const TEST_ANTHROPIC_KEY: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     #[test]
     fn test_scrub_tier1_basic() {
