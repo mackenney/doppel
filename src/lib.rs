@@ -1,5 +1,43 @@
-// its-classified: secret scrubbing and streaming restoration.
-// See SPEC.md for the complete behavioral contract.
+//! Secret scrubbing and streaming restoration for arbitrary byte payloads.
+//!
+//! `its-classified` intercepts secrets in outbound payloads, replaces them with
+//! structurally-equivalent fakes, and restores the originals in streaming responses.
+//!
+//! Three operations form the core workflow:
+//!
+//! 1. **[`scrub`]** — scan a payload for secrets matching the supplied [`Pattern`]s,
+//!    replace each with a fake, and return the scrubbed payload, encrypted entries,
+//!    and a session key.
+//! 2. **Transmit** — send the scrubbed payload to the external service. Hold the
+//!    entries and session key locally.
+//! 3. **[`unscrub`]** — stream the response through the unscrub function, which
+//!    replaces fakes with originals using the session key and entries.
+//!
+//! # Quick start
+//!
+//! ```rust
+//! use its_classified::{scrub, unscrub, tier1::patterns};
+//!
+//! // 1. Scrub: detect and replace secrets
+//! let payload = b"safe payload with no secrets";
+//! let result = scrub(payload, &patterns::all()).unwrap();
+//!
+//! // result.payload  — scrubbed bytes (send to external service)
+//! // result.entries  — encrypted metadata (keep locally)
+//! // result.session_key — decryption key (keep locally, zeroized on drop)
+//!
+//! // 2. Unscrub: restore originals in the response stream
+//! let mut response = result.payload.as_slice();
+//! let mut restored = Vec::new();
+//! unscrub(
+//!     &mut response,
+//!     &mut restored,
+//!     &result.entries,
+//!     &result.session_key,
+//! )
+//! .unwrap();
+//! assert_eq!(restored, payload);
+//! ```
 
 pub(crate) mod crypto;
 pub(crate) mod fake;

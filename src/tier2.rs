@@ -108,6 +108,17 @@ const END_FRAGMENT_LEN: usize = 8;
 /// Returns `Err` instead of panicking on invalid input. See [`RegistrationError`]
 /// for the error conditions. See [`register_with_options`] to customise prefix/suffix
 /// preservation or charset restriction.
+///
+/// # Examples
+///
+/// ```
+/// use its_classified::{register, scrub};
+///
+/// let secret = b"my-custom-api-token-that-is-long-enough-for-tier2";
+/// let pattern = register(secret).unwrap();
+/// let result = scrub(secret, &[pattern]).unwrap();
+/// assert_eq!(result.entries.len(), 1);
+/// ```
 pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, RegistrationError> {
     register_with_options(secret, &RegistrationOptions::default())
 }

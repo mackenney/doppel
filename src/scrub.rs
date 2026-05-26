@@ -72,6 +72,20 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
     }
 }
 
+/// Scan `payload` for secrets matching `patterns`, replace each with a
+/// structurally-equivalent fake, and return the scrubbed payload, encrypted
+/// entries, and a fresh session key.
+///
+/// # Examples
+///
+/// ```
+/// use its_classified::{scrub, tier1::patterns};
+///
+/// let payload = b"key: sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+/// let result = scrub(payload, &patterns::all()).unwrap();
+/// assert_eq!(result.entries.len(), 1);
+/// assert_ne!(result.payload, payload.to_vec());
+/// ```
 pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> Result<ScrubResult, ScrubError> {
     let session_key = generate_session_key();
     let mut output = Vec::with_capacity(payload.len());

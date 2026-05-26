@@ -17,6 +17,26 @@ pub enum UnscrubError {
 
 const CHUNK_SIZE: usize = 4096;
 
+/// Stream `input` to `output`, replacing any fakes found in `entries` with
+/// their original plaintext, decrypted using `session_key`.
+///
+/// # Examples
+///
+/// ```
+/// use its_classified::{scrub, unscrub, tier1::patterns};
+///
+/// let payload = b"safe content";
+/// let result = scrub(payload, &patterns::all()).unwrap();
+/// let mut restored = Vec::new();
+/// unscrub(
+///     &mut result.payload.as_slice(),
+///     &mut restored,
+///     &result.entries,
+///     &result.session_key,
+/// )
+/// .unwrap();
+/// assert_eq!(restored, payload);
+/// ```
 pub fn unscrub<R: Read, W: Write>(
     input: &mut R,
     output: &mut W,

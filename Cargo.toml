@@ -7,6 +7,9 @@ name = "its-classified"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "its_classified"
+
 [profile.dev]
 debug = 2
 

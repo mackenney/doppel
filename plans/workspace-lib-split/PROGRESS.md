@@ -44,6 +44,6 @@ Each step file is self-contained. The subagent MUST:
 
 ## Steps
 - [x] [step-01-workspace-cargo-split](./step-01-workspace-cargo-split.md) — Cargo workspace split: root = lib, cli/ = binary (commit 662cf67)
-- [ ] [step-02-pattern-opacity](./step-02-pattern-opacity.md) — Make Pattern opaque: #[non_exhaustive] + pub(crate) fields
-- [ ] [step-03-error-cleanup](./step-03-error-cleanup.md) — Flatten ScrubError: no internal type leakage
+- [x] [step-02-pattern-opacity](./step-02-pattern-opacity.md) — Make Pattern opaque: #[non_exhaustive] + pub(crate) fields (commit f681b51)
+- [x] [step-03-error-cleanup](./step-03-error-cleanup.md) — Flatten ScrubError: no internal type leakage (commit 8486afd)
 - [ ] [step-04-lib-docs](./step-04-lib-docs.md) — Add crate-level docs and function examples

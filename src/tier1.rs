@@ -159,7 +159,11 @@ pub mod patterns {
         Pattern::Tier1(&GCP_DEF)
     }
 
-    /// All built-in patterns. Convenient for "scrub everything known".
+    /// All built-in Tier 1 patterns.
+    ///
+    /// Covers: Anthropic (`sk-ant-`), OpenAI classic (`sk-`), OpenAI project
+    /// (`sk-proj-`), AWS AKIA, AWS ASIA, GitHub classic (`ghp_`), GitHub
+    /// fine-grained (`github_pat_`), and GCP (`AIza`).
     pub fn all() -> Vec<Pattern> {
         vec![
             anthropic(),
