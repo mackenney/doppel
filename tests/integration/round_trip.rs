@@ -211,7 +211,7 @@ fn test_vc10_multiple_occurrences_same_fake() {
 fn test_vc11_tier2_hmac_mismatch_passthrough() {
     // VC-11 from SPEC.md Verifiable Conditions
     let real = b"my-registered-secret-value-12345";
-    let pat = register(real);
+    let pat = register(real).unwrap();
     let mut similar = real.to_vec();
     similar[12] ^= 0xFF;
     let result = scrub(&similar, &[pat]).expect("scrub failed");
@@ -240,7 +240,7 @@ fn test_vc12_empty_patterns_unchanged() {
 #[test]
 fn test_tier2_full_round_trip() {
     let secret = b"my-custom-api-token-value-here!";
-    let pat = register(secret);
+    let pat = register(secret).unwrap();
     let payload = [b"token: ".as_slice(), secret].concat();
     let scrub_result = scrub(&payload, &[pat]).expect("scrub failed");
     assert_eq!(scrub_result.entries.len(), 1);

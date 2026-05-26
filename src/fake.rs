@@ -51,10 +51,21 @@ pub(crate) mod charsets {
         v
     }
 
-    /// Detect charset from observed bytes (for Tier 2 registration).
+    /// Detect charset from observed bytes (for Tier 2 `restrict_charset` mode).
     pub fn detect(bytes: &[u8]) -> Vec<u8> {
         let present: std::collections::BTreeSet<u8> = bytes.iter().copied().collect();
         present.into_iter().collect()
+    }
+
+    /// Standard wide charset used for Tier 2 fakes by default.
+    ///
+    /// 72 printable ASCII chars that are safe in JSON strings and most API contexts.
+    /// Excludes `"` (0x22) and `\` (0x5C) to avoid breaking JSON payloads.
+    pub fn wide() -> Vec<u8> {
+        // Printable ASCII 0x21..=0x7E minus '"' (0x22) and '\\' (0x5C).
+        (0x21u8..=0x7E)
+            .filter(|&b| b != b'\"' && b != b'\\')
+            .collect()
     }
 }
 
@@ -117,27 +128,40 @@ pub(crate) fn derive_fake_tier1(
 
 /// Generate a Tier 2 fake using a CSPRNG. Called once at registration time.
 /// The generated fake is stored in the Pattern and returned on all subsequent detections.
+///
+/// Structure: `preserved_prefix || random_variable_bytes || preserved_suffix`
+/// - `preserved_prefix`: non-secret bytes declared by the caller (may be empty)
+/// - `preserved_suffix`: non-secret bytes declared by the caller (may be empty)
+/// - variable bytes are drawn from `charset`
+/// - total length == `target_len`
+///
+/// `original` is used solely for collision detection (INV-15).
 pub(crate) fn generate_fake_tier2<R: rand::RngCore>(
-    prefix: &[u8],
+    preserved_prefix: &[u8],
+    preserved_suffix: &[u8],
     charset: &[u8],
     target_len: usize,
     original: &[u8],
     rng: &mut R,
 ) -> Result<Vec<u8>, FakeError> {
-    assert!(target_len >= prefix.len());
-    assert!(!charset.is_empty());
+    let fixed_len = preserved_prefix.len() + preserved_suffix.len();
+    assert!(
+        target_len >= fixed_len,
+        "target_len must be >= preserved_prefix.len() + preserved_suffix.len()"
+    );
+    assert!(!charset.is_empty(), "charset must not be empty");
 
+    let variable_len = target_len - fixed_len;
     const MAX_ATTEMPTS: u32 = 1_000;
 
     for _ in 0..MAX_ATTEMPTS {
-        let payload_len = target_len - prefix.len();
         let mut fake = Vec::with_capacity(target_len);
-        fake.extend_from_slice(prefix);
+        fake.extend_from_slice(preserved_prefix);
 
-        // Rejection sampling to avoid modulo bias
+        // Rejection sampling to avoid modulo bias (INV-15 requires non-colliding output)
         let charset_len = charset.len() as u32;
         let threshold = u32::MAX - (u32::MAX % charset_len);
-        for _ in 0..payload_len {
+        for _ in 0..variable_len {
             let idx = loop {
                 let r = rng.next_u32();
                 if r < threshold {
@@ -146,6 +170,8 @@ pub(crate) fn generate_fake_tier2<R: rand::RngCore>(
             };
             fake.push(charset[idx]);
         }
+
+        fake.extend_from_slice(preserved_suffix);
 
         if fake != original {
             return Ok(fake);
@@ -213,14 +239,60 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(12345);
         let charset = charsets::alphanumeric();
         let original = b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let fake =
-            generate_fake_tier2(b"ghp_", &charset, original.len(), original, &mut rng).unwrap();
+        let fake = generate_fake_tier2(b"ghp_", b"", &charset, original.len(), original, &mut rng)
+            .unwrap();
         assert_ne!(fake, original.as_slice());
         assert!(fake.starts_with(b"ghp_"));
         assert_eq!(fake.len(), original.len());
         let mut rng2 = StdRng::seed_from_u64(12345);
         let fake2 =
-            generate_fake_tier2(b"ghp_", &charset, original.len(), original, &mut rng2).unwrap();
+            generate_fake_tier2(b"ghp_", b"", &charset, original.len(), original, &mut rng2)
+                .unwrap();
         assert_eq!(fake, fake2);
+    }
+
+    #[test]
+    fn test_generate_fake_tier2_no_secret_bytes_in_variable_region() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(42);
+        let secret = b"mysecretvalue123";
+        let charset = charsets::wide();
+        // No prefix, no suffix — fake must share zero variable bytes pattern
+        let fake = generate_fake_tier2(b"", b"", &charset, secret.len(), secret, &mut rng).unwrap();
+        assert_ne!(fake, secret.as_slice());
+        assert_eq!(fake.len(), secret.len());
+    }
+
+    #[test]
+    fn test_generate_fake_tier2_with_preserved_affix() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(7);
+        let secret = b"MY_ORG_secretvalue123END";
+        let prefix = b"MY_ORG_";
+        let suffix = b"END";
+        let charset = charsets::alphanumeric();
+        let fake =
+            generate_fake_tier2(prefix, suffix, &charset, secret.len(), secret, &mut rng).unwrap();
+        assert!(
+            fake.starts_with(prefix),
+            "declared prefix must be preserved"
+        );
+        assert!(fake.ends_with(suffix), "declared suffix must be preserved");
+        assert_eq!(fake.len(), secret.len());
+        assert_ne!(fake, secret.as_slice());
+    }
+
+    #[test]
+    fn test_wide_charset_excludes_json_unsafe() {
+        let wide = charsets::wide();
+        assert!(
+            !wide.contains(&b'"'),
+            "wide charset must not contain double-quote"
+        );
+        assert!(
+            !wide.contains(&b'\\'),
+            "wide charset must not contain backslash"
+        );
+        assert!(wide.len() >= 60, "wide charset should be substantial");
     }
 }

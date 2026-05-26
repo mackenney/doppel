@@ -25,7 +25,7 @@ The library's surface area is defined by three operations and three data abstrac
 
 **`scrub`** receives a complete payload and a set of Patterns. It scans for secrets left-to-right, replaces each detected secret with the fake prescribed by the matching Pattern, and returns three things: the scrubbed payload, a set of substitution **entries**, and a **session key**. `scrub` MUST NOT modify bytes outside the detected secrets. `scrub` accepts a single complete payload buffer; streaming input is not part of the API.
 
-**Entries** are the set of substitution records produced by one `scrub` call — one record per distinct secret detected. Each entry holds the fake bytes and the ciphertext of the original secret, encrypted under the session key. Entries are not confidentiality-sensitive on their own: without the session key, the ciphertext is opaque. An observer who sees the entries learns nothing about the secret payload — the bytes after the prefix that constitute the credential value. The prefix, length, and character class are visible in the fake by design, since this is what enables the model to reason about the secret's format.
+**Entries** are the set of substitution records produced by one `scrub` call — one record per distinct secret detected. Each entry holds the fake bytes and the ciphertext of the original secret, encrypted under the session key. Entries are not confidentiality-sensitive on their own: without the session key, the ciphertext is opaque. An observer who sees the entries learns the exact byte length of each detected secret and, for Tier 2 entries, can infer the approximate character class of the fake (which by default is drawn from a wide standard charset unrelated to the secret's content). No plaintext secret bytes appear in entries. The session key remains the sole decryption gate.
 
 **Session key** is a 32-byte random value generated fresh at `scrub` time. It is the sole decryption gate for the entries produced in that call. The session key is sensitive and ephemeral: it exists in process memory for one request/response cycle only, MUST NOT be written to disk, and MUST NOT appear in logs or any serialized form. Entries and session key are explicitly separate values with separate sensitivity levels and separate lifetimes.
 
@@ -33,7 +33,7 @@ The library's surface area is defined by three operations and three data abstrac
 
 **Registration** is a preparatory operation that takes a secret value and produces a Tier 2 Pattern. The secret is consumed during registration and immediately discarded; the library has no persistent store. The produced Pattern is an opaque value the caller holds and passes to future `scrub` calls. Registration is described in detail under Detection Tiers.
 
-These operations and data abstractions are the complete public surface. There are no modes, toggles, or configuration beyond Patterns and the entries. There is no negotiation.
+These operations and data abstractions are the complete public surface. The only caller-visible configuration beyond Patterns is `RegistrationOptions`, which controls opt-in prefix/suffix preservation and charset restriction for Tier 2 registrations.
 
 ## Detection Tiers
 
@@ -53,23 +53,35 @@ Each built-in Tier 1 definition is a single canonical Pattern value; the library
 
 Tier 2 covers secrets that do not conform to any known structural class. The caller performs a **registration** operation (described below) that produces a Tier 2 Pattern. That Pattern is then passed to `scrub` exactly like a Tier 1 Pattern; `scrub` applies all Patterns uniformly.
 
-Detection: when a start fragment matches, the candidate is confirmed by verifying the end fragment at the expected offset and then computing the HMAC and comparing it against the token stored in the Pattern. A structural match that fails HMAC verification MUST be passed through unchanged; no replacement occurs. HMAC verification is internal to the Pattern's detection logic and does not appear in `scrub`'s output.
-
+Detection: when a start fragment matches, the candidate is confirmed by verifying the end fragment at the expected offset and then computing the HMAC and comparing it against the token stored in the Pattern. A structural match that fails HMAC verification MUST be passed through unchanged; no replacement occurs. HMAC verification is internal to the Pattern's detection logic and does not appear in `scrub`'s output. The detection fragments (start and end bytes of the registered secret) live exclusively in the caller-held Pattern; they are never written to the entries file.
 ### Registration
 
-Registration is a distinct, preparatory operation that precedes the scrub→unscrub cycle. It takes a secret value as input and produces a Pattern. The secret value is consumed during registration and immediately discarded; the registration operation MUST NOT store the original secret anywhere.
+Registration is a distinct, preparatory operation that precedes the scrub→unscrub cycle. It takes a secret value and an optional `RegistrationOptions` and produces a `Result<Pattern, RegistrationError>`. The secret value is consumed during registration and immediately discarded; the registration operation MUST NOT store the original secret anywhere.
+
+`RegistrationOptions` controls three opt-in behaviours:
+
+- **`preserve_prefix: usize`** (default `0`). The first N bytes of the secret are declared non-secret by the caller and will be reproduced verbatim at the start of every fake. These bytes MUST appear exactly in every occurrence of the secret in the payload for detection to fire; they serve as the structural anchor and are explicitly not part of the confidential value. Setting this is appropriate when the secret has a well-known, non-secret prefix (e.g., `MY_ORG_`). Misuse — marking actual secret bytes as prefix — weakens protection for those bytes and is the caller's responsibility.
+
+- **`preserve_suffix: usize`** (default `0`). Symmetrically, the last M bytes of the secret are declared non-secret and reproduced verbatim at the end of every fake.
+
+- **`restrict_charset: bool`** (default `false`). When `false`, the variable portion of the fake is drawn from the standard wide charset (`[A-Za-z0-9!@#$%^&*\-_+.~|]`, 72 chars). When `true`, fake bytes are drawn exclusively from the distinct byte values observed in the registered secret, exactly as detected by `charsets::detect`. Use `restrict_charset: true` only when the target system would reject a structurally implausible replacement — the trade-off is that the fake then reveals the secret's character class to any observer of the entries file.
+
+The **variable portion** of a registration is `secret[preserve_prefix .. secret.len() - preserve_suffix]`. Registration MUST return `RegistrationError::NoVariableBytes` if the variable portion is empty (i.e., `preserve_prefix + preserve_suffix >= secret.len()`). Registration MUST return `RegistrationError::TooShort` if the secret is empty. If fake generation exhausts the collision-avoidance retry limit (charset too small relative to variable length), registration MUST return `RegistrationError::CollisionLimit`.
+
+Registration MUST emit a `log::warn`-level diagnostic if the variable portion is shorter than 14 bytes. Registration MUST emit a `log::warn`-level diagnostic if the secret's observed charset is a subset of alphanumeric (`[A-Za-z0-9]`) and `restrict_charset` is `false` — this combination produces a fake that looks structurally different from the original, which may be unexpected.
 
 The produced Pattern encapsulates:
-- **Detection fingerprint:** start fragment, end fragment, exact byte length, character set, and an HMAC verification token (salt + digest). _(Domain constraint: HMAC provides confirmation that a structural candidate is the registered secret without requiring the full secret to be stored; the unique salt prevents precomputed lookup attacks against the stored digest.)_
-- **Fake:** a pre-generated structurally-equivalent replacement, produced from a CSPRNG at registration time.
+- **Detection fingerprint:** start fragment, end fragment, exact byte length, and an HMAC verification token (salt + digest). _(Domain constraint: HMAC provides confirmation that a structural candidate is the registered secret without requiring the full secret to be stored; the unique salt prevents precomputed lookup attacks against the stored digest.)_
+- **Preserved prefix/suffix lengths:** the byte counts declared non-secret by the caller.
+- **Fake:** a pre-generated replacement, produced from a CSPRNG at registration time. The fake contains only: the declared non-secret prefix bytes, random bytes from the chosen charset filling the variable portion, and the declared non-secret suffix bytes. No byte from the secret's variable portion appears in the fake.
 
 The salt MUST be unique per registration; salt reuse is prohibited.
 
-The Pattern produced by registration is an opaque value the caller receives and holds. Whether the caller persists it is the caller's concern; the library has no persistent store. The caller passes the Pattern to future `scrub` calls. At no point after registration does the library have access to the original secret.
+The Pattern produced by registration is an opaque value the caller receives and holds. Whether the caller persists it is the caller's concern; the library has no persistent store. The Pattern contains detection fragments (first and last bytes of the secret); treating a serialized Pattern with the same sensitivity as the secret is advisable. At no point after registration does the library have access to the original secret.
 
 ## Security Properties
 
-**Entries alone do not leak secrets (confidentiality).** Each entry contains only ciphertext. Without the session key, the entries reveal nothing about the secret payload — the bytes after the prefix that constitute the credential value. The entries are not confidentiality-sensitive.
+**Entries alone do not leak plaintext secret bytes (confidentiality).** Each entry contains only ciphertext and the pre-generated fake. Without the session key, the ciphertext is opaque. The fake, by default, is drawn from the standard wide charset with no connection to the secret's content; it reveals the exact byte length of the detected secret and nothing else. When `restrict_charset: true` is used, the fake also reveals the approximate character class of the secret — this is a documented trade-off the caller accepts by opting in. The entries are not confidentiality-sensitive in the default configuration.
 
 **Entries are integrity-protected (fake binding).** The AEAD tag covers the fake field as associated data (AAD). Replacing `Entry.fake` after `scrub` produces a tag mismatch at `unscrub` time; no plaintext is emitted. An attacker who can write the entries file but not the session key cannot redirect decryption to an arbitrary trigger.
 
@@ -79,9 +91,9 @@ The Pattern produced by registration is an opaque value the caller receives and 
 
 **Per-entry AEAD encryption.** Each substitution entry is independently encrypted with its own AEAD tag under the session key. `unscrub` decrypts entries one by one as their corresponding fakes are matched in the response stream — it does NOT decrypt the entire entries set upfront. _(Domain constraint: the 192-bit nonce eliminates birthday-bound collision risk for randomly-generated nonces; the AEAD construction provides both confidentiality and ciphertext integrity in a single pass. Cipher agility is deliberately absent — algorithm negotiation introduces downgrade risk and implementation complexity with no benefit in a single-purpose library.)_ Restored plaintext MUST NOT be emitted before the AEAD tag of the matching entry passes verification. A tag failure MUST produce an error; the stream MUST NOT continue with the raw fake or any partially-decrypted bytes in place.
 
-**Fake plausibility does not compromise security of the credential value.** Fakes preserve the detected prefix and character class exactly — this is the intended behavior that enables the model to reason about format, length, and prefix correctness. The prefix, length, and character class are visible in the fake by design and are not secret. What the fake does NOT reveal is the credential value: the bytes after the prefix that constitute the actual secret. Those bytes are replaced with CSPRNG-generated characters from the same character set; no information about the original credential bytes survives in the fake.
+**Tier 1 fake plausibility does not compromise security of the credential value.** Tier 1 fakes preserve the detected structural prefix exactly (e.g., `sk-ant-api03-`) and fill the remaining positions with characters from the same character set. The prefix and character class are visible in the fake by design — this is what enables the model to reason about format — but the credential bytes (everything after the prefix) are replaced with CSPRNG output and carry no information about the original.
 
-**Tier 2 fragment exposure is bounded and deliberate.** Storing start and end fragments for detection reduces the registered secret's entropy by a caller-controlled amount. This is the unavoidable cost of deterministic detection without full-secret storage. There is no way to enable reliable Tier 2 detection without this trade-off.
+**Tier 2 detection fragments are confined to the Pattern.** Reliable detection of unstructured secrets requires storing enough of the secret to find it quickly. The start and end fragments live exclusively in the caller-held Pattern and never appear in the entries file. The cost of detection is borne by the Pattern (which may be persisted and should be treated as sensitive), not by the entries.
 
 ## Streaming Invariants
 
@@ -99,15 +111,25 @@ When no fake from the entries appears anywhere in the response, the stream MUST 
 
 ## Fake Generation
 
-Fakes MUST satisfy these properties simultaneously:
+All fakes MUST satisfy:
 
-- **Same prefix:** the fake begins with the exact prefix bytes of the matched Pattern.
 - **Same length:** the fake has the same total byte count as the original secret.
+- **No collision with original:** if generation produces a fake equal to the original secret, the implementation MUST resample until they differ. A fake that equals the original is not a fake.
+
+**Tier 1 fakes** additionally MUST satisfy:
+
+- **Same prefix:** the fake begins with the exact structural prefix bytes of the matched Pattern.
 - **Same charset:** every non-prefix byte is drawn from the Pattern's character set.
-- **No collision with original:** if the generated fake equals the original secret, the implementation MUST resample until they differ. A fake that equals the original is not a fake.
+
+**Tier 2 fakes** are structured as:
+
+```
+fake = declared_prefix || random_variable_bytes || declared_suffix
+```
+
+where `declared_prefix` and `declared_suffix` are the non-secret bytes the caller opted into preserving (zero length by default), and `random_variable_bytes` fills `secret.len() - preserve_prefix - preserve_suffix` positions drawn from the effective charset (wide by default, secret-detected when `restrict_charset: true` is set). No byte from the secret's variable portion appears in the fake.
 
 The behavioral guarantee is stability: every detection of the same secret under the same Pattern MUST produce the same fake. This applies equally to Tier 1 and Tier 2 Patterns. The mechanism by which stability is achieved is an implementation detail — for example, a keyed derivation from a stable salt embedded in the Pattern. The CSPRNG and collision-avoidance requirements apply to fake generation; once a valid fake has been established for a (secret, Pattern) pair, that fake is returned on all subsequent detections without re-generation.
-
 ## CLI Contract
 
 The CLI exposes `scrub` and `unscrub` at the process boundary.
@@ -128,7 +150,7 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 6. An AEAD tag failure MUST produce an error; the stream MUST NOT continue with a raw fake or any partially-decrypted content in its place.
 7. `unscrub` MUST forward all bytes unchanged when no fake from the entries appears in the stream; it MUST NOT produce an error in this case.
 8. `unscrub` MUST NOT hold more than `max { |fake_i| : fake_i ∈ entries }` bytes unemitted at any point during processing.
-9. The entries MUST NOT contain plaintext secret bytes in any field or serialized form. The session key MUST NOT be serialized together with or embedded within the entries.
+9. The entries MUST NOT contain plaintext bytes from the variable portion of any registered secret in any field or serialized form. Bytes declared non-secret via `preserve_prefix`/`preserve_suffix` MAY appear in the fake field; their presence is an explicit, caller-acknowledged trade-off. The session key MUST NOT be serialized together with or embedded within the entries.
 10. The session key MUST NOT be written to disk, appear in logs, or be included in any serialized form.
 11. The session key MUST NOT be retained after the response cycle ends. The entries MUST NOT be retained after the response cycle ends.
 12. All key material MUST be destroyed (overwritten with zeros or equivalent) when the session key's response cycle ends; key material MUST NOT remain accessible after the cycle terminates.
@@ -144,6 +166,9 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 22. The built-in Tier 1 set MUST cover Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys.
 23. `scrub` called on a payload containing no detectable secrets MUST return the payload bytes unchanged and an empty entries set.
 24. The AEAD tag for each entry MUST cover the entry's fake field as associated data (AAD). Replacing `Entry.fake` after encryption MUST cause `unscrub` to return an error; no original secret bytes MUST be emitted.
+25. Tier 2 `register` MUST return `RegistrationError::TooShort` for empty secrets, `RegistrationError::NoVariableBytes` when `preserve_prefix + preserve_suffix >= secret.len()`, and `RegistrationError::CollisionLimit` when fake generation exhausts retries. It MUST NOT panic on any input.
+26. Tier 2 `register` MUST emit a `log::warn`-level diagnostic when the variable portion of the registered secret is shorter than 14 bytes.
+27. Tier 2 `register` MUST emit a `log::warn`-level diagnostic when the secret's observed byte set is a subset of `[A-Za-z0-9]` and `restrict_charset` is `false`.
 
 ## Verifiable Conditions
 
@@ -153,7 +178,7 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 4. Given a response where a fake straddles a chunk boundary, `unscrub` restores the original secret correctly.
 5. Given a response that contains no fake from the entries, `unscrub` produces output byte-for-byte identical to the input and returns no error.
 6. Given an entries set where one entry's AEAD tag has been tampered with, `unscrub` returns an error and emits no partially-restored output.
-7. The entries produced by `scrub` contain no byte sequence equal to any original secret, regardless of how they are serialized or transmitted.
+7. The entries produced by `scrub` contain no byte sequence from the variable portion of any registered secret, regardless of serialization. Bytes declared non-secret via `preserve_prefix`/`preserve_suffix` MAY appear in the fake field by design.
 8. The session key file created by the CLI `scrub` command has permission mode 0600.
 9. The CLI `unscrub` command begins writing to stdout before stdin reaches EOF when the input is a live SSE stream.
 10. Multiple occurrences of the same secret within a single payload each produce the same fake bytes in the scrubbed output.
@@ -163,7 +188,7 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 ## Known Limitations / Accepted Trade-offs
 
 - **Best-effort coverage.** Detection finds high-confidence structural matches. Secrets that are obfuscated, encoded, split across tokens, or otherwise transformed before the payload is constructed are out of scope. Entropy-based heuristic detection is excluded: false-positive avoidance takes priority over recall.
-- **Tier 2 fragment exposure.** Reliable detection of unstructured secrets requires storing enough of the secret to find it. The start and end fragments reduce the registered secret's entropy by a bounded, caller-controlled amount. There is no alternative.
+- **Tier 2 detection fragments in Pattern.** Reliable detection of unstructured secrets requires storing enough of the secret to locate it. The first and last bytes of the registered secret (start and end fragments) are stored in the caller-held Pattern and never written to the entries file. Callers who persist Patterns should treat them with the same sensitivity as the secret itself.
 - **Cross-request correlation.** Because fakes are stable for the lifetime of a Pattern, an observer with access to multiple scrubbed payloads can correlate any two payloads that used the same Pattern — they will share the same fake. This applies equally to Tier 1 and Tier 2 Patterns. This is the accepted cost of fake stability.
 - **Body bytes only.** Header inspection is out of scope. The deployment target is local developer tooling, not a TLS-terminating proxy with visibility into all traffic metadata.
 - **Compressed and binary payloads.** Matching operates on raw bytes. Payloads that are compressed, encrypted, or encoded before reaching this library are not covered.

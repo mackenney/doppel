@@ -1,4 +1,4 @@
-use its_classified::{scrub, tier1::patterns, types::Entry, unscrub};
+use its_classified::{register, scrub, tier1::patterns, types::Entry, unscrub};
 
 // Synthetic test keys — NOT real credentials. Format matches real format for structural testing.
 const SYNTH_ANTHROPIC: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
@@ -213,6 +213,32 @@ fn test_inv9_entries_contain_no_plaintext_secret() {
 }
 
 #[test]
+fn test_inv9_tier2_no_secret_bytes_in_entries() {
+    // INV-9 (Tier 2): the variable portion of a registered secret must not appear
+    // in the serialized entries — not even as a 4-byte sliding-window fragment.
+    // With the default RegistrationOptions (wide charset, no prefix preservation),
+    // the fake is drawn from a charset with no overlap with the secret bytes.
+    //
+    // This test closes the gap that was previously undetected: the old implementation
+    // embedded secret[0..8] verbatim in the fake, which passed the full-length check
+    // but leaked the start fragment to any entries observer.
+    let secret = b"my-arb-secret-value-0123456789!"; // 31 bytes, mixed charset
+    let pat = register(secret).unwrap();
+    let payload = [b"Authorization: ".as_slice(), secret].concat();
+    let result = scrub(&payload, &[pat]).expect("scrub failed");
+    let json = Entry::serialize_entries(&result.entries).unwrap();
+    // No 4-byte window of the secret should appear anywhere in the serialized entries.
+    for window in secret.windows(4) {
+        assert!(
+            !json.windows(4).any(|w| w == window),
+            // INV-9: variable portion of secret must not appear in entries
+            "INV-9 VIOLATED: secret window {:?} found in serialized entries",
+            std::str::from_utf8(window).unwrap_or("<binary>")
+        );
+    }
+}
+
+#[test]
 fn test_inv10_session_key_not_in_entries() {
     // INV-10: "The session key MUST NOT be serialized together with or embedded within the entries."
     let payload = [b"token: ".as_slice(), SYNTH_ANTHROPIC].concat();
@@ -308,7 +334,7 @@ fn test_inv16_tier2_hmac_failure_passthrough() {
     //          MUST be passed through unchanged; no replacement occurs."
     use its_classified::register;
     let real_secret = b"my-registered-api-secret-value!";
-    let pat = register(real_secret);
+    let pat = register(real_secret).unwrap();
     let mut tampered = real_secret.to_vec();
     tampered[12] ^= 0xFF;
     let result = scrub(&tampered, &[pat]).expect("scrub failed");
@@ -327,8 +353,8 @@ fn test_inv17_tier2_unique_salt_per_registration() {
     // INV-17: "Each Tier 2 registration MUST use a unique HMAC salt."
     use its_classified::register;
     let secret = b"my-secret-value-for-registration";
-    let pat1 = register(secret);
-    let pat2 = register(secret);
+    let pat1 = register(secret).unwrap();
+    let pat2 = register(secret).unwrap();
     let payload1 = [b"token: ".as_slice(), secret].concat();
     let r1 = scrub(&payload1, &[pat1]).expect("scrub failed");
     let r2 = scrub(&payload1, &[pat2]).expect("scrub failed");

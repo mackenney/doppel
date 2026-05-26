@@ -206,7 +206,8 @@ mod tests {
         // INV-16: Tier 2 structural match + HMAC failure → pass through
         use rand::{SeedableRng, rngs::StdRng};
         let real_secret = b"my-registered-secret-value-here";
-        let pat = crate::tier2::register_with_rng(real_secret, &mut StdRng::seed_from_u64(42));
+        let pat =
+            crate::tier2::register_with_rng(real_secret, &mut StdRng::seed_from_u64(42)).unwrap();
         let mut fake_secret = real_secret.to_vec();
         fake_secret[10] ^= 0xFF;
         let payload = fake_secret.clone();
