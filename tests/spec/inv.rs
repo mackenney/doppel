@@ -6,7 +6,8 @@ const SYNTH_AWS_AKIA: &[u8] = b"AKIAIOSFODNN7EXAMPLE";
 const SYNTH_GITHUB_CLASSIC: &[u8] = b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 #[allow(dead_code)]
 const SYNTH_GITHUB_FG: &[u8] =
-    b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    b"github_pat_AAAAAAAAAAAAAAAAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+// Structure: "github_pat_" (11) + 22 A's + "_" + 59 B's = 93 chars total
 #[allow(dead_code)]
 const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
@@ -365,10 +366,11 @@ fn test_inv17_tier2_unique_salt_per_registration() {
 
 #[test]
 fn test_inv18_leftmost_longest_match() {
-    // INV-18: "Detection MUST produce leftmost-longest matches; overlapping matches
-    //          MUST NOT be produced."
-    // sk-proj- is longer than sk-, so the project pattern must win
-    let payload = b"sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    // INV-18: "Detection MUST produce leftmost-longest matches."
+    // sk-proj- is longer than sk-, and the project pattern requires T3BlbkFJ at offset 8+58.
+    // openai_classic fails because 'proj-' contains '-' (not alphanumeric).
+    let payload: &[u8] = b"sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    // "sk-proj-" (8) + 58 B's + "T3BlbkFJ" (8) + 58 B's = 132 chars total
     let result = scrub(
         payload,
         &[patterns::openai_classic(), patterns::openai_project()],
@@ -424,10 +426,11 @@ fn test_inv22_all_tier1_built_in_classes_present() {
             "OpenAI classic",
             b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
-        // OpenAI project: prefix "sk-proj-", 56–164, url_safe_base64
+        // OpenAI project: prefix "sk-proj-" + 58 B's + T3BlbkFJ + 58 B's = 132 chars
         (
             "OpenAI project",
-            b"sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            b"sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            // "sk-proj-" (8) + 58 B's + "T3BlbkFJ" (8) + 58 B's = 132 chars
         ),
         // AWS AKIA: prefix "AKIA", exactly 20, uppercase_alphanumeric
         ("AWS AKIA", b"AKIAAAAAAAAAAAAAAAAA"),
@@ -438,10 +441,11 @@ fn test_inv22_all_tier1_built_in_classes_present() {
             "GitHub classic",
             b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
-        // GitHub fine-grained: prefix "github_pat_", exactly 93, url_safe_base64
+        // GitHub fine-grained: "github_pat_" + 22 alnum + "_" + 59 alnum = 93 chars
         (
             "GitHub fine-grained",
-            b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            b"github_pat_AAAAAAAAAAAAAAAAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            // "github_pat_" (11) + 22 A's + "_" + 59 B's = 93 chars
         ),
         // GCP/Gemini: prefix "AIza", exactly 39, url_safe_base64
         ("GCP", b"AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
@@ -449,6 +453,17 @@ fn test_inv22_all_tier1_built_in_classes_present() {
         (
             "OpenRouter",
             b"sk-or-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        // Slack bot: xoxb-<10-13 digits>-<10-13 digits>-<24 alnum>
+        (
+            "Slack bot",
+            b"xoxb-1234567890-1234567890-AAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // OpenAI service account: same structure as project
+        (
+            "OpenAI svcacct",
+            b"sk-svcacct-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            // "sk-svcacct-" (11) + 58 B's + "T3BlbkFJ" (8) + 58 B's = 135 chars
         ),
     ];
     let all = patterns::all();
@@ -520,4 +535,148 @@ fn test_inv_aad_fake_binding() {
         !output.windows(secret.len()).any(|w| w == secret),
         "INV-AAD: original secret must not appear in output after fake tamper"
     );
+}
+
+#[test]
+fn test_inv28_literal_segments_reproduced_verbatim_in_fake() {
+    // INV-28: "Every Literal segment in a matched Tier 1 Pattern MUST appear verbatim
+    //          at the corresponding byte positions of the fake."
+    use patterns::{anthropic, github_fine_grained, openai_project, slack_bot};
+
+    // Anthropic: leading literal "sk-ant-api03-" and trailing literal "AA"
+    {
+        let secret = SYNTH_ANTHROPIC;
+        let result = scrub(secret, &[anthropic()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert!(
+            fake.starts_with(b"sk-ant-api03-"),
+            "INV-28: Anthropic prefix literal"
+        );
+        assert!(
+            fake.ends_with(b"AA"),
+            "INV-28: Anthropic suffix literal 'AA'"
+        );
+    }
+
+    // OpenAI project: leading literal "sk-proj-" and embedded literal "T3BlbkFJ" at position 8+58
+    {
+        let secret: &[u8] = b"sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+        let result = scrub(secret, &[openai_project()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert!(
+            fake.starts_with(b"sk-proj-"),
+            "INV-28: OpenAI project prefix literal"
+        );
+        assert_eq!(
+            &fake[8 + 58..8 + 58 + 8],
+            b"T3BlbkFJ",
+            "INV-28: T3BlbkFJ embedded literal at position 66"
+        );
+    }
+
+    // GitHub fine-grained: leading literal "github_pat_" and separator "_" at position 11+22
+    {
+        let secret = SYNTH_GITHUB_FG;
+        let result = scrub(secret, &[github_fine_grained()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert!(
+            fake.starts_with(b"github_pat_"),
+            "INV-28: GitHub FG prefix literal"
+        );
+        assert_eq!(
+            &fake[11 + 22..11 + 23],
+            b"_",
+            "INV-28: GitHub FG underscore separator at position 33"
+        );
+    }
+
+    // Slack bot: leading literal "xoxb-" and both "-" separators
+    {
+        let secret = b"xoxb-1234567890-1234567890-AAAAAAAAAAAAAAAAAAAAAAAA";
+        let result = scrub(secret, &[slack_bot()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert!(fake.starts_with(b"xoxb-"), "INV-28: Slack prefix literal");
+        // xoxb-(10-13 digits)-(10-13 digits)-(24 alnum)
+        // For our test secret, var1_len = 10, so first '-' at position 15
+        assert_eq!(
+            fake[15], b'-',
+            "INV-28: Slack first '-' separator at position 15"
+        );
+        // var2_len = 10, so second '-' at position 15+1+10 = 26
+        assert_eq!(
+            fake[26], b'-',
+            "INV-28: Slack second '-' separator at position 26"
+        );
+    }
+}
+
+#[test]
+fn test_inv29_variable_segment_bytes_in_charset() {
+    // INV-29: "Every Variable segment in a Tier 1 fake MUST contain only bytes drawn
+    //          from that segment's own character set."
+    use patterns::{anthropic, github_fine_grained, slack_bot};
+
+    let url_safe_b64: Vec<u8> = {
+        let mut v: Vec<u8> = (b'A'..=b'Z')
+            .chain(b'a'..=b'z')
+            .chain(b'0'..=b'9')
+            .chain([b'-', b'_'])
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    let digits_cs: Vec<u8> = (b'0'..=b'9').collect();
+    let alnum_cs: Vec<u8> = (b'A'..=b'Z')
+        .chain(b'a'..=b'z')
+        .chain(b'0'..=b'9')
+        .collect();
+
+    // Anthropic: variable region is fake[13..106] (93 bytes), must be url_safe_b64
+    {
+        let result = scrub(SYNTH_ANTHROPIC, &[anthropic()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert_eq!(fake.len(), 108);
+        assert!(
+            fake[13..106].iter().all(|b| url_safe_b64.contains(b)),
+            "INV-29: Anthropic variable region must be url_safe_b64"
+        );
+    }
+
+    // GitHub fine-grained: variable region 1 fake[11..33] = 22 alphanumeric bytes
+    //                       variable region 2 fake[34..93] = 59 alphanumeric bytes
+    {
+        let result = scrub(SYNTH_GITHUB_FG, &[github_fine_grained()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert_eq!(fake.len(), 93);
+        assert!(
+            fake[11..33].iter().all(|b| alnum_cs.contains(b)),
+            "INV-29: GitHub FG var1 must be alphanumeric"
+        );
+        assert!(
+            fake[34..93].iter().all(|b| alnum_cs.contains(b)),
+            "INV-29: GitHub FG var2 must be alphanumeric"
+        );
+    }
+
+    // Slack bot: test secret xoxb-1234567890-1234567890-AAAA...AA
+    //   var1 = fake[5..15] (10 digits), var2 = fake[16..26] (10 digits),
+    //   var3 = fake[27..51] (24 alnum)
+    {
+        let secret = b"xoxb-1234567890-1234567890-AAAAAAAAAAAAAAAAAAAAAAAA";
+        let result = scrub(secret, &[slack_bot()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert_eq!(fake.len(), 51);
+        assert!(
+            fake[5..15].iter().all(|b| digits_cs.contains(b)),
+            "INV-29: Slack var1 must be digits"
+        );
+        assert!(
+            fake[16..26].iter().all(|b| digits_cs.contains(b)),
+            "INV-29: Slack var2 must be digits"
+        );
+        assert!(
+            fake[27..51].iter().all(|b| alnum_cs.contains(b)),
+            "INV-29: Slack var3 must be alphanumeric"
+        );
+    }
 }

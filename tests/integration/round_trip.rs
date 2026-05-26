@@ -6,7 +6,8 @@ const SYNTH_OPENAI: &[u8] = b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 const SYNTH_AWS: &[u8] = b"AKIAIOSFODNN7EXAMPLE";
 const SYNTH_GITHUB_CLASSIC: &[u8] = b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const SYNTH_GITHUB_FG: &[u8] =
-    b"github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    b"github_pat_AAAAAAAAAAAAAAAAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+// Structure: "github_pat_" (11) + 22 A's + "_" + 59 B's = 93 chars total
 const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 fn round_trip(payload: &[u8], pats: &[its_classified::types::Pattern]) -> Vec<u8> {
@@ -305,4 +306,51 @@ fn test_large_payload_multiple_secrets() {
     )
     .unwrap();
     assert_eq!(output, payload);
+}
+
+// VC-13: Non-leading Literal segment is reproduced verbatim at the correct byte position
+#[test]
+fn test_vc13_non_leading_literal_reproduced_in_fake() {
+    // VC-13 from SPEC.md Verifiable Conditions:
+    // "Given a Tier 1 secret whose pattern contains a Literal segment that is not the
+    //  leading element, the fake produced by scrub reproduces that Literal segment
+    //  verbatim at the correct byte position."
+
+    // Anthropic: trailing "AA" at positions 106..108
+    {
+        let result = scrub(SYNTH_ANTHROPIC, &[patterns::anthropic()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert_eq!(fake.len(), 108, "VC-13: Anthropic fake must be 108 bytes");
+        assert_eq!(
+            &fake[106..108],
+            b"AA",
+            "VC-13: Anthropic 'AA' suffix at positions 106..108"
+        );
+    }
+
+    // OpenAI project: "T3BlbkFJ" at positions 8+58=66..74 (for 58-var-length variant)
+    {
+        let secret: &[u8] = b"sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+        let result = scrub(secret, &[patterns::openai_project()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert_eq!(
+            fake.len(),
+            132,
+            "VC-13: OpenAI project fake must be 132 bytes"
+        );
+        assert_eq!(
+            &fake[66..74],
+            b"T3BlbkFJ",
+            "VC-13: T3BlbkFJ at positions 66..74"
+        );
+    }
+
+    // GitHub fine-grained: "_" at position 11+22=33
+    {
+        let result =
+            scrub(SYNTH_GITHUB_FG, &[patterns::github_fine_grained()]).expect("scrub failed");
+        let fake = &result.entries[0].fake;
+        assert_eq!(fake.len(), 93, "VC-13: GitHub FG fake must be 93 bytes");
+        assert_eq!(&fake[33..34], b"_", "VC-13: '_' separator at position 33");
+    }
 }
