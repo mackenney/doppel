@@ -12,5 +12,5 @@ pub(crate) mod unscrub;
 pub use scrub::scrub;
 pub use tier1::patterns;
 pub use tier2::register;
-pub use types::{Entry, Pattern, ScrubResult, SessionKey};
+pub use types::{Entry, Pattern, ScrubError, ScrubResult, SessionKey};
 pub use unscrub::{UnscrubError, unscrub};

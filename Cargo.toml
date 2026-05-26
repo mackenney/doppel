@@ -24,6 +24,6 @@ thiserror = "1"
 [dev-dependencies]
 zeroize = { version = "1", features = ["derive"] }
 rand = { version = "0.8", features = ["std", "std_rng"] }
-
+tempfile = "3"
 [features]
 test-e2e = []

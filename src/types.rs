@@ -54,6 +54,14 @@ pub struct ScrubResult {
     pub session_key: SessionKey,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ScrubError {
+    #[error("encryption failed: {0}")]
+    Crypto(#[from] crate::crypto::Error),
+    #[error("fake generation failed: {0}")]
+    Fake(#[from] crate::fake::FakeError),
+}
+
 /// Re-export Pattern from tier1 so callers can reach it via its_classified::types::Pattern.
 pub use crate::tier1::Pattern;
 

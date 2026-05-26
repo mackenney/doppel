@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
-use crate::crypto::{encrypt_secret, generate_session_key};
+use crate::crypto::encrypt_secret;
+use crate::crypto::generate_session_key;
+use crate::fake::FakeError;
 use crate::tier1::{Pattern, Tier1Def};
 use crate::tier2::Tier2Pat;
-use crate::types::{Entry, ScrubResult};
+use crate::types::{Entry, ScrubError, ScrubResult};
 
 struct Match<'a> {
     start: usize,
@@ -50,7 +52,7 @@ fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> O
     best
 }
 
-fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Vec<u8> {
+fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, FakeError> {
     match &m.pattern_ref {
         PatternRef::Tier1(def) => {
             let charset = (def.charset)();
@@ -65,12 +67,12 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Vec<u8> {
         PatternRef::Tier2(pat) => {
             // Tier 2 fake is pre-generated at registration time; return it directly.
             // Stability: same pattern → same fake for any detection of the registered secret.
-            pat.fake.clone()
+            Ok(pat.fake.clone())
         }
     }
 }
 
-pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> ScrubResult {
+pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> Result<ScrubResult, ScrubError> {
     let session_key = generate_session_key();
     let mut output = Vec::with_capacity(payload.len());
     let mut entries: Vec<Entry> = Vec::new();
@@ -92,8 +94,8 @@ pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> ScrubResult {
                     (entries[idx].fake.clone(), idx)
                 } else {
                     // New secret: generate fake, encrypt, create entry
-                    let fake = generate_fake_for_match(&m, &secret);
-                    let entry = encrypt_secret(&session_key, fake.clone(), &secret);
+                    let fake = generate_fake_for_match(&m, &secret)?;
+                    let entry = encrypt_secret(&session_key, fake.clone(), &secret)?;
                     let idx = entries.len();
                     entries.push(entry);
                     seen.insert(secret, idx);
@@ -108,11 +110,11 @@ pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> ScrubResult {
     }
 
     // INV-23: if no patterns matched, output == payload, entries is empty
-    ScrubResult {
+    Ok(ScrubResult {
         payload: output,
         entries,
         session_key,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -126,7 +128,7 @@ mod tests {
     fn test_scrub_tier1_basic() {
         // INV-1: secret replaced with fake
         let payload = [b"Authorization: ".as_slice(), TEST_ANTHROPIC_KEY, b" end"].concat();
-        let result = scrub(&payload, &[patterns::anthropic()]);
+        let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
         assert_ne!(result.payload, payload, "payload must be modified");
         assert_eq!(
             result.entries.len(),
@@ -141,7 +143,7 @@ mod tests {
         let prefix = b"Authorization: ";
         let suffix = b" end";
         let payload = [prefix.as_slice(), TEST_ANTHROPIC_KEY, suffix.as_slice()].concat();
-        let result = scrub(&payload, &[patterns::anthropic()]);
+        let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
         assert!(
             result.payload.starts_with(prefix),
             "INV-2: prefix unchanged"
@@ -153,7 +155,7 @@ mod tests {
     fn test_scrub_empty_patterns() {
         // INV-23: empty patterns → payload unchanged, entries empty
         let payload = b"some payload with stuff";
-        let result = scrub(payload, &[]);
+        let result = scrub(payload, &[]).expect("scrub failed");
         assert_eq!(result.payload, payload, "INV-23: payload unchanged");
         assert!(result.entries.is_empty(), "INV-23: entries empty");
     }
@@ -162,7 +164,7 @@ mod tests {
     fn test_scrub_no_secrets_in_payload() {
         // INV-23: payload with no detectable secrets → unchanged, empty entries
         let payload = b"Hello, world! No secrets here.";
-        let result = scrub(payload, &patterns::all());
+        let result = scrub(payload, &patterns::all()).expect("scrub failed");
         assert_eq!(result.payload, payload.as_slice());
         assert!(result.entries.is_empty());
     }
@@ -172,7 +174,7 @@ mod tests {
         // INV-14: two occurrences of same secret → same fake, ONE entry
         let secret = TEST_ANTHROPIC_KEY;
         let payload = [secret, b" separator ", secret].concat();
-        let result = scrub(&payload, &[patterns::anthropic()]);
+        let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
         assert_eq!(
             result.entries.len(),
             1,
@@ -190,7 +192,7 @@ mod tests {
         // INV-9: entries must not contain plaintext secret bytes
         let secret = TEST_ANTHROPIC_KEY;
         let payload = [b"token: ".as_slice(), secret].concat();
-        let result = scrub(&payload, &[patterns::anthropic()]);
+        let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
         for entry in &result.entries {
             assert!(
                 !entry.ciphertext.windows(secret.len()).any(|w| w == secret),
@@ -208,7 +210,7 @@ mod tests {
         let mut fake_secret = real_secret.to_vec();
         fake_secret[10] ^= 0xFF;
         let payload = fake_secret.clone();
-        let result = scrub(&payload, &[pat]);
+        let result = scrub(&payload, &[pat]).expect("scrub failed");
         assert_eq!(
             result.payload, payload,
             "INV-16: HMAC failure → pass through unchanged"
@@ -224,8 +226,8 @@ mod tests {
         // INV-13: same secret + same Pattern → same fake across calls
         let payload = [b"token: ".as_slice(), TEST_ANTHROPIC_KEY].concat();
         let pat = patterns::anthropic();
-        let result1 = scrub(&payload, &[pat.clone()]);
-        let result2 = scrub(&payload, &[pat]);
+        let result1 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
+        let result2 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
         assert_eq!(
             result1.entries[0].fake, result2.entries[0].fake,
             "INV-13: fake must be stable"

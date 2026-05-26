@@ -10,7 +10,7 @@ const SYNTH_GITHUB_FG: &[u8] =
 const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 fn round_trip(payload: &[u8], pats: &[its_classified::types::Pattern]) -> Vec<u8> {
-    let scrub_result = scrub(payload, pats);
+    let scrub_result = scrub(payload, pats).expect("scrub failed");
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
     unscrub(
@@ -29,7 +29,7 @@ fn round_trip_chunked(
     chunk_size: usize,
 ) -> Vec<u8> {
     use std::io::Read;
-    let scrub_result = scrub(payload, pats);
+    let scrub_result = scrub(payload, pats).expect("scrub failed");
 
     struct ChunkedReader<'a> {
         data: &'a [u8],
@@ -69,7 +69,7 @@ fn round_trip_chunked(
 fn test_vc1_scrubbed_contains_no_original_secret() {
     // VC-1 from SPEC.md Verifiable Conditions
     let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     assert!(
         !result
             .payload
@@ -108,8 +108,8 @@ fn test_vc3_two_scrub_calls_same_fake() {
     // VC-3 from SPEC.md Verifiable Conditions
     let payload = [b"k: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let pat = patterns::anthropic();
-    let r1 = scrub(&payload, std::slice::from_ref(&pat));
-    let r2 = scrub(&payload, std::slice::from_ref(&pat));
+    let r1 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
+    let r2 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
     assert_eq!(
         r1.entries[0].fake, r2.entries[0].fake,
         "VC-3: two scrub calls must produce identical fakes for same secret+Pattern"
@@ -132,7 +132,7 @@ fn test_vc4_fake_straddles_chunk_boundary() {
 #[test]
 fn test_vc5_no_fake_in_stream_identical_output() {
     // VC-5 from SPEC.md Verifiable Conditions
-    let scrub_result = scrub(b"no secrets", &[patterns::anthropic()]);
+    let scrub_result = scrub(b"no secrets", &[patterns::anthropic()]).expect("scrub failed");
     let response = b"response: no fakes here at all, just regular text";
     let mut input = response.as_slice();
     let mut output = Vec::new();
@@ -151,7 +151,7 @@ fn test_vc5_no_fake_in_stream_identical_output() {
 fn test_vc6_tampered_aead_tag_error_no_partial_output() {
     // VC-6 from SPEC.md Verifiable Conditions
     let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let mut scrub_result = scrub(&payload, &[patterns::anthropic()]);
+    let mut scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     let last = scrub_result.entries[0].ciphertext.len() - 1;
     scrub_result.entries[0].ciphertext[last] ^= 0xFF;
     let mut input = scrub_result.payload.as_slice();
@@ -176,7 +176,7 @@ fn test_vc6_tampered_aead_tag_error_no_partial_output() {
 fn test_vc7_entries_contain_no_secret_bytes() {
     // VC-7 from SPEC.md Verifiable Conditions
     let payload = [b"Authorization: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     let json = its_classified::types::Entry::serialize_entries(&result.entries).unwrap();
     assert!(
         !json
@@ -191,7 +191,7 @@ fn test_vc7_entries_contain_no_secret_bytes() {
 fn test_vc10_multiple_occurrences_same_fake() {
     // VC-10 from SPEC.md Verifiable Conditions
     let payload = [SYNTH_ANTHROPIC, b" and ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     let fake = &result.entries[0].fake;
     let fake_len = fake.len();
     assert_eq!(
@@ -214,7 +214,7 @@ fn test_vc11_tier2_hmac_mismatch_passthrough() {
     let pat = register(real);
     let mut similar = real.to_vec();
     similar[12] ^= 0xFF;
-    let result = scrub(&similar, &[pat]);
+    let result = scrub(&similar, &[pat]).expect("scrub failed");
     assert_eq!(
         result.payload, similar,
         "VC-11: HMAC mismatch → pass through"
@@ -227,7 +227,7 @@ fn test_vc11_tier2_hmac_mismatch_passthrough() {
 fn test_vc12_empty_patterns_unchanged() {
     // VC-12 from SPEC.md Verifiable Conditions
     let payload = b"any payload at all";
-    let result = scrub(payload, &[]);
+    let result = scrub(payload, &[]).expect("scrub failed");
     assert_eq!(
         result.payload.as_slice(),
         payload,
@@ -242,7 +242,7 @@ fn test_tier2_full_round_trip() {
     let secret = b"my-custom-api-token-value-here!";
     let pat = register(secret);
     let payload = [b"token: ".as_slice(), secret].concat();
-    let scrub_result = scrub(&payload, &[pat]);
+    let scrub_result = scrub(&payload, &[pat]).expect("scrub failed");
     assert_eq!(scrub_result.entries.len(), 1);
     let fake = &scrub_result.entries[0].fake;
     assert_ne!(fake.as_slice(), secret, "fake must differ from original");
@@ -263,7 +263,8 @@ fn test_tier2_full_round_trip() {
 #[test]
 fn test_two_different_secrets_two_entries() {
     let payload = [SYNTH_ANTHROPIC, b" and ".as_slice(), SYNTH_AWS].concat();
-    let result = scrub(&payload, &[patterns::anthropic(), patterns::aws_akia()]);
+    let result =
+        scrub(&payload, &[patterns::anthropic(), patterns::aws_akia()]).expect("scrub failed");
     assert_eq!(
         result.entries.len(),
         2,
@@ -292,7 +293,7 @@ fn test_large_payload_multiple_secrets() {
     payload.extend_from_slice(SYNTH_GCP);
     payload.extend_from_slice(b" end section.");
     let pats = vec![patterns::anthropic(), patterns::gcp()];
-    let scrub_result = scrub(&payload, &pats);
+    let scrub_result = scrub(&payload, &pats).expect("scrub failed");
     assert_eq!(scrub_result.entries.len(), 2);
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();

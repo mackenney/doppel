@@ -11,6 +11,8 @@ pub enum UnscrubError {
     AeadTagFailure { entry_index: usize },
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("failed to build Aho-Corasick automaton: {0}")]
+    Build(#[from] aho_corasick::BuildError),
 }
 
 const CHUNK_SIZE: usize = 4096;
@@ -39,7 +41,7 @@ pub fn unscrub<R: Read, W: Write>(
     let ac = AhoCorasick::builder()
         .match_kind(MatchKind::LeftmostFirst)
         .build(&fakes)
-        .expect("AhoCorasick build failed");
+        .map_err(UnscrubError::Build)?;
 
     // max_hold: maximum fake length; we must not emit bytes that could be the start of a fake
     let max_hold: usize = entries.iter().map(|e| e.fake.len()).max().unwrap_or(0);
@@ -117,7 +119,7 @@ mod tests {
     fn test_unscrub_basic_roundtrip() {
         let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let payload = [b"Authorization: ".as_slice(), secret].concat();
-        let scrub_result = scrub(&payload, &[patterns::anthropic()]);
+        let scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
         let mut input = scrub_result.payload.as_slice();
         let mut output = Vec::new();
         unscrub(
@@ -135,7 +137,7 @@ mod tests {
         // INV-4: fake split across chunk boundary must still be restored
         let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let payload = [b"ctx: ".as_slice(), secret, b" end"].concat();
-        let scrub_result = scrub(&payload, &[patterns::anthropic()]);
+        let scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
 
         struct OneByteReader<'a> {
             data: &'a [u8],
@@ -171,7 +173,7 @@ mod tests {
     fn test_unscrub_no_fake_in_stream() {
         // INV-7: no fake → forward unchanged, no error
         let payload = b"no secrets here";
-        let scrub_result = scrub(payload, &[patterns::anthropic()]);
+        let scrub_result = scrub(payload, &[patterns::anthropic()]).expect("scrub failed");
         let response = b"response with no fakes in it";
         let mut input = response.as_slice();
         let mut output = Vec::new();
@@ -193,7 +195,7 @@ mod tests {
         // INV-6: tampered AEAD tag → Err, no partial plaintext emitted
         let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let payload = [b"Authorization: ".as_slice(), secret].concat();
-        let mut scrub_result = scrub(&payload, &[patterns::anthropic()]);
+        let mut scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
         let entry = &mut scrub_result.entries[0];
         let last = entry.ciphertext.len() - 1;
         entry.ciphertext[last] ^= 0xFF;
@@ -217,7 +219,8 @@ mod tests {
     fn test_unscrub_exact_matching_only() {
         // INV-19: unscrub must NOT detect secrets by pattern, only exact fake matching
         let real_key_in_response = b"sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB-BBBBBB";
-        let scrub_result = scrub(b"unrelated payload", &[patterns::anthropic()]);
+        let scrub_result =
+            scrub(b"unrelated payload", &[patterns::anthropic()]).expect("scrub failed");
         let mut input = real_key_in_response.as_slice();
         let mut output = Vec::new();
         unscrub(

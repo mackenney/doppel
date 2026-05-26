@@ -15,7 +15,7 @@ fn test_inv1_scrub_replaces_every_detected_secret() {
     // INV-1: "scrub MUST replace every secret detected by the supplied Patterns
     //         with a structurally-equivalent fake."
     let payload = [b"Authorization: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     assert!(
         !result
             .payload
@@ -31,7 +31,7 @@ fn test_inv2_scrub_does_not_modify_non_secret_bytes() {
     let prefix = b"Authorization: ";
     let suffix = b" end-of-header";
     let payload = [prefix.as_slice(), SYNTH_ANTHROPIC, suffix].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     assert!(
         result.payload.starts_with(prefix),
         "INV-2: prefix unchanged"
@@ -48,7 +48,8 @@ fn test_inv2_scrub_does_not_modify_non_secret_bytes() {
 fn test_inv3_entries_exactly_one_per_distinct_secret() {
     // INV-3: "scrub MUST return entries containing exactly one record per distinct secret."
     let payload = [SYNTH_ANTHROPIC, b" separator ".as_slice(), SYNTH_AWS_AKIA].concat();
-    let result = scrub(&payload, &[patterns::anthropic(), patterns::aws_akia()]);
+    let result =
+        scrub(&payload, &[patterns::anthropic(), patterns::aws_akia()]).expect("scrub failed");
     assert_eq!(
         result.entries.len(),
         2,
@@ -61,7 +62,7 @@ fn test_inv4_unscrub_restores_across_chunk_boundaries() {
     // INV-4: "unscrub MUST restore every fake present in the response stream
     //         regardless of where chunk boundaries fall."
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let scrub_result = scrub(&payload, &[patterns::github_classic()]);
+    let scrub_result = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
 
     struct ByteByByteReader<'a> {
         data: &'a [u8],
@@ -98,7 +99,7 @@ fn test_inv5_unscrub_does_not_emit_before_aead_verified() {
     // INV-5: "unscrub MUST NOT emit restored plaintext before the AEAD tag has been verified."
     // Proxy test: tamper with tag → Err → no secret bytes in output
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let mut scrub_result = scrub(&payload, &[patterns::github_classic()]);
+    let mut scrub_result = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
     let last = scrub_result.entries[0].ciphertext.len() - 1;
     scrub_result.entries[0].ciphertext[last] ^= 0xFF;
     let mut input = scrub_result.payload.as_slice();
@@ -121,7 +122,7 @@ fn test_inv5_unscrub_does_not_emit_before_aead_verified() {
 fn test_inv6_aead_tag_failure_produces_error() {
     // INV-6: "An AEAD tag failure MUST produce an error; the stream MUST NOT continue."
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let mut scrub_result = scrub(&payload, &[patterns::github_classic()]);
+    let mut scrub_result = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
     let last = scrub_result.entries[0].ciphertext.len() - 1;
     scrub_result.entries[0].ciphertext[last] ^= 0xFF;
     let mut input = scrub_result.payload.as_slice();
@@ -140,7 +141,7 @@ fn test_inv7_unscrub_no_fake_forwarded_unchanged() {
     // INV-7: "unscrub MUST forward all bytes unchanged when no fake appears in stream;
     //         it MUST NOT produce an error."
     let payload = b"no secrets here at all";
-    let scrub_result = scrub(payload, &[patterns::anthropic()]);
+    let scrub_result = scrub(payload, &[patterns::anthropic()]).expect("scrub failed");
     let response = b"a response with no matching content";
     let mut input = response.as_slice();
     let mut output = Vec::new();
@@ -162,7 +163,7 @@ fn test_inv8_unscrub_bounded_hold() {
     // INV-8: "unscrub MUST NOT hold more than max{|fake_i|} bytes unemitted at any point."
     // Proxy: verify round-trip is correct with 1-byte input chunks (bound enforced by impl)
     let payload = [b"ctx: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let scrub_result = scrub(&payload, &[patterns::anthropic()]);
+    let scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
 
     struct OneByteReader<'a> {
         data: &'a [u8],
@@ -201,7 +202,7 @@ fn test_inv8_unscrub_bounded_hold() {
 fn test_inv9_entries_contain_no_plaintext_secret() {
     // INV-9: "entries MUST NOT contain plaintext secret bytes in any field or serialized form."
     let payload = [b"token: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     let json = Entry::serialize_entries(&result.entries).unwrap();
     assert!(
         !json
@@ -215,7 +216,7 @@ fn test_inv9_entries_contain_no_plaintext_secret() {
 fn test_inv10_session_key_not_in_entries() {
     // INV-10: "The session key MUST NOT be serialized together with or embedded within the entries."
     let payload = [b"token: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     let json = Entry::serialize_entries(&result.entries).unwrap();
     let key_bytes = result.session_key.as_bytes();
     assert!(
@@ -247,8 +248,8 @@ fn test_inv13_same_secret_same_pattern_same_fake() {
     // INV-13: "The same secret detected under the same Pattern MUST produce the same fake."
     let payload = [b"x: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let pat = patterns::anthropic();
-    let result1 = scrub(&payload, std::slice::from_ref(&pat));
-    let result2 = scrub(&payload, std::slice::from_ref(&pat));
+    let result1 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
+    let result2 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
     assert_eq!(
         result1.entries[0].fake, result2.entries[0].fake,
         "INV-13: same secret + same Pattern must produce same fake"
@@ -260,7 +261,7 @@ fn test_inv14_multiple_occurrences_one_entry_same_fake() {
     // INV-14: "Multiple occurrences of the same secret produce the same fake; one entry."
     let sep = b" separator ";
     let payload = [SYNTH_ANTHROPIC, sep.as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]);
+    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
     assert_eq!(
         result.entries.len(),
         1,
@@ -282,7 +283,7 @@ fn test_inv15_fake_not_equal_to_original() {
     // INV-15: "A fake MUST NOT equal the original secret."
     let payload = [b"k: ".as_slice(), SYNTH_ANTHROPIC].concat();
     for _ in 0..10 {
-        let result = scrub(&payload, &[patterns::anthropic()]);
+        let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
         let fake = &result.entries[0].fake;
         assert_ne!(
             fake.as_slice(),
@@ -310,7 +311,7 @@ fn test_inv16_tier2_hmac_failure_passthrough() {
     let pat = register(real_secret);
     let mut tampered = real_secret.to_vec();
     tampered[12] ^= 0xFF;
-    let result = scrub(&tampered, &[pat]);
+    let result = scrub(&tampered, &[pat]).expect("scrub failed");
     assert_eq!(
         result.payload, tampered,
         "INV-16: HMAC failure → pass through unchanged"
@@ -329,8 +330,8 @@ fn test_inv17_tier2_unique_salt_per_registration() {
     let pat1 = register(secret);
     let pat2 = register(secret);
     let payload1 = [b"token: ".as_slice(), secret].concat();
-    let r1 = scrub(&payload1, &[pat1]);
-    let r2 = scrub(&payload1, &[pat2]);
+    let r1 = scrub(&payload1, &[pat1]).expect("scrub failed");
+    let r2 = scrub(&payload1, &[pat2]).expect("scrub failed");
     // Both produce a fake (detection works independently)
     assert_eq!(r1.entries.len(), 1);
     assert_eq!(r2.entries.len(), 1);
@@ -345,7 +346,8 @@ fn test_inv18_leftmost_longest_match() {
     let result = scrub(
         payload,
         &[patterns::openai_classic(), patterns::openai_project()],
-    );
+    )
+    .expect("scrub failed");
     assert_eq!(
         result.entries.len(),
         1,
@@ -362,7 +364,7 @@ fn test_inv19_unscrub_exact_matching_only() {
     // INV-19: "unscrub MUST perform only exact matching against fake byte strings;
     //          it MUST NOT run pattern detection of any kind."
     let payload = b"no secret here";
-    let scrub_result = scrub(payload, &[patterns::anthropic()]);
+    let scrub_result = scrub(payload, &[patterns::anthropic()]).expect("scrub failed");
     let response_with_real_key = [b"response: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let mut input = response_with_real_key.as_slice();
     let mut output = Vec::new();
@@ -396,6 +398,45 @@ fn test_inv20_cli_no_key_flag_on_unscrub() {
         !help.to_lowercase().contains("--key-"),
         "INV-20: no --key-* flags allowed"
     );
+}
+
+#[test]
+fn test_inv21_cli_scrub_key_file_mode_0600() {
+    // INV-21: "The CLI scrub command MUST create the session key output file
+    //          with permission mode 0600."
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let entries_path = dir.path().join("entries.json");
+        let key_path = dir.path().join("key.txt");
+        let payload = b"no secrets here";
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
+            .args([
+                "scrub",
+                "--entries",
+                entries_path.to_str().unwrap(),
+                "--key-out",
+                key_path.to_str().unwrap(),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write;
+                c.stdin.as_mut().unwrap().write_all(payload)?;
+                c.wait()
+            })
+            .expect("failed to run scrub");
+        assert!(status.success(), "scrub must exit 0");
+        let meta = std::fs::metadata(&key_path).expect("key file must exist");
+        let mode = meta.mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "INV-21: key file mode must be 0600, got {:o}",
+            mode
+        );
+    }
 }
 
 #[test]
@@ -441,7 +482,7 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
     // INV-23: "scrub called on a payload containing no detectable secrets MUST return
     //          the payload bytes unchanged and an empty entries set."
     let payload = b"Hello, world! This is a normal message with no API keys.";
-    let result = scrub(payload, &patterns::all());
+    let result = scrub(payload, &patterns::all()).expect("scrub failed");
     assert_eq!(
         result.payload.as_slice(),
         payload,
@@ -449,7 +490,7 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
     );
     assert!(result.entries.is_empty(), "INV-23: entries empty");
 
-    let result2 = scrub(payload, &[]);
+    let result2 = scrub(payload, &[]).expect("scrub failed");
     assert_eq!(
         result2.payload.as_slice(),
         payload,

@@ -2,6 +2,14 @@ use hmac::{Hmac, Mac};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use sha2::Sha256;
 
+#[derive(Debug, thiserror::Error)]
+pub enum FakeError {
+    #[error(
+        "could not generate a fake distinct from original after {attempts} attempts (charset too small)"
+    )]
+    CollisionLimit { attempts: u32 },
+}
+
 pub(crate) mod charsets {
     /// [A-Za-z0-9]
     pub fn alphanumeric() -> Vec<u8> {
@@ -62,7 +70,7 @@ pub(crate) fn derive_fake_tier1(
     charset: &[u8],
     target_len: usize,
     original: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, FakeError> {
     assert!(
         target_len >= prefix.len(),
         "target_len must be >= prefix.len()"
@@ -82,20 +90,29 @@ pub(crate) fn derive_fake_tier1(
         let payload_len = target_len - prefix.len();
         let mut fake = Vec::with_capacity(target_len);
         fake.extend_from_slice(prefix);
+
+        // Rejection sampling to avoid modulo bias
+        let charset_len = charset.len() as u32;
+        let threshold = u32::MAX - (u32::MAX % charset_len);
         for _ in 0..payload_len {
-            let idx = (rng.next_u32() as usize) % charset.len();
+            let idx = loop {
+                let r = rng.next_u32();
+                if r < threshold {
+                    break (r % charset_len) as usize;
+                }
+            };
             fake.push(charset[idx]);
         }
 
         if fake != original {
-            return fake;
+            return Ok(fake);
         }
         // Collision: try next attempt (INV-15)
     }
 
-    panic!(
-        "fake derivation: could not avoid collision after {MAX_ATTEMPTS} attempts — charset too small"
-    );
+    Err(FakeError::CollisionLimit {
+        attempts: MAX_ATTEMPTS,
+    })
 }
 
 /// Generate a Tier 2 fake using a CSPRNG. Called once at registration time.
@@ -106,7 +123,7 @@ pub(crate) fn generate_fake_tier2<R: rand::RngCore>(
     target_len: usize,
     original: &[u8],
     rng: &mut R,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, FakeError> {
     assert!(target_len >= prefix.len());
     assert!(!charset.is_empty());
 
@@ -116,16 +133,28 @@ pub(crate) fn generate_fake_tier2<R: rand::RngCore>(
         let payload_len = target_len - prefix.len();
         let mut fake = Vec::with_capacity(target_len);
         fake.extend_from_slice(prefix);
+
+        // Rejection sampling to avoid modulo bias
+        let charset_len = charset.len() as u32;
+        let threshold = u32::MAX - (u32::MAX % charset_len);
         for _ in 0..payload_len {
-            let idx = (rng.next_u32() as usize) % charset.len();
+            let idx = loop {
+                let r = rng.next_u32();
+                if r < threshold {
+                    break (r % charset_len) as usize;
+                }
+            };
             fake.push(charset[idx]);
         }
+
         if fake != original {
-            return fake;
+            return Ok(fake);
         }
     }
 
-    panic!("fake generation: could not avoid collision after {MAX_ATTEMPTS} attempts");
+    Err(FakeError::CollisionLimit {
+        attempts: MAX_ATTEMPTS,
+    })
 }
 
 #[cfg(test)]
@@ -139,8 +168,8 @@ mod tests {
         let charset = charsets::alphanumeric();
         let original = b"sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-        let fake1 = derive_fake_tier1(&salt, prefix, &charset, original.len(), original);
-        let fake2 = derive_fake_tier1(&salt, prefix, &charset, original.len(), original);
+        let fake1 = derive_fake_tier1(&salt, prefix, &charset, original.len(), original).unwrap();
+        let fake2 = derive_fake_tier1(&salt, prefix, &charset, original.len(), original).unwrap();
         assert_eq!(fake1, fake2, "same inputs must produce same fake (INV-13)");
     }
 
@@ -150,7 +179,7 @@ mod tests {
         let prefix = b"gh";
         let charset = vec![b'a', b'b'];
         let original = b"ghab".to_vec();
-        let fake = derive_fake_tier1(&salt, prefix, &charset, original.len(), &original);
+        let fake = derive_fake_tier1(&salt, prefix, &charset, original.len(), &original).unwrap();
         assert_ne!(
             fake,
             original.as_slice(),
@@ -184,12 +213,14 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(12345);
         let charset = charsets::alphanumeric();
         let original = b"ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let fake = generate_fake_tier2(b"ghp_", &charset, original.len(), original, &mut rng);
+        let fake =
+            generate_fake_tier2(b"ghp_", &charset, original.len(), original, &mut rng).unwrap();
         assert_ne!(fake, original.as_slice());
         assert!(fake.starts_with(b"ghp_"));
         assert_eq!(fake.len(), original.len());
         let mut rng2 = StdRng::seed_from_u64(12345);
-        let fake2 = generate_fake_tier2(b"ghp_", &charset, original.len(), original, &mut rng2);
+        let fake2 =
+            generate_fake_tier2(b"ghp_", &charset, original.len(), original, &mut rng2).unwrap();
         assert_eq!(fake, fake2);
     }
 }

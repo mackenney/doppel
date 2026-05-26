@@ -39,7 +39,7 @@ fn run_scrub(entries_path: &Path, key_out_path: &Path) -> Result<(), Box<dyn std
     let mut payload = Vec::new();
     io::stdin().read_to_end(&mut payload)?;
 
-    let result = scrub(&payload, &patterns::all());
+    let result = scrub(&payload, &patterns::all())?;
 
     io::stdout().write_all(&result.payload)?;
 
@@ -120,8 +120,21 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
     }
     s.as_bytes()
         .chunks(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).map_err(|_| ()))
+        .map(|pair| {
+            let hi = hex_nibble(pair[0])?;
+            let lo = hex_nibble(pair[1])?;
+            Ok((hi << 4) | lo)
+        })
         .collect()
+}
+
+fn hex_nibble(b: u8) -> Result<u8, ()> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err(()),
+    }
 }
 
 fn main() {

@@ -14,9 +14,6 @@ pub struct Tier2Pat {
     pub end_fragment: Vec<u8>,
     /// Exact byte length of the original secret.
     pub exact_length: usize,
-    /// Observed character set from the original secret (for fake generation only).
-    #[allow(dead_code)]
-    pub(crate) charset: Vec<u8>,
     /// Unique random salt for this registration (INV-17: must not reuse).
     pub hmac_salt: [u8; 32],
     /// HMAC-SHA256(hmac_salt, original_secret) — confirmation token.
@@ -75,14 +72,14 @@ pub(crate) fn register_with_rng<R: RngCore>(secret: &[u8], rng: &mut R) -> Patte
         charset
     };
 
-    let fake = generate_fake_tier2(&start_fragment, &charset, secret.len(), secret, rng);
+    let fake = generate_fake_tier2(&start_fragment, &charset, secret.len(), secret, rng)
+        .expect("fake generation: collision limit exceeded");
 
     // Secret is dropped here — no reference to secret after this line
     Pattern::Tier2(Arc::new(Tier2Pat {
         start_fragment,
         end_fragment,
         exact_length: secret.len(),
-        charset,
         hmac_salt,
         hmac_digest,
         fake,

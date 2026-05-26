@@ -17,7 +17,11 @@ pub fn generate_session_key() -> SessionKey {
 
 /// Encrypt `plaintext` under `session_key`. Returns an Entry with a fresh nonce.
 /// The plaintext MUST be the original secret bytes.
-pub(crate) fn encrypt_secret(session_key: &SessionKey, fake: Vec<u8>, plaintext: &[u8]) -> Entry {
+pub(crate) fn encrypt_secret(
+    session_key: &SessionKey,
+    fake: Vec<u8>,
+    plaintext: &[u8],
+) -> Result<Entry, Error> {
     let mut nonce_bytes = [0u8; 24];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = XNonce::from(nonce_bytes);
@@ -27,12 +31,12 @@ pub(crate) fn encrypt_secret(session_key: &SessionKey, fake: Vec<u8>, plaintext:
     let mut buffer = plaintext.to_vec();
     cipher
         .encrypt_in_place(&nonce, b"", &mut buffer)
-        .expect("encryption failed");
-    Entry {
+        .map_err(|_| Error::EncryptionFailed)?;
+    Ok(Entry {
         fake,
         nonce: nonce_bytes.to_vec(),
         ciphertext: buffer,
-    }
+    })
 }
 
 /// Decrypt an entry's ciphertext. Returns Err if AEAD tag verification fails.
@@ -73,6 +77,8 @@ pub enum Error {
     AeadTagFailure,
     #[error("invalid nonce length")]
     InvalidNonce,
+    #[error("AEAD encryption failed")]
+    EncryptionFailed,
 }
 
 #[cfg(test)]
@@ -85,7 +91,7 @@ mod tests {
         let key = generate_session_key();
         let plaintext = b"my-secret-api-key-value";
         let fake = b"sk-fake-aaabbbccc".to_vec();
-        let entry = encrypt_secret(&key, fake.clone(), plaintext);
+        let entry = encrypt_secret(&key, fake.clone(), plaintext).unwrap();
         assert_eq!(entry.fake, fake);
         assert_eq!(entry.nonce.len(), 24);
         let recovered = decrypt_entry(&key, &entry).unwrap();
@@ -97,7 +103,7 @@ mod tests {
         let key = generate_session_key();
         let plaintext = b"secret";
         let fake = b"fake".to_vec();
-        let mut entry = encrypt_secret(&key, fake, plaintext);
+        let mut entry = encrypt_secret(&key, fake, plaintext).unwrap();
         let last = entry.ciphertext.len() - 1;
         entry.ciphertext[last] ^= 0xFF;
         let result = decrypt_entry(&key, &entry);
@@ -109,7 +115,7 @@ mod tests {
         let key = generate_session_key();
         let plaintext = b"secret";
         let fake = b"fake".to_vec();
-        let entry = encrypt_secret(&key, fake, plaintext);
+        let entry = encrypt_secret(&key, fake, plaintext).unwrap();
         let json = Entry::serialize_entries(&[entry]).unwrap();
         assert!(!json.windows(32).any(|w| w == key.as_bytes().as_slice()));
     }
