@@ -22,7 +22,6 @@ cli/tests/         CLI spec and e2e tests
 plans/             Active development plans — each plan directory holds step
                    files and PROGRESS.md while work is in progress; the entire
                    directory is deleted when the plan completes
-docs/              Permanent investigation findings and reference documents
 artifacts/         Transient working files — git-ignored, never committed
   investigations/  Scanner / librarian output
   fact-checks/     Fact-check sub-artifacts and reports

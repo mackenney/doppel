@@ -29,3 +29,5 @@ _(none)_
 ## Known Gaps
 
 - No CI configuration (out of scope for initial-implementation plan)
+- No CLI pattern registration surface — no `--patterns` file, no Tier 2 secret input; CLI hardcodes `patterns::all()` with no user control
+- Tier 1 salt is ephemeral (`OnceLock` + `OsRng` on first access): same secret produces a different fake on every process restart, violating INV-13 across process boundaries; salt must be explicit and stable (stored in patterns file)

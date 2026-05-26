@@ -14,7 +14,13 @@ pub struct Tier1Def {
     pub(crate) min_len: usize,
     /// Maximum total length in bytes (including prefix).
     pub(crate) max_len: usize,
-    /// Stable derivation salt, initialized once per process lifetime.
+    /// Derivation salt for fake generation.
+    ///
+    /// FIXME: currently initialized lazily with OsRng on first access, which means
+    /// the salt (and therefore the fake) differs on every process restart. This
+    /// violates INV-13 across process boundaries. The salt must become an explicit,
+    /// caller-supplied value loaded from the patterns file so fakes are stable
+    /// across runs. See Known Gaps in MASTER_PROGRESS.md.
     pub(crate) salt: OnceLock<[u8; 32]>,
 }
 
