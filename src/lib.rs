@@ -22,6 +22,8 @@
 //! let payload = b"Authorization: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 //!
 //! // 1. Scrub: detect and replace the key before sending to an external service
+//! // Note: `patterns::all()` uses ephemeral salts — fakes differ across process restarts.
+//! // For persistent fake stability, use `PatternsFile::into_patterns()`.
 //! let result = scrub(payload, &patterns::all()).unwrap();
 //! assert_eq!(result.entries.len(), 1); // one secret detected
 //! assert_ne!(result.payload.as_slice(), payload as &[u8]); // key replaced with a fake

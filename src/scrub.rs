@@ -73,7 +73,7 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
                 .as_ref()
                 .expect("Tier1 match always has a capture");
             crate::fake::derive_fake_tier1_segments(
-                def.get_salt(),
+                &def.salt,
                 def.segments,
                 &capture.variable_lengths,
                 secret,

@@ -1,37 +1,22 @@
-use std::sync::OnceLock;
-
 use crate::fake::charsets;
 use crate::segment::{MatchCapture, Segment};
 use crate::tier2::Tier2Pat;
 use std::sync::Arc;
 
 /// Structural definition of a Tier 1 built-in secret class.
+#[derive(Clone, Copy)]
 pub struct Tier1Def {
     /// Stable string identifier for this class, used as the key in patterns files.
     pub(crate) identifier: &'static str,
     /// Ordered sequence of structural segments for this secret class.
     /// See SPEC.md §Tier 1.
     pub(crate) segments: &'static [Segment],
-    /// Derivation salt for fake generation.
-    ///
-    /// FIXME: currently initialized lazily with OsRng on first access, which means
-    /// the salt (and therefore the fake) differs on every process restart. This
-    /// violates INV-13 across process boundaries. The salt must become an explicit,
-    /// caller-supplied value loaded from the patterns file so fakes are stable
-    /// across runs. See Known Gaps in MASTER_PROGRESS.md.
-    pub(crate) salt: OnceLock<[u8; 32]>,
+    /// Derivation salt for fake generation. Zero in static template definitions;
+    /// set to a real (random or loaded) value when constructing a Pattern.
+    pub(crate) salt: [u8; 32],
 }
 
 impl Tier1Def {
-    pub(crate) fn get_salt(&self) -> &[u8; 32] {
-        self.salt.get_or_init(|| {
-            use rand::RngCore;
-            let mut s = [0u8; 32];
-            rand::rngs::OsRng.fill_bytes(&mut s);
-            s
-        })
-    }
-
     /// Walk `payload[pos..]` against the segment list. Returns `Some(MatchCapture)`
     /// on a complete match, `None` otherwise.
     ///
@@ -110,7 +95,7 @@ pub(crate) static ANTHROPIC_DEF: Tier1Def = Tier1Def {
     // sk-ant-api03-<93 url_safe_base64>AA = 108 chars total
     // Source: gitleaks `sk-ant-api03-[a-zA-Z0-9_\-]{93}AA`
     segments: &ANTHROPIC_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const OPENAI_CLASSIC_SEGS: [Segment; 2] = [
@@ -125,7 +110,7 @@ pub(crate) static OPENAI_CLASSIC_DEF: Tier1Def = Tier1Def {
     identifier: "openai_classic",
     // sk-<48 alphanumeric> = 51 chars total
     segments: &OPENAI_CLASSIC_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const OPENAI_PROJECT_SEGS: [Segment; 4] = [
@@ -150,7 +135,7 @@ pub(crate) static OPENAI_PROJECT_DEF: Tier1Def = Tier1Def {
     // without the embedded marker. Best-effort coverage per SPEC.md §Known Limitations.
     // Source: gitleaks openai-api-key rule + OpenAI community reports.
     segments: &OPENAI_PROJECT_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const AWS_AKIA_SEGS: [Segment; 2] = [
@@ -165,7 +150,7 @@ pub(crate) static AWS_AKIA_DEF: Tier1Def = Tier1Def {
     identifier: "aws_akia",
     // AKIA<16 uppercase_alphanumeric> = 20 chars total
     segments: &AWS_AKIA_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const AWS_ASIA_SEGS: [Segment; 2] = [
@@ -180,7 +165,7 @@ pub(crate) static AWS_ASIA_DEF: Tier1Def = Tier1Def {
     identifier: "aws_asia",
     // ASIA<16 uppercase_alphanumeric> = 20 chars total
     segments: &AWS_ASIA_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const GITHUB_CLASSIC_SEGS: [Segment; 2] = [
@@ -195,7 +180,7 @@ pub(crate) static GITHUB_CLASSIC_DEF: Tier1Def = Tier1Def {
     identifier: "github_classic",
     // ghp_<36 alphanumeric> = 40 chars total
     segments: &GITHUB_CLASSIC_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const GITHUB_FG_SEGS: [Segment; 4] = [
@@ -217,7 +202,7 @@ pub(crate) static GITHUB_FG_DEF: Tier1Def = Tier1Def {
     // github_pat_<22 alnum>_<59 alnum> = 93 chars total
     // Source: gitleaks `github_pat_\w{82}` (82 = 22 + 1 separator + 59)
     segments: &GITHUB_FG_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const GCP_SEGS: [Segment; 2] = [
@@ -232,7 +217,7 @@ pub(crate) static GCP_DEF: Tier1Def = Tier1Def {
     identifier: "gcp",
     // AIza<35 url_safe_base64> = 39 chars total
     segments: &GCP_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const OPENROUTER_SEGS: [Segment; 2] = [
@@ -248,7 +233,7 @@ pub(crate) static OPENROUTER_DEF: Tier1Def = Tier1Def {
     // sk-or-v1-<64 hex_lower> = 73 chars total
     // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}`
     segments: &OPENROUTER_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const OPENAI_SVCACCT_SEGS: [Segment; 4] = [
@@ -270,7 +255,7 @@ pub(crate) static OPENAI_SVCACCT_DEF: Tier1Def = Tier1Def {
     // sk-svcacct-<58|74>T3BlbkFJ<58|74> = 135 or 167 chars total
     // Source: gitleaks `sk-(?:proj|svcacct|admin)-...T3BlbkFJ...`
     segments: &OPENAI_SVCACCT_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const GOOGLE_OAUTH_SEGS: [Segment; 2] = [
@@ -286,7 +271,7 @@ pub(crate) static GOOGLE_OAUTH_SECRET_DEF: Tier1Def = Tier1Def {
     // GOCSPX-<28 url_safe_base64> = 35 chars total
     // Source: secretgate docs "GOCSPX- + 28 chars"
     segments: &GOOGLE_OAUTH_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const SLACK_BOT_SEGS: [Segment; 6] = [
@@ -314,7 +299,7 @@ pub(crate) static SLACK_BOT_DEF: Tier1Def = Tier1Def {
     // xoxb-<10-13 digits>-<10-13 digits>-<24 alnum> = 51-57 chars total
     // Source: gitleaks `xoxb-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*`
     segments: &SLACK_BOT_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const ANTHROPIC_ADMIN01_SEGS: [Segment; 3] = [
@@ -331,7 +316,7 @@ pub(crate) static ANTHROPIC_ADMIN01_DEF: Tier1Def = Tier1Def {
     // sk-ant-admin01-<93 url_safe_base64>AA = 110 chars total
     // Source: gitleaks `sk-ant-admin01-[a-zA-Z0-9_\-]{93}AA`
     segments: &ANTHROPIC_ADMIN01_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const ANTHROPIC_ADMIN03_SEGS: [Segment; 3] = [
@@ -348,7 +333,7 @@ pub(crate) static ANTHROPIC_ADMIN03_DEF: Tier1Def = Tier1Def {
     // sk-ant-admin03-<93 url_safe_base64>AA = 110 chars total
     // Source: Anthropic Terraform provider docs
     segments: &ANTHROPIC_ADMIN03_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 const LINEAR_SEGS: [Segment; 2] = [
@@ -364,7 +349,7 @@ pub(crate) static LINEAR_DEF: Tier1Def = Tier1Def {
     // lin_api_<40 alphanumeric> = 48 chars total
     // Source: gitleaks `lin_api_(?i)[a-z0-9]{40}`
     segments: &LINEAR_SEGS,
-    salt: OnceLock::new(),
+    salt: [0u8; 32],
 };
 
 static ALL_TIER1_DEFS: [&Tier1Def; 15] = [
@@ -399,61 +384,137 @@ pub(crate) fn all_defs() -> &'static [&'static Tier1Def] {
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum Pattern {
-    Tier1(&'static Tier1Def),
+    Tier1(Tier1Def),
     Tier2(Arc<Tier2Pat>),
 }
 
 /// Built-in Tier 1 patterns. Pass these to scrub() to detect well-known API key formats.
 pub mod patterns {
     use super::*;
+    use rand::RngCore;
+    use rand::rngs::OsRng;
 
+    fn random_salt() -> [u8; 32] {
+        let mut salt = [0u8; 32];
+        OsRng.fill_bytes(&mut salt);
+        salt
+    }
+
+    /// Returns an Anthropic key pattern with an ephemeral salt.
+    ///
+    /// Fakes are stable for the lifetime of the returned `Pattern` value but differ
+    /// across calls and process restarts. For cross-restart stability, use
+    /// `PatternsFile::into_patterns()`.
     pub fn anthropic() -> Pattern {
-        Pattern::Tier1(&ANTHROPIC_DEF)
-    }
-    pub fn openai_classic() -> Pattern {
-        Pattern::Tier1(&OPENAI_CLASSIC_DEF)
-    }
-    pub fn openai_project() -> Pattern {
-        Pattern::Tier1(&OPENAI_PROJECT_DEF)
-    }
-    pub fn aws_akia() -> Pattern {
-        Pattern::Tier1(&AWS_AKIA_DEF)
-    }
-    pub fn aws_asia() -> Pattern {
-        Pattern::Tier1(&AWS_ASIA_DEF)
-    }
-    pub fn github_classic() -> Pattern {
-        Pattern::Tier1(&GITHUB_CLASSIC_DEF)
-    }
-    pub fn github_fine_grained() -> Pattern {
-        Pattern::Tier1(&GITHUB_FG_DEF)
-    }
-    pub fn gcp() -> Pattern {
-        Pattern::Tier1(&GCP_DEF)
-    }
-    pub fn openrouter() -> Pattern {
-        Pattern::Tier1(&OPENROUTER_DEF)
-    }
-    pub fn openai_svcacct() -> Pattern {
-        Pattern::Tier1(&OPENAI_SVCACCT_DEF)
-    }
-    pub fn google_oauth_secret() -> Pattern {
-        Pattern::Tier1(&GOOGLE_OAUTH_SECRET_DEF)
-    }
-    pub fn slack_bot() -> Pattern {
-        Pattern::Tier1(&SLACK_BOT_DEF)
-    }
-    pub fn anthropic_admin01() -> Pattern {
-        Pattern::Tier1(&ANTHROPIC_ADMIN01_DEF)
-    }
-    pub fn anthropic_admin03() -> Pattern {
-        Pattern::Tier1(&ANTHROPIC_ADMIN03_DEF)
-    }
-    pub fn linear() -> Pattern {
-        Pattern::Tier1(&LINEAR_DEF)
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..ANTHROPIC_DEF
+        })
     }
 
-    /// All built-in Tier 1 patterns.
+    pub fn anthropic_admin01() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..ANTHROPIC_ADMIN01_DEF
+        })
+    }
+
+    pub fn anthropic_admin03() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..ANTHROPIC_ADMIN03_DEF
+        })
+    }
+
+    pub fn openai_classic() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..OPENAI_CLASSIC_DEF
+        })
+    }
+
+    pub fn openai_project() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..OPENAI_PROJECT_DEF
+        })
+    }
+
+    pub fn openai_svcacct() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..OPENAI_SVCACCT_DEF
+        })
+    }
+
+    pub fn aws_akia() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..AWS_AKIA_DEF
+        })
+    }
+
+    pub fn aws_asia() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..AWS_ASIA_DEF
+        })
+    }
+
+    pub fn github_classic() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..GITHUB_CLASSIC_DEF
+        })
+    }
+
+    pub fn github_fine_grained() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..GITHUB_FG_DEF
+        })
+    }
+
+    pub fn gcp() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..GCP_DEF
+        })
+    }
+
+    pub fn openrouter() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..OPENROUTER_DEF
+        })
+    }
+
+    pub fn google_oauth_secret() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..GOOGLE_OAUTH_SECRET_DEF
+        })
+    }
+
+    pub fn slack_bot() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..SLACK_BOT_DEF
+        })
+    }
+
+    pub fn linear() -> Pattern {
+        Pattern::Tier1(Tier1Def {
+            salt: random_salt(),
+            ..LINEAR_DEF
+        })
+    }
+
+    /// Returns all built-in Tier 1 patterns with ephemeral per-call salts.
+    ///
+    /// Fakes produced by these patterns are stable within the returned `Vec<Pattern>`
+    /// instance but differ across calls to `all()` and across process restarts.
+    /// For persistent cross-restart stability, use `PatternsFile::into_patterns()`.
     ///
     /// Covers: Anthropic API (`sk-ant-api03-`), Anthropic Admin (`sk-ant-admin01-`,
     /// `sk-ant-admin03-`), OpenAI classic (`sk-`), OpenAI project (`sk-proj-`),
