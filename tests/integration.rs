@@ -6,3 +6,6 @@ mod round_trip;
 
 #[path = "integration/inv9_gap.rs"]
 mod inv9_gap;
+
+#[path = "integration/short_secret_fragment_exposed.rs"]
+mod short_secret_fragment_exposed;
