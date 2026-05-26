@@ -99,7 +99,7 @@ pub struct Tier2Pat {
     ///
     /// FIXME: should be eliminated. The fake must be derived deterministically
     /// from hmac_salt + candidate at match time (same HMAC-seed-StdRng derivation
-    /// as derive_fake_tier1), not stored here. The candidate bytes are available
+    /// as derive_fake_tier1_segments), not stored here. The candidate bytes are available
     /// after HMAC verification in try_match, so derivation is possible there.
     /// Storing the fake couples stability to Pattern lifetime and prevents
     /// patterns file round-trips without a fake field. See Known Gaps in

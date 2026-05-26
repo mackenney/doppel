@@ -12,6 +12,7 @@ struct Match<'a> {
     end: usize,
     is_tier1: bool,
     pattern_ref: PatternRef<'a>,
+    tier1_capture: Option<crate::segment::MatchCapture>,
 }
 
 enum PatternRef<'a> {
@@ -24,17 +25,19 @@ fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> O
 
     for pattern in patterns {
         let result = match pattern {
-            Pattern::Tier1(def) => def.try_match(payload, pos).map(|end| Match {
+            Pattern::Tier1(def) => def.try_match(payload, pos).map(|capture| Match {
                 start: pos,
-                end,
+                end: capture.end,
                 is_tier1: true,
                 pattern_ref: PatternRef::Tier1(def),
+                tier1_capture: Some(capture),
             }),
             Pattern::Tier2(arc) => arc.try_match(payload, pos).map(|end| Match {
                 start: pos,
                 end,
                 is_tier1: false,
                 pattern_ref: PatternRef::Tier2(arc.as_ref()),
+                tier1_capture: None,
             }),
         };
 
@@ -55,12 +58,14 @@ fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> O
 fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, FakeError> {
     match &m.pattern_ref {
         PatternRef::Tier1(def) => {
-            let charset = (def.charset)();
-            crate::fake::derive_fake_tier1(
+            let capture = m
+                .tier1_capture
+                .as_ref()
+                .expect("Tier1 match always has a capture");
+            crate::fake::derive_fake_tier1_segments(
                 def.get_salt(),
-                def.prefix,
-                &charset,
-                secret.len(),
+                def.segments,
+                &capture.variable_lengths,
                 secret,
             )
         }
