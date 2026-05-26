@@ -1,11 +1,10 @@
 /target
 /artifacts
-code-review-summary.md\nplan-factcheck-summary.md\nplan-fix-result.md\nreview-factcheck-summary.md\nrust_out\nsecurity-round-1.md\nsecurity-round-2.md\nsecurity-round-3.md
+/progress.md
+/orchestration-result.md
 code-review-summary.md
 plan-factcheck-summary.md
 plan-fix-result.md
 review-factcheck-summary.md
 rust_out
-security-round-1.md
-security-round-2.md
-security-round-3.md
+security-round-*.md

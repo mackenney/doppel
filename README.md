@@ -3,7 +3,7 @@
 Scrubs secrets from arbitrary byte payloads before they leave your machine,
 then restores them transparently in the response — including SSE streams.
 
-**Status:** design phase. See [SPEC.md](SPEC.md) for the behavioral contract.
+**Status:** implemented. See [SPEC.md](SPEC.md) for the behavioral contract.
 
 ## What it does
 
