@@ -95,6 +95,13 @@ pub struct Tier2Pat {
     pub(crate) hmac_salt: [u8; 32],
     /// HMAC-SHA256(hmac_salt, original_secret) — confirmation token.
     pub(crate) hmac_digest: [u8; 32],
+    /// Number of prefix bytes declared non-secret, preserved verbatim in the fake.
+    pub(crate) preserve_prefix: usize,
+    /// Number of suffix bytes declared non-secret, preserved verbatim in the fake.
+    pub(crate) preserve_suffix: usize,
+    /// Resolved charset for fake variable bytes. Wide charset when restrict_charset is false;
+    /// detected charset otherwise.
+    pub(crate) charset: Vec<u8>,
     /// Pre-generated fake, produced at registration time via OsRng.
     ///
     /// FIXME: should be eliminated. The fake must be derived deterministically
@@ -106,7 +113,6 @@ pub struct Tier2Pat {
     /// MASTER_PROGRESS.md.
     pub(crate) fake: Vec<u8>,
 }
-
 const START_FRAGMENT_LEN: usize = 8;
 const END_FRAGMENT_LEN: usize = 8;
 
@@ -252,6 +258,9 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         exact_length: secret.len(),
         hmac_salt,
         hmac_digest,
+        preserve_prefix: pp,
+        preserve_suffix: ps,
+        charset,
         fake,
     })))
 }
@@ -507,6 +516,46 @@ mod tests {
                 }
             }
             _ => panic!(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod derivation_param_tests {
+    use super::*;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    fn test_register_stores_derivation_params() {
+        let secret = b"MY_ORG_secretbytes1234END";
+        let opts = RegistrationOptions {
+            preserve_prefix: 7,
+            preserve_suffix: 3,
+            restrict_charset: true,
+        };
+        let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(42)).unwrap();
+        match &pat {
+            Pattern::Tier2(p) => {
+                assert_eq!(p.preserve_prefix, 7);
+                assert_eq!(p.preserve_suffix, 3);
+                let detected = crate::fake::charsets::detect(secret);
+                assert_eq!(p.charset, detected, "charset must match detected charset");
+            }
+            _ => panic!("expected Tier2"),
+        }
+    }
+
+    #[test]
+    fn test_register_default_uses_wide_charset() {
+        let secret = b"my-arbitrary-secret-value-12345";
+        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(1)).unwrap();
+        match &pat {
+            Pattern::Tier2(p) => {
+                assert_eq!(p.preserve_prefix, 0);
+                assert_eq!(p.preserve_suffix, 0);
+                assert_eq!(p.charset, crate::fake::charsets::wide());
+            }
+            _ => panic!("expected Tier2"),
         }
     }
 }
