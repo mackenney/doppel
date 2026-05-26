@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 /// Structural definition of a Tier 1 built-in secret class.
 pub struct Tier1Def {
+    /// Stable string identifier for this class, used as the key in patterns files.
+    pub(crate) identifier: &'static str,
     /// Ordered sequence of structural segments for this secret class.
     /// See SPEC.md §Tier 1.
     pub(crate) segments: &'static [Segment],
@@ -104,6 +106,7 @@ const ANTHROPIC_SEGS: [Segment; 3] = [
     Segment::Literal(b"AA"),
 ];
 pub(crate) static ANTHROPIC_DEF: Tier1Def = Tier1Def {
+    identifier: "anthropic",
     // sk-ant-api03-<93 url_safe_base64>AA = 108 chars total
     // Source: gitleaks `sk-ant-api03-[a-zA-Z0-9_\-]{93}AA`
     segments: &ANTHROPIC_SEGS,
@@ -119,6 +122,7 @@ const OPENAI_CLASSIC_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static OPENAI_CLASSIC_DEF: Tier1Def = Tier1Def {
+    identifier: "openai_classic",
     // sk-<48 alphanumeric> = 51 chars total
     segments: &OPENAI_CLASSIC_SEGS,
     salt: OnceLock::new(),
@@ -139,6 +143,7 @@ const OPENAI_PROJECT_SEGS: [Segment; 4] = [
     },
 ];
 pub(crate) static OPENAI_PROJECT_DEF: Tier1Def = Tier1Def {
+    identifier: "openai_project",
     // sk-proj-<58|74 url_safe_b64>T3BlbkFJ<58|74 url_safe_b64> = 132 or 164 chars total.
     // The pre-Aug-2024 56-char format (sk-proj-<48 url_safe_b64>, no T3BlbkFJ) is intentionally
     // not detected: those keys are ~2 years old and structurally indistinguishable from noise
@@ -157,6 +162,7 @@ const AWS_AKIA_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static AWS_AKIA_DEF: Tier1Def = Tier1Def {
+    identifier: "aws_akia",
     // AKIA<16 uppercase_alphanumeric> = 20 chars total
     segments: &AWS_AKIA_SEGS,
     salt: OnceLock::new(),
@@ -171,6 +177,7 @@ const AWS_ASIA_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static AWS_ASIA_DEF: Tier1Def = Tier1Def {
+    identifier: "aws_asia",
     // ASIA<16 uppercase_alphanumeric> = 20 chars total
     segments: &AWS_ASIA_SEGS,
     salt: OnceLock::new(),
@@ -185,6 +192,7 @@ const GITHUB_CLASSIC_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static GITHUB_CLASSIC_DEF: Tier1Def = Tier1Def {
+    identifier: "github_classic",
     // ghp_<36 alphanumeric> = 40 chars total
     segments: &GITHUB_CLASSIC_SEGS,
     salt: OnceLock::new(),
@@ -205,6 +213,7 @@ const GITHUB_FG_SEGS: [Segment; 4] = [
     },
 ];
 pub(crate) static GITHUB_FG_DEF: Tier1Def = Tier1Def {
+    identifier: "github_fine_grained",
     // github_pat_<22 alnum>_<59 alnum> = 93 chars total
     // Source: gitleaks `github_pat_\w{82}` (82 = 22 + 1 separator + 59)
     segments: &GITHUB_FG_SEGS,
@@ -220,6 +229,7 @@ const GCP_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static GCP_DEF: Tier1Def = Tier1Def {
+    identifier: "gcp",
     // AIza<35 url_safe_base64> = 39 chars total
     segments: &GCP_SEGS,
     salt: OnceLock::new(),
@@ -234,6 +244,7 @@ const OPENROUTER_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static OPENROUTER_DEF: Tier1Def = Tier1Def {
+    identifier: "openrouter",
     // sk-or-v1-<64 hex_lower> = 73 chars total
     // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}`
     segments: &OPENROUTER_SEGS,
@@ -255,6 +266,7 @@ const OPENAI_SVCACCT_SEGS: [Segment; 4] = [
     },
 ];
 pub(crate) static OPENAI_SVCACCT_DEF: Tier1Def = Tier1Def {
+    identifier: "openai_svcacct",
     // sk-svcacct-<58|74>T3BlbkFJ<58|74> = 135 or 167 chars total
     // Source: gitleaks `sk-(?:proj|svcacct|admin)-...T3BlbkFJ...`
     segments: &OPENAI_SVCACCT_SEGS,
@@ -270,6 +282,7 @@ const GOOGLE_OAUTH_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static GOOGLE_OAUTH_SECRET_DEF: Tier1Def = Tier1Def {
+    identifier: "google_oauth_secret",
     // GOCSPX-<28 url_safe_base64> = 35 chars total
     // Source: secretgate docs "GOCSPX- + 28 chars"
     segments: &GOOGLE_OAUTH_SEGS,
@@ -297,6 +310,7 @@ const SLACK_BOT_SEGS: [Segment; 6] = [
     },
 ];
 pub(crate) static SLACK_BOT_DEF: Tier1Def = Tier1Def {
+    identifier: "slack_bot",
     // xoxb-<10-13 digits>-<10-13 digits>-<24 alnum> = 51-57 chars total
     // Source: gitleaks `xoxb-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*`
     segments: &SLACK_BOT_SEGS,
@@ -313,6 +327,7 @@ const ANTHROPIC_ADMIN01_SEGS: [Segment; 3] = [
     Segment::Literal(b"AA"),
 ];
 pub(crate) static ANTHROPIC_ADMIN01_DEF: Tier1Def = Tier1Def {
+    identifier: "anthropic_admin01",
     // sk-ant-admin01-<93 url_safe_base64>AA = 110 chars total
     // Source: gitleaks `sk-ant-admin01-[a-zA-Z0-9_\-]{93}AA`
     segments: &ANTHROPIC_ADMIN01_SEGS,
@@ -329,6 +344,7 @@ const ANTHROPIC_ADMIN03_SEGS: [Segment; 3] = [
     Segment::Literal(b"AA"),
 ];
 pub(crate) static ANTHROPIC_ADMIN03_DEF: Tier1Def = Tier1Def {
+    identifier: "anthropic_admin03",
     // sk-ant-admin03-<93 url_safe_base64>AA = 110 chars total
     // Source: Anthropic Terraform provider docs
     segments: &ANTHROPIC_ADMIN03_SEGS,
@@ -344,11 +360,36 @@ const LINEAR_SEGS: [Segment; 2] = [
     },
 ];
 pub(crate) static LINEAR_DEF: Tier1Def = Tier1Def {
+    identifier: "linear",
     // lin_api_<40 alphanumeric> = 48 chars total
     // Source: gitleaks `lin_api_(?i)[a-z0-9]{40}`
     segments: &LINEAR_SEGS,
     salt: OnceLock::new(),
 };
+
+static ALL_TIER1_DEFS: [&Tier1Def; 15] = [
+    &ANTHROPIC_DEF,
+    &ANTHROPIC_ADMIN01_DEF,
+    &ANTHROPIC_ADMIN03_DEF,
+    &OPENAI_CLASSIC_DEF,
+    &OPENAI_PROJECT_DEF,
+    &OPENAI_SVCACCT_DEF,
+    &AWS_AKIA_DEF,
+    &AWS_ASIA_DEF,
+    &GITHUB_CLASSIC_DEF,
+    &GITHUB_FG_DEF,
+    &GCP_DEF,
+    &OPENROUTER_DEF,
+    &GOOGLE_OAUTH_SECRET_DEF,
+    &SLACK_BOT_DEF,
+    &LINEAR_DEF,
+];
+
+/// Returns references to all 15 built-in Tier 1 definitions.
+/// Used by patterns file loading to iterate and inject salts.
+pub(crate) fn all_defs() -> &'static [&'static Tier1Def] {
+    &ALL_TIER1_DEFS
+}
 
 /// A detection descriptor for [`crate::scrub`].
 ///
@@ -571,5 +612,34 @@ mod tests {
     fn test_prefix_mismatch_returns_none() {
         let payload = b"not-a-key";
         assert!(ANTHROPIC_DEF.try_match(payload, 0).is_none());
+    }
+
+    #[test]
+    fn test_all_defs_identifiers_unique() {
+        let defs = all_defs();
+        assert_eq!(defs.len(), 15, "must have 15 built-in Tier 1 defs");
+        let mut ids: Vec<&str> = defs.iter().map(|d| d.identifier).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 15, "all identifiers must be unique");
+    }
+
+    #[test]
+    fn test_all_defs_matches_all_patterns() {
+        let defs = all_defs();
+        let all = patterns::all();
+        assert_eq!(
+            defs.len(),
+            all.len(),
+            "all_defs and patterns::all must have same count"
+        );
+        for def in defs {
+            assert!(
+                all.iter()
+                    .any(|p| matches!(p, Pattern::Tier1(d) if d.identifier == def.identifier)),
+                "all_defs entry {} must appear in patterns::all()",
+                def.identifier
+            );
+        }
     }
 }
