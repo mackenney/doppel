@@ -21,7 +21,7 @@
 
 The library's surface area is defined by three operations and three data abstractions:
 
-**Pattern** is an opaque detection descriptor. It encapsulates everything needed to find a specific secret or secret class in an arbitrary payload and replace it with a structurally-equivalent fake: the detection mechanism, character set, and the stable fake mapping — either a pre-generated fake (Tier 2) or a per-secret fake deterministically derived from the Pattern on each detection (Tier 1). Built-in Tier 1 definitions and Tier 2 registrations both produce Patterns; `scrub` treats them identically and is not aware of tier distinctions. Built-in Tier 1 Patterns are canonical singleton values — one per class.
+**Pattern** is an opaque detection descriptor. It encapsulates everything needed to find a specific secret or secret class in an arbitrary payload and replace it with a structurally-equivalent fake: the detection mechanism, character set, and the stable fake mapping — a per-secret fake deterministically derived from a stable salt embedded in the Pattern on each detection (both Tier 1 and Tier 2). Built-in Tier 1 definitions and Tier 2 registrations both produce Patterns; `scrub` treats them identically and is not aware of tier distinctions. Built-in Tier 1 Patterns are canonical singleton values — one per class.
 
 **`scrub`** receives a complete payload and a set of Patterns. It scans for secrets left-to-right, replaces each detected secret with the fake prescribed by the matching Pattern, and returns three things: the scrubbed payload, a set of substitution **entries**, and a **session key**. `scrub` MUST NOT modify bytes outside the detected secrets. `scrub` accepts a single complete payload buffer; streaming input is not part of the API.
 
@@ -73,11 +73,21 @@ Registration MUST emit a `log::warn`-level diagnostic if the variable portion is
 The produced Pattern encapsulates:
 - **Detection fingerprint:** start fragment, end fragment, exact byte length, and an HMAC verification token (salt + digest). _(Domain constraint: HMAC provides confirmation that a structural candidate is the registered secret without requiring the full secret to be stored; the unique salt prevents precomputed lookup attacks against the stored digest.)_
 - **Preserved prefix/suffix lengths:** the byte counts declared non-secret by the caller.
-- **Fake:** a pre-generated replacement, produced from a CSPRNG at registration time. The fake contains only: the declared non-secret prefix bytes, random bytes from the chosen charset filling the variable portion, and the declared non-secret suffix bytes. No byte from the secret's variable portion appears in the fake.
+- **Fake derivation parameters:** the HMAC salt, preserved prefix/suffix lengths, and the resolved charset. The fake is derived deterministically at detection time from `HMAC(salt, candidate || attempt_counter)` → seeded PRNG. No pre-generated fake is stored in the Pattern.
 
 The salt MUST be unique per registration; salt reuse is prohibited.
 
 The Pattern produced by registration is an opaque value the caller receives and holds. Whether the caller persists it is the caller's concern; the library has no persistent store. The Pattern contains detection fragments (first and last bytes of the secret); treating a serialized Pattern with the same sensitivity as the secret is advisable. At no point after registration does the library have access to the original secret.
+
+### Patterns File
+
+A **patterns file** is a JSON document that carries all data needed to reconstruct `Pattern` values across process restarts. It contains:
+
+- **Version field** (`version: 1`). The library MUST reject unknown versions.
+- **Tier 1 entries**: a map of class identifier → 32-byte salt. All other Tier 1 fields (prefix, charset, length bounds) are compiled into the binary and not serialized. A patterns file MUST contain a salt for every built-in Tier 1 class; the library MUST return an error if any class is missing.
+- **Tier 2 entries**: an array of detection fingerprints (start/end fragments, exact length, HMAC salt, HMAC digest) plus derivation parameters (preserve_prefix, preserve_suffix, and optionally the resolved charset). No pre-generated fake bytes are stored.
+
+The patterns file MUST be treated with the same sensitivity as the secrets it detects — it contains detection fragments that serve as a detection oracle. On Unix systems, the file SHOULD be written with mode 0600. The library provides serialization/deserialization functions operating on `&[u8]`/`Vec<u8>`; filesystem operations are the caller's responsibility.
 
 ## Security Properties
 
@@ -127,7 +137,7 @@ All fakes MUST satisfy:
 fake = declared_prefix || random_variable_bytes || declared_suffix
 ```
 
-where `declared_prefix` and `declared_suffix` are the non-secret bytes the caller opted into preserving (zero length by default), and `random_variable_bytes` fills `secret.len() - preserve_prefix - preserve_suffix` positions drawn from the effective charset (wide by default, secret-detected when `restrict_charset: true` is set). No byte from the secret's variable portion appears in the fake.
+where `declared_prefix` and `declared_suffix` are the non-secret bytes the caller opted into preserving (zero length by default), and `random_variable_bytes` fills `secret.len() - preserve_prefix - preserve_suffix` positions drawn from the effective charset (wide by default, secret-detected when `restrict_charset: true` is set). No byte from the secret's variable portion appears in the fake. The variable bytes are derived deterministically from the Pattern's HMAC salt and the matched candidate bytes, not from a CSPRNG at registration time.
 
 The behavioral guarantee is stability: every detection of the same secret under the same Pattern MUST produce the same fake. This applies equally to Tier 1 and Tier 2 Patterns. The mechanism by which stability is achieved is an implementation detail — for example, a keyed derivation from a stable salt embedded in the Pattern. The CSPRNG and collision-avoidance requirements apply to fake generation; once a valid fake has been established for a (secret, Pattern) pair, that fake is returned on all subsequent detections without re-generation.
 ## CLI Contract
@@ -139,6 +149,12 @@ The CLI exposes `scrub` and `unscrub` at the process boundary.
 **`unscrub`:** reads the response stream from stdin incrementally and writes output to stdout as each chunk resolves. It MUST NOT buffer stdin to completion before writing to stdout. The session key MUST be supplied via the `ITS_CLASSIFIED_KEY` environment variable. A `--key` command-line flag MUST NOT exist. _(Domain constraint: command-line arguments are visible in process listings, `/proc`, and shell history; the environment variable is the only acceptable delivery mechanism.)_
 
 The entries file written by `scrub` contains ciphertext only and is not confidentiality-sensitive on its own. It is integrity-protected: the AEAD tag binds each entry's fake field to its ciphertext, so a tampered entries file produces a decryption error rather than silent secret exfiltration. Deletion of the session key file after `unscrub` completes is the caller's responsibility; the CLI `unscrub` command has no mechanism to locate the file and does not perform this deletion. See Known Limitations.
+
+**`init`:** creates a new patterns file at the caller-specified path with all built-in Tier 1 definitions and freshly generated stable salts. The Tier 2 list is empty. The command MUST fail if the file already exists unless `--force` is specified. When `--force` is used, all salts are regenerated — existing fakes produced from the old salts become invalid. The patterns file MUST be written with mode 0600 on Unix.
+
+**`register`:** reads a secret value from stdin (raw bytes, no trimming), loads the patterns file from the caller-specified path, registers the secret as a Tier 2 Pattern, appends the new entry to the patterns file, and writes it back. Options `--preserve-prefix`, `--preserve-suffix`, and `--restrict-charset` map to `RegistrationOptions`. The secret MUST NOT appear in command-line arguments.
+
+**`scrub` `--patterns`:** the `scrub` subcommand MUST accept a `--patterns <FILE>` argument specifying the patterns file. This argument is required; `scrub` MUST NOT fall back to ephemeral patterns when it is absent. The patterns file is loaded via `PatternsFile::deserialize` and `into_patterns` before scrubbing.
 
 ## Behavioral Invariants
 
