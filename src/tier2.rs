@@ -275,35 +275,53 @@ impl Tier2Pat {
     ///
     /// Returns `None` on any structural mismatch (no HMAC computed).
     /// Returns `None` on HMAC failure (structural match but wrong content — INV-16).
-    pub(crate) fn try_match(&self, payload: &[u8], pos: usize) -> Option<usize> {
+    #[rustfmt::skip]
+    pub(crate) fn try_match(&self, payload: &[u8], pos: usize) -> Result<Option<(usize, Vec<u8>)>, FakeError> {
         use crate::crypto::verify_hmac;
+        use crate::fake::derive_fake_tier2_deterministic;
 
         // 1. Start fragment
         if !payload[pos..].starts_with(&self.start_fragment) {
-            return None;
+            return Ok(None);
         }
 
         // 2. Length check
         let end = pos + self.exact_length;
         if end > payload.len() {
-            return None;
+            return Ok(None);
         }
 
         // 3. End fragment
         if !self.end_fragment.is_empty() {
             let ef_start = end - self.end_fragment.len();
             if &payload[ef_start..end] != self.end_fragment.as_slice() {
-                return None;
+                return Ok(None);
             }
         }
 
         // 4. HMAC verification (INV-16: failure → None, caller passes through)
         let candidate = &payload[pos..end];
         if !verify_hmac(&self.hmac_salt, candidate, &self.hmac_digest) {
-            return None;
+            return Ok(None);
         }
 
-        Some(end)
+        // 5. Derive fake from salt + candidate (deterministic, INV-13)
+        let prefix_bytes = &candidate[..self.preserve_prefix];
+        let suffix_bytes = if self.preserve_suffix > 0 {
+            &candidate[candidate.len() - self.preserve_suffix..]
+        } else {
+            &[]
+        };
+        let fake = derive_fake_tier2_deterministic(
+            &self.hmac_salt,
+            candidate,
+            prefix_bytes,
+            suffix_bytes,
+            &self.charset,
+            self.exact_length,
+        )?;
+
+        Ok(Some((end, fake)))
     }
 }
 
@@ -354,8 +372,18 @@ mod tests {
         match &pat {
             Pattern::Tier2(p) => {
                 let pos = 7;
-                let result = p.try_match(payload, pos);
-                assert_eq!(result, Some(pos + secret.len()));
+                let result = p
+                    .try_match(payload, pos)
+                    .expect("try_match should not error");
+                assert!(result.is_some(), "should match");
+                let (end, fake) = result.unwrap();
+                assert_eq!(end, pos + secret.len());
+                assert_eq!(
+                    fake.len(),
+                    secret.len(),
+                    "fake must have same length as secret"
+                );
+                assert_ne!(fake.as_slice(), secret, "fake must differ from original");
             }
             _ => panic!(),
         }
@@ -371,7 +399,9 @@ mod tests {
         let payload = fake_payload.clone();
         match &pat {
             Pattern::Tier2(p) => {
-                let result = p.try_match(&payload, 0);
+                let result = p
+                    .try_match(&payload, 0)
+                    .expect("try_match should not error");
                 assert!(result.is_none(), "HMAC failure must return None (INV-16)");
             }
             _ => panic!(),

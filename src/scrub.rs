@@ -13,6 +13,7 @@ struct Match<'a> {
     is_tier1: bool,
     pattern_ref: PatternRef<'a>,
     tier1_capture: Option<crate::segment::MatchCapture>,
+    derived_fake: Option<Vec<u8>>,
 }
 
 enum PatternRef<'a> {
@@ -20,28 +21,37 @@ enum PatternRef<'a> {
     Tier2(&'a Tier2Pat),
 }
 
-fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> Option<Match<'a>> {
+fn find_best_match<'a>(
+    payload: &[u8],
+    pos: usize,
+    patterns: &'a [Pattern],
+) -> Result<Option<Match<'a>>, FakeError> {
     let mut best: Option<Match<'a>> = None;
 
     for pattern in patterns {
-        let result = match pattern {
+        let candidate = match pattern {
             Pattern::Tier1(def) => def.try_match(payload, pos).map(|capture| Match {
                 start: pos,
                 end: capture.end,
                 is_tier1: true,
                 pattern_ref: PatternRef::Tier1(def),
                 tier1_capture: Some(capture),
+                derived_fake: None,
             }),
-            Pattern::Tier2(arc) => arc.try_match(payload, pos).map(|end| Match {
-                start: pos,
-                end,
-                is_tier1: false,
-                pattern_ref: PatternRef::Tier2(arc.as_ref()),
-                tier1_capture: None,
-            }),
+            Pattern::Tier2(arc) => match arc.try_match(payload, pos)? {
+                Some((end, fake)) => Some(Match {
+                    start: pos,
+                    end,
+                    is_tier1: false,
+                    pattern_ref: PatternRef::Tier2(arc.as_ref()),
+                    tier1_capture: None,
+                    derived_fake: Some(fake),
+                }),
+                None => None,
+            },
         };
 
-        if let Some(candidate) = result {
+        if let Some(candidate) = candidate {
             best = Some(match best {
                 None => candidate,
                 Some(b) if candidate.end > b.end => candidate,
@@ -52,7 +62,7 @@ fn find_best_match<'a>(payload: &[u8], pos: usize, patterns: &'a [Pattern]) -> O
         }
     }
 
-    best
+    Ok(best)
 }
 
 fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, FakeError> {
@@ -69,11 +79,10 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
                 secret,
             )
         }
-        PatternRef::Tier2(pat) => {
-            // Tier 2 fake is pre-generated at registration time; return it directly.
-            // Stability: same pattern → same fake for any detection of the registered secret.
-            Ok(pat.fake.clone())
-        }
+        PatternRef::Tier2(_pat) => Ok(m
+            .derived_fake
+            .clone()
+            .expect("Tier 2 match must have derived_fake")),
     }
 }
 
@@ -99,7 +108,7 @@ pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> Result<ScrubResult, ScrubE
     let mut pos = 0;
 
     while pos < payload.len() {
-        match find_best_match(payload, pos, patterns) {
+        match find_best_match(payload, pos, patterns)? {
             None => {
                 // INV-2: copy this byte unchanged
                 output.push(payload[pos]);
