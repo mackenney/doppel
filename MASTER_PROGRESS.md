@@ -2,7 +2,7 @@
 
 ## Status
 
-Complete
+In Progress
 
 ## Objective
 
@@ -11,7 +11,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## In Progress
 
-_(none)_
+- `workspace-lib-split` — Cargo workspace split (lib + CLI), Pattern opacity, error cleanup, docs → [plans/workspace-lib-split/](plans/workspace-lib-split/PROGRESS.md)
 
 ## Queued
 
@@ -26,3 +26,4 @@ _(none)_
 ## Known Gaps
 
 - No CI configuration (out of scope for initial-implementation plan)
+- `UnscrubError::Build(aho_corasick::BuildError)` exposes a third-party type in the public API — no active plan

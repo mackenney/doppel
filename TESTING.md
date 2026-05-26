@@ -44,9 +44,10 @@
 
 | Tier | Entry point | Subdirectory | What it covers |
 |---|---|---|---|
-| **Spec invariants** | `tests/spec.rs` | `tests/spec/` | Direct assertions of SPEC.md MUST/MUST NOT invariants; must pass on every commit |
+| **Spec invariants (lib)** | `tests/spec.rs` | `tests/spec/` | Library SPEC.md MUST/MUST NOT invariants |
+| **Spec invariants (CLI)** | `cli/tests/cli_spec.rs` | `cli/tests/cli_spec/` | CLI-specific SPEC.md invariants (INV-20, INV-21) |
 | **Integration** | `tests/integration.rs` | `tests/integration/` | Public-API behavior: full scrub→unscrub cycles, streaming edge cases |
-| **E2E** | `tests/e2e.rs` | `tests/e2e/` | CLI process boundary tests; gated by `--features test-e2e` |
+| **E2E** | `cli/tests/e2e.rs` | `cli/tests/e2e/` | CLI process boundary tests; gated by `--features test-e2e` |
 
 ---
 
@@ -124,11 +125,12 @@ Every implementation MUST pass these specific scenarios:
 ## Run Commands
 
 ```sh
-cargo nextest run                                    # all tests (no e2e)
-cargo nextest run --test spec                        # spec invariants only
-cargo nextest run --test integration                 # integration only
-cargo nextest run --features test-e2e --test e2e    # e2e
-cargo nextest run --lib                              # unit tests only
+cargo nextest run                                                            # all workspace tests
+cargo nextest run -p its-classified --test spec                              # lib spec invariants
+cargo nextest run -p its-classified-cli --test cli_spec                      # CLI spec invariants
+cargo nextest run -p its-classified --test integration                       # integration only
+cargo nextest run -p its-classified-cli --features test-e2e --test e2e       # e2e
+cargo nextest run --lib                                                      # unit tests only
 ```
 
 ---
