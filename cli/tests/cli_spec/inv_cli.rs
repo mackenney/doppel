@@ -1,3 +1,15 @@
+fn bin() -> &'static std::path::Path {
+    std::path::Path::new(env!("CARGO_BIN_EXE_its-classified"))
+}
+
+fn init_patterns_file(path: &std::path::Path) {
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
+        .args(["init", "--patterns", path.to_str().unwrap(), "--force"])
+        .status()
+        .expect("failed to run init");
+    assert!(status.success(), "init failed");
+}
+
 #[test]
 fn test_inv20_cli_no_key_flag_on_unscrub() {
     // INV-20: "The CLI unscrub command MUST accept the session key only via
@@ -25,12 +37,16 @@ fn test_inv21_cli_scrub_key_file_mode_0600() {
     {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().expect("tempdir");
+        let patterns_path = dir.path().join("patterns.json");
         let entries_path = dir.path().join("entries.json");
         let key_path = dir.path().join("key.txt");
+        init_patterns_file(&patterns_path);
         let payload = b"no secrets here";
         let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
             .args([
                 "scrub",
+                "--patterns",
+                patterns_path.to_str().unwrap(),
                 "--entries",
                 entries_path.to_str().unwrap(),
                 "--key-out",
@@ -63,8 +79,10 @@ fn test_inv21_key_file_refuses_pre_existing_path() {
     #[cfg(unix)]
     {
         let dir = tempfile::tempdir().expect("tempdir");
+        let patterns_path = dir.path().join("patterns.json");
         let entries_path = dir.path().join("entries.json");
         let key_path = dir.path().join("key.txt");
+        init_patterns_file(&patterns_path);
 
         // Attacker pre-creates the file with world-readable permissions.
         std::fs::write(&key_path, b"").expect("pre-create");
@@ -78,6 +96,8 @@ fn test_inv21_key_file_refuses_pre_existing_path() {
         let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
             .args([
                 "scrub",
+                "--patterns",
+                patterns_path.to_str().unwrap(),
                 "--entries",
                 entries_path.to_str().unwrap(),
                 "--key-out",

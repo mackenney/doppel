@@ -680,3 +680,30 @@ fn test_inv29_variable_segment_bytes_in_charset() {
         );
     }
 }
+
+#[test]
+fn test_inv13_cross_serialization_fake_stability() {
+    // INV-13: register → serialize patterns → deserialize → scrub → same fake
+    use its_classified::{PatternsFile, RegistrationOptions, register_with_options, scrub};
+
+    let secret = b"my-custom-secret-for-cross-serial-test";
+    let pat = register_with_options(secret, &RegistrationOptions::default()).unwrap();
+
+    let mut pf = PatternsFile::new();
+    pf.generate_missing_tier1_salts();
+    pf.add_tier2_pattern(&pat).unwrap();
+
+    let payload = [b"token: ".as_slice(), secret].concat();
+    let result1 = scrub(&payload, &[pat.clone()]).unwrap();
+
+    let bytes = pf.serialize().unwrap();
+    let pf2 = PatternsFile::deserialize(&bytes).unwrap();
+    let patterns2 = pf2.into_patterns().unwrap();
+
+    let result2 = scrub(&payload, &patterns2).unwrap();
+
+    assert_eq!(
+        result1.entries[0].fake, result2.entries[0].fake,
+        "INV-13: same secret through serialized patterns must produce same fake"
+    );
+}
