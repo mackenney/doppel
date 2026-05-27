@@ -2,6 +2,7 @@ use crate::segment::Segment;
 use hmac::{Hmac, Mac};
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use sha2::Sha256;
+use std::sync::LazyLock;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FakeError {
@@ -80,6 +81,124 @@ pub(crate) mod charsets {
             .filter(|&b| b != b'\"' && b != b'\\')
             .collect()
     }
+}
+
+/// A 256-element bitmap for O(1) charset membership tests.
+#[derive(Clone)]
+#[allow(dead_code)] // callers migrated in next step
+pub(crate) struct CharsetBitmap([bool; 256]);
+
+#[allow(dead_code)] // callers migrated in next step
+impl CharsetBitmap {
+    pub(crate) const fn empty() -> Self {
+        Self([false; 256])
+    }
+
+    /// Check if byte is in the charset. O(1).
+    #[inline]
+    pub(crate) fn contains(&self, b: u8) -> bool {
+        self.0[b as usize]
+    }
+}
+
+/// A charset with both bitmap (for membership) and byte slice (for iteration).
+#[allow(dead_code)] // callers migrated in next step
+pub(crate) struct Charset {
+    pub(crate) bitmap: CharsetBitmap,
+    pub(crate) bytes: &'static [u8],
+}
+
+#[allow(dead_code)] // callers migrated in next step
+impl Charset {
+    /// Check if byte is in the charset. O(1).
+    #[inline]
+    pub(crate) fn contains(&self, b: u8) -> bool {
+        self.bitmap.contains(b)
+    }
+
+    /// Get the bytes for iteration (e.g., fake generation).
+    #[inline]
+    pub(crate) fn bytes(&self) -> &'static [u8] {
+        self.bytes
+    }
+
+    /// Number of bytes in charset.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+#[allow(dead_code)] // callers migrated in next step
+fn build_bitmap(bytes: &[u8]) -> CharsetBitmap {
+    let mut bits = [false; 256];
+    for &b in bytes {
+        bits[b as usize] = true;
+    }
+    CharsetBitmap(bits)
+}
+
+#[allow(dead_code)]
+static ALPHANUMERIC_BYTES: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+#[allow(dead_code)]
+static URL_SAFE_BASE64_BYTES: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+#[allow(dead_code)]
+static UPPERCASE_ALPHANUMERIC_BYTES: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+#[allow(dead_code)]
+static DIGITS_BYTES: &[u8] = b"0123456789";
+#[allow(dead_code)]
+static HEX_LOWER_BYTES: &[u8] = b"0123456789abcdef";
+
+pub(crate) static ALPHANUMERIC: LazyLock<Charset> = LazyLock::new(|| Charset {
+    bitmap: build_bitmap(ALPHANUMERIC_BYTES),
+    bytes: ALPHANUMERIC_BYTES,
+});
+
+pub(crate) static URL_SAFE_BASE64: LazyLock<Charset> = LazyLock::new(|| Charset {
+    bitmap: build_bitmap(URL_SAFE_BASE64_BYTES),
+    bytes: URL_SAFE_BASE64_BYTES,
+});
+
+pub(crate) static UPPERCASE_ALPHANUMERIC: LazyLock<Charset> = LazyLock::new(|| Charset {
+    bitmap: build_bitmap(UPPERCASE_ALPHANUMERIC_BYTES),
+    bytes: UPPERCASE_ALPHANUMERIC_BYTES,
+});
+
+pub(crate) static DIGITS: LazyLock<Charset> = LazyLock::new(|| Charset {
+    bitmap: build_bitmap(DIGITS_BYTES),
+    bytes: DIGITS_BYTES,
+});
+
+pub(crate) static HEX_LOWER: LazyLock<Charset> = LazyLock::new(|| Charset {
+    bitmap: build_bitmap(HEX_LOWER_BYTES),
+    bytes: HEX_LOWER_BYTES,
+});
+
+#[allow(dead_code)] // callers migrated in next step
+pub(crate) fn alphanumeric_ref() -> &'static Charset {
+    &ALPHANUMERIC
+}
+
+#[allow(dead_code)] // callers migrated in next step
+pub(crate) fn url_safe_base64_ref() -> &'static Charset {
+    &URL_SAFE_BASE64
+}
+
+#[allow(dead_code)] // callers migrated in next step
+pub(crate) fn uppercase_alphanumeric_ref() -> &'static Charset {
+    &UPPERCASE_ALPHANUMERIC
+}
+
+#[allow(dead_code)] // callers migrated in next step
+pub(crate) fn digits_ref() -> &'static Charset {
+    &DIGITS
+}
+
+#[allow(dead_code)] // callers migrated in next step
+pub(crate) fn hex_lower_ref() -> &'static Charset {
+    &HEX_LOWER
 }
 
 fn derive_fake_core(
@@ -422,5 +541,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fake1, fake2, "same inputs must produce same fake (INV-13)");
+    }
+}
+
+#[cfg(test)]
+mod bitmap_tests {
+    use super::*;
+
+    #[test]
+    fn test_bitmap_matches_vec() {
+        let vec_alphanum = charsets::alphanumeric();
+        for b in 0u8..=255 {
+            assert_eq!(
+                ALPHANUMERIC.contains(b),
+                vec_alphanum.contains(&b),
+                "mismatch at byte {}",
+                b
+            );
+        }
+    }
+
+    #[test]
+    fn test_charset_bytes_iteration() {
+        assert_eq!(ALPHANUMERIC.bytes().len(), 62);
+        assert_eq!(DIGITS.bytes().len(), 10);
+        assert_eq!(HEX_LOWER.bytes().len(), 16);
     }
 }
