@@ -55,6 +55,13 @@ pub struct UnscrubStream<S> {
 /// with entries produced by [`scrub`]).
 ///
 /// [`scrub`]: crate::scrub
+///
+/// # Ownership
+///
+/// Takes `SessionKey` by value (unlike sync [`unscrub`] which borrows).
+/// The stream must own the key for its `'static` lifetime across poll cycles.
+///
+/// [`unscrub`]: crate::unscrub
 #[must_use = "the stream must be polled to process data"]
 pub fn unscrub_stream<S>(
     inner: S,

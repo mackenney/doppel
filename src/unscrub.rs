@@ -44,6 +44,11 @@ const CHUNK_SIZE: usize = 4096;
 /// .unwrap();
 /// assert_eq!(restored, payload);
 /// ```
+///
+/// # Ownership
+///
+/// Borrows `SessionKey` (unlike async `unscrub_stream` which takes ownership).
+/// The function runs to completion synchronously, so borrowing is sufficient.
 pub fn unscrub<R: Read, W: Write>(
     input: &mut R,
     output: &mut W,
