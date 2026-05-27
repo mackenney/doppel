@@ -54,6 +54,7 @@ pub struct UnscrubStream<S> {
 /// with entries produced by [`scrub`]).
 ///
 /// [`scrub`]: crate::scrub
+#[must_use = "the stream must be polled to process data"]
 pub fn unscrub_stream<S>(
     inner: S,
     entries: Vec<Entry>,
@@ -65,6 +66,13 @@ where
     let ac = if entries.is_empty() {
         None
     } else {
+        for (idx, e) in entries.iter().enumerate() {
+            if e.fake.is_empty() {
+                return Err(UnscrubError::Build {
+                    msg: format!("empty fake in entry at index {idx}"),
+                });
+            }
+        }
         let fakes: Vec<&[u8]> = entries.iter().map(|e| e.fake.as_slice()).collect();
         Some(
             AhoCorasick::builder()
@@ -396,6 +404,24 @@ mod tests {
         assert_eq!(
             result, payload,
             "fake split exactly at chunk boundary must restore"
+        );
+    }
+    #[test]
+    fn test_empty_fake_rejected_stream() {
+        use crate::types::{Entry, SessionKey};
+        // An Entry with an empty fake must cause the constructor to return Err,
+        // not succeed and produce an infinite loop.
+        let bad_entry = Entry {
+            fake: vec![],
+            ciphertext: vec![0u8; 32],
+            nonce: vec![0u8; 12],
+        };
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let inner = futures::stream::empty::<Result<Bytes, io::Error>>();
+        let result = unscrub_stream(inner, vec![bad_entry], session_key);
+        assert!(
+            matches!(result, Err(UnscrubError::Build { .. })),
+            "empty fake must return Err(Build)"
         );
     }
 }
