@@ -885,7 +885,6 @@ fn test_inv25_collision_limit_path_exists() {
     );
 }
 
-#[cfg(feature = "async")]
 #[test]
 fn test_inv_empty_fake_sync_rejected() {
     // The empty-fake guard MUST fire before AhoCorasick build to prevent
