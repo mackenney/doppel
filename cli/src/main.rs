@@ -431,7 +431,7 @@ fn run_inspect(
 
         println!("Tier 1 pattern: {}", id);
         println!("  Type: {}", type_str);
-        println!("  Salt: {}...", salt_fingerprint);
+        println!("  Salt: {}...", &*salt_fingerprint);
         println!("  Segments:");
 
         match &entry.segments {
@@ -474,7 +474,7 @@ fn run_inspect(
         println!("  Preserve suffix: {} bytes", entry.preserve_suffix);
         println!("  Variable portion: {} bytes", variable);
         println!("  Charset: {}", charset_desc);
-        println!("  Salt: {}...", salt_fingerprint);
+        println!("  Salt: {}...", &*salt_fingerprint);
     } else {
         return Err("specify --identifier or --label".into());
     }
@@ -622,8 +622,8 @@ fn write_key_file(path: &Path, key_bytes: &[u8; 32]) -> std::io::Result<()> {
     Ok(())
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+fn hex_encode(bytes: &[u8]) -> zeroize::Zeroizing<String> {
+    zeroize::Zeroizing::new(bytes.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
 fn run_unscrub(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -634,10 +634,15 @@ fn run_unscrub(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use std::io;
 
     // INV-20: session key ONLY via ITS_CLASSIFIED_KEY env var
-    let key_hex = std::env::var("ITS_CLASSIFIED_KEY")
-        .map_err(|_| "ITS_CLASSIFIED_KEY environment variable not set")?;
-    let key_bytes = hex_decode(&key_hex).map_err(|_| "ITS_CLASSIFIED_KEY is not valid hex")?;
+    let key_hex = zeroize::Zeroizing::new(
+        std::env::var("ITS_CLASSIFIED_KEY")
+            .map_err(|_| "ITS_CLASSIFIED_KEY environment variable not set")?,
+    );
+    let key_bytes: zeroize::Zeroizing<Vec<u8>> = zeroize::Zeroizing::new(
+        hex_decode(&key_hex).map_err(|_| "ITS_CLASSIFIED_KEY is not valid hex")?,
+    );
     let key_array: [u8; 32] = key_bytes
+        .as_slice()
         .try_into()
         .map_err(|_| "ITS_CLASSIFIED_KEY must be 64 hex characters (32 bytes)")?;
     let session_key = SessionKey::from_bytes(key_array);
