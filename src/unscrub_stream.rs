@@ -128,8 +128,7 @@ impl<S> UnscrubStream<S> {
                     let chunk = Bytes::copy_from_slice(&self.buffer[cursor..safe_end]);
                     self.pending.push_back(Ok(chunk));
                     cursor = safe_end;
-                    // Loop: with max_hold == 0, cursor == buffer.len() after draining,
-                    // then remaining == 0 → break.
+                    break;
                 }
                 Some(ac) => {
                     match ac.find(Input::new(&self.buffer).range(cursor..)) {
@@ -466,7 +465,7 @@ mod tests {
         let bad_entry = Entry {
             fake: vec![],
             ciphertext: vec![0u8; 32],
-            nonce: vec![0u8; 12],
+            nonce: vec![0u8; 24],
         };
         let session_key = SessionKey::from_bytes([0u8; 32]);
         let inner = futures::stream::empty::<Result<Bytes, io::Error>>();

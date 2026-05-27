@@ -297,5 +297,9 @@ mod tests {
             matches!(result, Err(UnscrubError::Build { .. })),
             "empty fake must return Err(Build)"
         );
+        assert!(
+            output.is_empty(),
+            "guard must fire before any bytes are written"
+        );
     }
 }
