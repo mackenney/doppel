@@ -3,7 +3,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use aho_corasick::{AhoCorasick, MatchKind};
+use aho_corasick::{AhoCorasick, Input, MatchKind};
 use bytes::Bytes;
 use futures_core::Stream;
 
@@ -105,48 +105,52 @@ impl<S> UnscrubStream<S> {
     /// Matches within the safe region are decrypted and pushed as individual
     /// items; the loop continues until no more matches fit within safe_end.
     fn process_buffer(&mut self) {
+        let mut cursor: usize = 0;
         loop {
+            let remaining = self.buffer.len() - cursor;
             let safe_end = if self.eof {
                 self.buffer.len()
-            } else if self.buffer.len() > self.max_hold {
+            } else if remaining > self.max_hold {
                 self.buffer.len() - self.max_hold
             } else {
-                return;
+                break;
             };
 
-            if safe_end == 0 {
-                return;
+            if safe_end <= cursor {
+                break;
             }
 
             match &self.ac {
                 None => {
                     // No entries: forward all safe bytes as one chunk.
+                    // cursor stays 0 in this branch; drain inline as before.
                     let chunk = Bytes::copy_from_slice(&self.buffer[..safe_end]);
                     self.buffer.drain(..safe_end);
                     self.pending.push_back(Ok(chunk));
-                    // Loop: with max_hold == 0, safe_end == buffer.len() again
-                    // until buffer is empty, then safe_end == 0 → return.
+                    // Loop: with max_hold == 0, safe_end == buffer.len() each
+                    // iteration until buffer is empty, then remaining == 0 → break.
                 }
                 Some(ac) => {
-                    match ac.find(&self.buffer) {
+                    match ac.find(Input::new(&self.buffer).range(cursor..)) {
                         None => {
-                            // No match anywhere in buffer: safe to emit up to safe_end.
-                            let chunk = Bytes::copy_from_slice(&self.buffer[..safe_end]);
-                            self.buffer.drain(..safe_end);
+                            // No match in unprocessed region: emit cursor..safe_end.
+                            let chunk = Bytes::copy_from_slice(&self.buffer[cursor..safe_end]);
                             self.pending.push_back(Ok(chunk));
-                            return;
+                            cursor = safe_end;
+                            break;
                         }
                         Some(m) if m.start() >= safe_end => {
-                            // Match falls inside the hold window: emit only up to safe_end.
-                            let chunk = Bytes::copy_from_slice(&self.buffer[..safe_end]);
-                            self.buffer.drain(..safe_end);
+                            // Match is in the hold window: emit cursor..safe_end.
+                            let chunk = Bytes::copy_from_slice(&self.buffer[cursor..safe_end]);
                             self.pending.push_back(Ok(chunk));
-                            return;
+                            cursor = safe_end;
+                            break;
                         }
                         Some(m) => {
                             // Match starts inside the safe region: emit prefix then plaintext.
-                            if m.start() > 0 {
-                                let prefix = Bytes::copy_from_slice(&self.buffer[..m.start()]);
+                            if m.start() > cursor {
+                                let prefix =
+                                    Bytes::copy_from_slice(&self.buffer[cursor..m.start()]);
                                 self.pending.push_back(Ok(prefix));
                             }
                             let entry_idx = m.pattern().as_usize();
@@ -158,16 +162,19 @@ impl<S> UnscrubStream<S> {
                                     self.pending.push_back(Err(UnscrubError::AeadTagFailure {
                                         entry_index: entry_idx,
                                     }));
-                                    self.buffer.drain(..m.end());
-                                    return;
+                                    cursor = m.end();
+                                    break;
                                 }
                             }
-                            self.buffer.drain(..m.end());
-                            // Continue: more matches may follow within the safe region.
+                            cursor = m.end();
+                            // Continue: more matches may follow in the safe region.
                         }
                     }
                 }
             }
+        }
+        if cursor > 0 {
+            self.buffer.drain(..cursor);
         }
     }
 }
