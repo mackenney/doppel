@@ -55,6 +55,7 @@ pub mod tier1;
 pub(crate) mod tier2;
 pub mod types;
 pub(crate) mod unscrub;
+pub(crate) mod unscrub_core;
 #[cfg(feature = "async")]
 pub(crate) mod unscrub_stream;
 
