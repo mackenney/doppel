@@ -124,7 +124,8 @@ pub fn unscrub<R: Read, W: Write>(
                     output.write_all(&buffer[cursor..m.start()])?;
                     let entry_idx = m.pattern().as_usize();
                     let plaintext =
-                        decrypt_entry(session_key, &entries[entry_idx]).map_err(|_| {
+                        decrypt_entry(session_key, &entries[entry_idx]).map_err(|e| {
+                            log::debug!("AEAD decryption failed for entry {entry_idx}: {e}");
                             UnscrubError::AeadTagFailure {
                                 entry_index: entry_idx,
                             }
