@@ -124,12 +124,12 @@ impl<S> UnscrubStream<S> {
             match &self.ac {
                 None => {
                     // No entries: forward all safe bytes as one chunk.
-                    // cursor stays 0 in this branch; drain inline as before.
-                    let chunk = Bytes::copy_from_slice(&self.buffer[..safe_end]);
-                    self.buffer.drain(..safe_end);
+                    // Advance cursor so the post-loop epilogue drains uniformly.
+                    let chunk = Bytes::copy_from_slice(&self.buffer[cursor..safe_end]);
                     self.pending.push_back(Ok(chunk));
-                    // Loop: with max_hold == 0, safe_end == buffer.len() each
-                    // iteration until buffer is empty, then remaining == 0 → break.
+                    cursor = safe_end;
+                    // Loop: with max_hold == 0, cursor == buffer.len() after draining,
+                    // then remaining == 0 → break.
                 }
                 Some(ac) => {
                     match ac.find(Input::new(&self.buffer).range(cursor..)) {
@@ -158,6 +158,7 @@ impl<S> UnscrubStream<S> {
                             match decrypt_entry(&self.session_key, &self.entries[entry_idx]) {
                                 Ok(plaintext) => {
                                     let plaintext = Zeroizing::new(plaintext);
+                                    // copy_from_slice produces an unzeroized Bytes; Zeroizing zeroes the decrypt buffer only.
                                     self.pending
                                         .push_back(Ok(Bytes::copy_from_slice(&plaintext)));
                                 }
