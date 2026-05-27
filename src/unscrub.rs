@@ -302,4 +302,66 @@ mod tests {
             "guard must fire before any bytes are written"
         );
     }
+
+    #[test]
+    fn test_unscrub_empty_input() {
+        // An empty input must produce empty output with no error.
+        // Exercises the early-return fast path (entries.is_empty edge)
+        // and the eof-on-first-read path with entries present.
+        let sr = scrub(b"payload", &[patterns::anthropic()]).unwrap();
+        let mut input = b"".as_slice();
+        let mut output = Vec::new();
+        unscrub(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
+        assert!(output.is_empty(), "empty input must produce empty output");
+    }
+
+    #[test]
+    fn test_unscrub_two_distinct_secrets() {
+        // Two different key types → two entries → validates multi-entry AC indexing.
+        // sk-proj- (8) + 58×'A' + T3BlbkFJ (8) + 58×'B' = 132 chars total.
+        let anthropic_key = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
+        let openai_key: Vec<u8> = {
+            let mut k = b"sk-proj-".to_vec();
+            k.extend(std::iter::repeat(b'A').take(58));
+            k.extend_from_slice(b"T3BlbkFJ");
+            k.extend(std::iter::repeat(b'B').take(58));
+            k
+        };
+
+        let payload = [
+            b"anthropic: ".as_slice(),
+            anthropic_key,
+            b" openai: ",
+            openai_key.as_slice(),
+        ]
+        .concat();
+
+        let sr = scrub(
+            &payload,
+            &[patterns::anthropic(), patterns::openai_project()],
+        )
+        .unwrap();
+        assert_eq!(sr.entries.len(), 2, "must detect two distinct secrets");
+
+        let mut input = sr.payload.as_slice();
+        let mut output = Vec::new();
+        unscrub(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
+        assert_eq!(output, payload, "both distinct secrets must be restored");
+    }
+
+    #[test]
+    fn test_unscrub_tier2_roundtrip() {
+        // Tier 2 registered secret exercises the HMAC-based fake path.
+        let secret = b"my-custom-tier2-api-token-that-is-long-enough-for-registration-abcd1234";
+        let pattern = crate::register(secret).expect("register failed");
+        let payload = [b"Bearer ".as_slice(), secret, b" end"].concat();
+
+        let sr = scrub(&payload, &[pattern]).unwrap();
+        assert_eq!(sr.entries.len(), 1, "Tier 2 scrub must produce one entry");
+
+        let mut input = sr.payload.as_slice();
+        let mut output = Vec::new();
+        unscrub(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
+        assert_eq!(output, payload, "Tier 2 secret must be restored correctly");
+    }
 }
