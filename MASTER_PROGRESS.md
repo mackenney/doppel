@@ -12,7 +12,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## In Progress
 
-- `review-remediation` — INV-12 CLI zeroization, async spec tests (INV-5/6/8), unscrub shared abstraction, charset optimizations, AC pre-filter → [plans/review-remediation](./plans/review-remediation/PROGRESS.md)
+*(none)*
 
 ## Queued
 
@@ -28,6 +28,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 - `patterns-file-stable-fakes` — deterministic fakes across restarts (INV-13), Tier 2 at-match derivation, PatternsFile JSON serde, CLI init/register/--patterns, 102 tests; merge commit 6904209
 - `toml-patterns-user-tier1` — TOML+hex patterns file (v2), user-defined Tier 1 patterns, CLI define/list/inspect/remove, register --label, CollisionLimit fix; commit 7e4b9a8
 - `sync-test-parity` — parity async/sync unscrub tests: empty input, two distinct secrets, Tier 2; INV-5 ref in async Zeroizing; commit 0922dd4
+- `review-remediation` — INV-12 CLI zeroization, async spec tests (INV-5/6/8), shared unscrub abstraction (process_safe_region), charset O(1) bitmap+static, AC pre-filter, dedup alloc fix; commit 36f8099
 - `unscrub-followup` — zeroize decrypted plaintext in sync unscrub, AEAD log in sync; commit 3bb4f97
 - `test-cleanup` — nonce consistency (24-byte), output.is_empty() assertion, explicit break in None branch; commit 54201f0
 - `unscrub-fixes` — empty-fake guard, cursor O(n) refactor, zeroize plaintext, AEAD log, #[must_use], async tests; commit 35dfb76
