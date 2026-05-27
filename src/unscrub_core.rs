@@ -31,7 +31,6 @@ use aho_corasick::{AhoCorasick, Input};
 // Callers added in steps 06 (unscrub) and 07 (unscrub_stream).
 // All parameters are logically distinct parts of the algorithm's context;
 // grouping them into a struct would add indirection without improving clarity.
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn process_safe_region<F, G, E>(
     buffer: &mut Vec<u8>,
@@ -53,6 +52,7 @@ where
         let remaining = buffer.len() - cursor;
 
         // INV-8: Compute safe_end — how far we can safely process
+        // INV-8: Compute safe_end — how far we can safely process
         let safe_end = if eof {
             buffer.len()
         } else if remaining > max_hold {
@@ -60,6 +60,13 @@ where
         } else {
             break;
         };
+
+        // Nothing safe to process (e.g. empty buffer with eof=true).
+        // Avoids calling emit with an empty slice, which would make async
+        // poll_next emit empty Bytes items and never return None.
+        if safe_end <= cursor {
+            break;
+        }
 
         // Find next fake match in the safe region
         match ac.find(Input::new(&buffer[..]).range(cursor..)) {

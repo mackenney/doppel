@@ -3,14 +3,13 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use aho_corasick::{AhoCorasick, Input, MatchKind};
+use aho_corasick::{AhoCorasick, MatchKind};
 use bytes::Bytes;
 use futures_core::Stream;
-use zeroize::Zeroizing;
 
-use crate::crypto::decrypt_entry;
 use crate::types::{Entry, SessionKey};
 use crate::unscrub::UnscrubError;
+use crate::unscrub_core::process_safe_region;
 
 /// Async stream adapter that restores scrubbed secrets as bytes flow through.
 ///
@@ -108,87 +107,39 @@ where
 impl<S> UnscrubStream<S> {
     /// Drain the safe region of `self.buffer` into `self.pending`.
     ///
-    /// "Safe" bytes are those that cannot be the start of any fake: at least
-    /// `max_hold` bytes trail them (or we are at EOF and all bytes are safe).
-    /// Matches within the safe region are decrypted and pushed as individual
-    /// items; the loop continues until no more matches fit within safe_end.
+    /// Delegates to [`process_safe_region`] when entries are present.
+    /// When there are no entries (`ac` is `None`), `max_hold` is 0 and all
+    /// buffered bytes are immediately safe; they are forwarded as one chunk.
     fn process_buffer(&mut self) {
-        let mut cursor: usize = 0;
-        loop {
-            let remaining = self.buffer.len() - cursor;
-            let safe_end = if self.eof {
-                self.buffer.len()
-            } else if remaining > self.max_hold {
-                self.buffer.len() - self.max_hold
-            } else {
-                break;
-            };
-
-            if safe_end <= cursor {
-                break;
+        let Some(ac) = &self.ac else {
+            // No entries: max_hold is 0, so all buffered bytes are safe to emit.
+            if !self.buffer.is_empty() {
+                self.pending
+                    .push_back(Ok(Bytes::copy_from_slice(&self.buffer)));
+                self.buffer.clear();
             }
+            return;
+        };
 
-            match &self.ac {
-                None => {
-                    // No entries: forward all safe bytes as one chunk.
-                    // Advance cursor so the post-loop epilogue drains uniformly.
-                    let chunk = Bytes::copy_from_slice(&self.buffer[cursor..safe_end]);
-                    self.pending.push_back(Ok(chunk));
-                    cursor = safe_end;
-                    break;
-                }
-                Some(ac) => {
-                    match ac.find(Input::new(&self.buffer).range(cursor..)) {
-                        None => {
-                            // No match in unprocessed region: emit cursor..safe_end.
-                            let chunk = Bytes::copy_from_slice(&self.buffer[cursor..safe_end]);
-                            self.pending.push_back(Ok(chunk));
-                            cursor = safe_end;
-                            break;
-                        }
-                        Some(m) if m.start() >= safe_end => {
-                            // Match is in the hold window: emit cursor..safe_end.
-                            let chunk = Bytes::copy_from_slice(&self.buffer[cursor..safe_end]);
-                            self.pending.push_back(Ok(chunk));
-                            cursor = safe_end;
-                            break;
-                        }
-                        Some(m) => {
-                            // Match starts inside the safe region: emit prefix then plaintext.
-                            if m.start() > cursor {
-                                let prefix =
-                                    Bytes::copy_from_slice(&self.buffer[cursor..m.start()]);
-                                self.pending.push_back(Ok(prefix));
-                            }
-                            let entry_idx = m.pattern().as_usize();
-                            match decrypt_entry(&self.session_key, &self.entries[entry_idx]) {
-                                Ok(plaintext) => {
-                                    let plaintext = Zeroizing::new(plaintext);
-                                    // INV-5: emit plaintext ONLY after successful decryption.
-                                    // copy_from_slice produces an unzeroized Bytes; Zeroizing zeroes the decrypt buffer only.
-                                    self.pending
-                                        .push_back(Ok(Bytes::copy_from_slice(&plaintext)));
-                                }
-                                Err(e) => {
-                                    log::debug!(
-                                        "AEAD decryption failed for entry {entry_idx}: {e}"
-                                    );
-                                    self.pending.push_back(Err(UnscrubError::AeadTagFailure {
-                                        entry_index: entry_idx,
-                                    }));
-                                    cursor = m.end();
-                                    break;
-                                }
-                            }
-                            cursor = m.end();
-                            // Continue: more matches may follow in the safe region.
-                        }
-                    }
-                }
-            }
-        }
-        if cursor > 0 {
-            self.buffer.drain(..cursor);
+        let pending = &mut self.pending;
+        let result = process_safe_region(
+            &mut self.buffer,
+            ac,
+            &self.entries,
+            &self.session_key,
+            self.eof,
+            self.max_hold,
+            &mut |bytes| {
+                pending.push_back(Ok(Bytes::copy_from_slice(bytes)));
+                Ok::<(), UnscrubError>(())
+            },
+            &mut |entry_idx| UnscrubError::AeadTagFailure {
+                entry_index: entry_idx,
+            },
+        );
+
+        if let Err(e) = result {
+            pending.push_back(Err(e));
         }
     }
 }
