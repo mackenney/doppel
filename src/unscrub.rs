@@ -62,6 +62,13 @@ pub fn unscrub<R: Read, W: Write>(
         return Ok(());
     }
 
+    for (idx, e) in entries.iter().enumerate() {
+        if e.fake.is_empty() {
+            return Err(UnscrubError::Build {
+                msg: format!("empty fake in entry at index {idx}"),
+            });
+        }
+    }
     // Build Aho-Corasick automaton from fake byte strings
     let fakes: Vec<&[u8]> = entries.iter().map(|e| e.fake.as_slice()).collect();
     let ac = AhoCorasick::builder()
@@ -259,6 +266,25 @@ mod tests {
         assert_eq!(
             output, real_key_in_response,
             "INV-19: real key in response must pass through unchanged"
+        );
+    }
+    #[test]
+    fn test_empty_fake_rejected_sync() {
+        use crate::types::{Entry, SessionKey};
+        // An Entry with an empty fake must cause unscrub() to return Err(Build),
+        // not succeed and produce an infinite loop.
+        let bad_entry = Entry {
+            fake: vec![],
+            ciphertext: vec![0u8; 32],
+            nonce: vec![0u8; 12],
+        };
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let mut input = b"some input".as_slice();
+        let mut output = Vec::new();
+        let result = unscrub(&mut input, &mut output, &[bad_entry], &session_key);
+        assert!(
+            matches!(result, Err(UnscrubError::Build { .. })),
+            "empty fake must return Err(Build)"
         );
     }
 }
