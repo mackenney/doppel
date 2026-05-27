@@ -12,6 +12,8 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## In Progress
 
+- `unscrub-fixes` — empty-fake guard (BLOCKER), O(n²) cursor refactor, zeroize plaintext, AEAD log, #[must_use], bytes dep cleanup, 3 new async tests → [plans/unscrub-fixes](./plans/unscrub-fixes/PROGRESS.md)
+
 ## Queued
 
 ## Completed
