@@ -1,10 +1,9 @@
 use std::io::{Read, Write};
 
-use aho_corasick::{AhoCorasick, Input, MatchKind};
+use aho_corasick::{AhoCorasick, MatchKind};
 
-use crate::crypto::decrypt_entry;
 use crate::types::{Entry, SessionKey};
-use zeroize::Zeroizing;
+use crate::unscrub_core::process_safe_region;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UnscrubError {
@@ -96,59 +95,18 @@ pub fn unscrub<R: Read, W: Write>(
             buffer.extend_from_slice(&chunk[..n]);
         }
 
-        // Emit safe bytes (with match handling)
-        let mut cursor: usize = 0;
-        loop {
-            let remaining = buffer.len() - cursor;
-            let safe_end = if eof {
-                buffer.len()
-            } else if remaining > max_hold {
-                buffer.len() - max_hold
-            } else {
-                break;
-            };
-
-            if safe_end <= cursor {
-                break;
-            }
-
-            match ac.find(Input::new(&buffer).range(cursor..)) {
-                None => {
-                    // No match in unprocessed region: emit cursor..safe_end
-                    output.write_all(&buffer[cursor..safe_end])?;
-                    cursor = safe_end;
-                    break;
-                }
-                Some(m) if m.start() >= safe_end => {
-                    // Match is in the hold region; emit cursor..safe_end, hold the rest
-                    output.write_all(&buffer[cursor..safe_end])?;
-                    cursor = safe_end;
-                    break;
-                }
-                Some(m) => {
-                    // Match starts before safe_end; decrypt and restore
-                    output.write_all(&buffer[cursor..m.start()])?;
-                    let entry_idx = m.pattern().as_usize();
-                    let plaintext = Zeroizing::new(
-                        decrypt_entry(session_key, &entries[entry_idx]).map_err(|e| {
-                            log::debug!("AEAD decryption failed for entry {entry_idx}: {e}");
-                            UnscrubError::AeadTagFailure {
-                                entry_index: entry_idx,
-                            }
-                        })?,
-                    );
-                    // INV-5: emit plaintext ONLY after successful decryption.
-                    // Zeroizing zeroes the decrypt buffer on drop; write_all copies
-                    // to the caller's writer without further zeroing.
-                    output.write_all(&plaintext)?;
-                    cursor = m.end();
-                    // Continue inner loop: more matches may exist in the remaining safe region
-                }
-            }
-        }
-        if cursor > 0 {
-            buffer.drain(..cursor);
-        }
+        process_safe_region(
+            &mut buffer,
+            &ac,
+            entries,
+            session_key,
+            eof,
+            max_hold,
+            &mut |bytes| output.write_all(bytes).map_err(UnscrubError::Io),
+            &mut |entry_idx| UnscrubError::AeadTagFailure {
+                entry_index: entry_idx,
+            },
+        )?;
 
         if eof {
             break;
