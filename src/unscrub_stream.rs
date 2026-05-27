@@ -483,9 +483,9 @@ mod tests {
         // sk-proj- (8) + 58 'A' chars + T3BlbkFJ (8) + 58 'B' chars = 132 chars total.
         let openai_key: Vec<u8> = {
             let mut k = b"sk-proj-".to_vec();
-            k.extend(std::iter::repeat(b'A').take(58));
+            k.extend(std::iter::repeat_n(b'A', 58));
             k.extend_from_slice(b"T3BlbkFJ");
-            k.extend(std::iter::repeat(b'B').take(58));
+            k.extend(std::iter::repeat_n(b'B', 58));
             k
         };
 

@@ -305,10 +305,15 @@ mod tests {
 
     #[test]
     fn test_unscrub_empty_input() {
-        // An empty input must produce empty output with no error.
-        // Exercises the early-return fast path (entries.is_empty edge)
-        // and the eof-on-first-read path with entries present.
-        let sr = scrub(b"payload", &[patterns::anthropic()]).unwrap();
+        // Empty input with entries present must produce empty output with no error.
+        // Exercises the eof-on-first-read path through the AhoCorasick inner loop.
+        let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
+        let payload = [b"Authorization: ".as_slice(), secret].concat();
+        let sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
+        assert!(
+            !sr.entries.is_empty(),
+            "entries must be present for this test to be meaningful"
+        );
         let mut input = b"".as_slice();
         let mut output = Vec::new();
         unscrub(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
@@ -322,9 +327,9 @@ mod tests {
         let anthropic_key = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let openai_key: Vec<u8> = {
             let mut k = b"sk-proj-".to_vec();
-            k.extend(std::iter::repeat(b'A').take(58));
+            k.extend(std::iter::repeat_n(b'A', 58));
             k.extend_from_slice(b"T3BlbkFJ");
-            k.extend(std::iter::repeat(b'B').take(58));
+            k.extend(std::iter::repeat_n(b'B', 58));
             k
         };
 
