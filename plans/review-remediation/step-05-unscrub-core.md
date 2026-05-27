@@ -1,0 +1,194 @@
+# Step 05: Create unscrub_core Module
+
+## Context
+### Overall Objective
+Fix INV-12 violations, add async spec tests, consolidate duplicated unscrub logic, and optimize scrub hot-path with static charsets and Aho-Corasick pre-filtering.
+
+### Phase Context
+Wave 2 — Create shared abstraction for the duplicated sliding-window algorithm. This module MUST be complete before Steps 06 and 07 can refactor sync/async to use it.
+
+### This Step
+Create a new private module `src/unscrub_core.rs` containing `process_safe_region`, a callback-based function that implements the shared sliding-window replacement logic. Both sync and async unscrub will call this with different emit/error callbacks.
+
+## Prerequisites
+- Wave 1 complete (hygiene fixes, tests, docs)
+
+## Files to Read Before Starting
+- `src/unscrub.rs` lines 95-146 — current sync loop implementation
+- `src/unscrub_stream.rs` lines 109-186 — current async `process_buffer` loop
+- `SPEC.md` — INV-5, INV-6, INV-8, INV-19 constraints that MUST be preserved
+
+## Implementation
+### Task 1: Create the module file
+**File:** `src/unscrub_core.rs` (new file)
+
+```rust
+//! Shared sliding-window replacement logic for unscrub operations.
+//!
+//! This module is internal to the crate. Both sync `unscrub` and async
+//! `UnscrubStream` delegate to `process_safe_region` with appropriate
+//! emit and error callbacks.
+
+use crate::crypto::decrypt_entry;
+use crate::types::{Entry, SessionKey};
+use aho_corasick::{AhoCorasick, Input, MatchKind};
+
+/// Process the safe region of the buffer, replacing fakes with originals.
+///
+/// # Arguments
+/// - `buffer`: Mutable buffer containing accumulated input bytes
+/// - `ac`: Aho-Corasick automaton built from fake patterns
+/// - `entries`: Slice of Entry structs with ciphertext for each fake
+/// - `session_key`: Key for AEAD decryption
+/// - `eof`: Whether input stream has ended (process all remaining bytes)
+/// - `max_hold`: Maximum bytes to hold unemitted (INV-8 bound)
+/// - `emit`: Callback to output bytes; called with byte slices to emit
+/// - `on_aead_failure`: Callback to produce error value on AEAD tag failure
+///
+/// # Invariants Preserved
+/// - INV-5: Plaintext emitted only after `decrypt_entry` succeeds
+/// - INV-6: AEAD failure returns immediately via `on_aead_failure`
+/// - INV-8: At most `max_hold` bytes remain in buffer after return (unless error)
+/// - INV-19: Uses AhoCorasick with LeftmostFirst for exact matching
+///
+/// # Returns
+/// `Ok(())` on success (all safe bytes emitted), `Err(E)` on AEAD failure.
+pub(crate) fn process_safe_region<F, G, E>(
+    buffer: &mut Vec<u8>,
+    ac: &AhoCorasick,
+    entries: &[Entry],
+    session_key: &SessionKey,
+    eof: bool,
+    max_hold: usize,
+    emit: &mut F,
+    on_aead_failure: &mut G,
+) -> Result<(), E>
+where
+    F: FnMut(&[u8]) -> Result<(), E>,
+    G: FnMut(usize) -> E,
+{
+    let mut cursor = 0;
+
+    loop {
+        let remaining = buffer.len() - cursor;
+
+        // INV-8: Compute safe_end — how far we can safely process
+        let safe_end = if eof {
+            buffer.len()
+        } else if remaining > max_hold {
+            buffer.len() - max_hold
+        } else {
+            break;
+        };
+
+        // Find next fake match in the safe region
+        match ac.find(Input::new(&buffer[..]).range(cursor..)) {
+            Some(mat) if mat.start() < safe_end => {
+            let match_start = mat.start();
+            let match_end = mat.end();
+            let pattern_idx = mat.pattern().as_usize();
+
+            // Emit bytes before the match
+            if match_start > cursor {
+                emit(&buffer[cursor..match_start])?;
+            }
+
+            // INV-5/INV-6: Decrypt and emit original, or fail immediately
+            let entry = &entries[pattern_idx];
+            match decrypt_entry(session_key, entry) {
+                Ok(plaintext) => {
+                    emit(&plaintext)?;
+                }
+                Err(_) => {
+                    return Err(on_aead_failure(pattern_idx));
+                }
+            }
+
+            cursor = match_end;
+            // continue inner loop — more matches may exist in safe region
+            }
+            // match starts in hold region — emit safe bytes and stop
+            Some(mat) => {
+                emit(&buffer[cursor..safe_end])?;
+                cursor = safe_end;
+                break;
+            }
+            None => {
+                // No match — emit all safe bytes
+                emit(&buffer[cursor..safe_end])?;
+                cursor = safe_end;
+                break;
+            }
+        }
+    }
+
+    // Remove processed bytes from buffer
+    if cursor > 0 {
+        buffer.drain(..cursor);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_safe_region_no_matches() {
+        let mut buffer = b"hello world".to_vec();
+        use aho_corasick::MatchKind;
+        let ac = AhoCorasick::builder().match_kind(MatchKind::LeftmostFirst).build::<Vec<&[u8]>>(vec![]).unwrap();
+        let entries: Vec<Entry> = vec![];
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+
+        let mut output = Vec::new();
+        let mut emit = |bytes: &[u8]| -> Result<(), ()> {
+            output.extend_from_slice(bytes);
+            Ok(())
+        };
+        let mut on_err = |_idx: usize| ();
+
+        process_safe_region(
+            &mut buffer, &ac, &entries, &session_key,
+            true, 0, &mut emit, &mut on_err
+        ).unwrap();
+
+        assert_eq!(output, b"hello world");
+        assert!(buffer.is_empty());
+    }
+}
+```
+
+### Task 2: Register module in lib.rs
+**File:** `src/lib.rs`
+
+Add after other `pub(crate) mod` declarations:
+```rust
+pub(crate) mod unscrub_core;
+```
+
+## Acceptance Criteria
+- [ ] `cargo build -p its-classified` exits 0
+- [ ] `cargo test -p its-classified unscrub_core` runs the unit test
+- [ ] `src/unscrub_core.rs` exists with `process_safe_region` function
+- [ ] `grep "pub(crate) mod unscrub_core" src/lib.rs` returns 1 match
+- [ ] Function signature matches: `process_safe_region<F, G, E>(buffer, ac, entries, session_key, eof, max_hold, emit, on_aead_failure) -> Result<(), E>`
+- [ ] Doc comments reference INV-5, INV-6, INV-8, INV-19
+
+## Reviewer Instructions
+You are reviewing Step 05. Verify:
+1. Run `cargo build -p its-classified` — must exit 0
+2. Check `src/unscrub_core.rs` contains `process_safe_region` with documented invariants
+3. Verify `safe_end` formula: `if eof { buffer.len() } else if remaining > max_hold { buffer.len() - max_hold } else { break }` — this is INV-8
+4. Verify `decrypt_entry` failure returns immediately (INV-6)
+5. Verify `emit` is only called after successful decrypt (INV-5)
+6. Run `cargo test -p its-classified unscrub_core` — unit test passes
+
+Report: "PASS" with each criterion confirmed, or "FAIL: <criterion> — <reason>"
+
+## Rollback
+```
+rm src/unscrub_core.rs
+git checkout src/lib.rs
+```
