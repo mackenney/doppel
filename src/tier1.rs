@@ -1,5 +1,6 @@
 use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use crate::tier2::Tier2Pat;
+use aho_corasick::AhoCorasick;
 use std::sync::{Arc, LazyLock};
 
 /// Structural definition of a Tier 1 built-in secret class.
@@ -437,6 +438,32 @@ pub(crate) fn all_defs() -> &'static [&'static Tier1Def] {
     &ALL_TIER1_DEFS
 }
 
+static TIER1_PREFIXES: &[&[u8]] = &[
+    b"sk-ant-api03-",
+    b"sk-ant-admin01-",
+    b"sk-ant-admin03-",
+    b"sk-proj-",
+    b"sk-svcacct-",
+    b"sk-or-v1-",
+    b"sk-",
+    b"AKIA",
+    b"ASIA",
+    b"ghp_",
+    b"github_pat_",
+    b"AIza",
+    b"GOCSPX-",
+    b"xoxb-",
+    b"lin_api_",
+];
+
+pub(crate) static TIER1_PREFIX_FILTER: LazyLock<AhoCorasick> =
+    LazyLock::new(|| AhoCorasick::new(TIER1_PREFIXES).expect("failed to build Tier 1 prefix AC"));
+
+/// Returns the pre-built Aho-Corasick automaton for Tier 1 literal prefix detection.
+pub(crate) fn prefix_filter() -> &'static AhoCorasick {
+    &TIER1_PREFIX_FILTER
+}
+
 /// A detection descriptor for [`crate::scrub`].
 ///
 /// Obtain via [`patterns`] functions or [`crate::register`]/[`crate::register_with_options`].
@@ -447,6 +474,12 @@ pub(crate) fn all_defs() -> &'static [&'static Tier1Def] {
 pub enum Pattern {
     Tier1(Tier1Def),
     Tier2(Arc<Tier2Pat>),
+}
+
+impl Pattern {
+    pub(crate) fn is_tier2(&self) -> bool {
+        matches!(self, Pattern::Tier2(_))
+    }
 }
 
 /// Built-in Tier 1 patterns. Pass these to scrub() to detect well-known API key formats.

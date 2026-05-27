@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::crypto::encrypt_secret;
 use crate::crypto::generate_session_key;
 use crate::fake::FakeError;
-use crate::tier1::{Pattern, Tier1Def};
+use crate::tier1::{Pattern, Tier1Def, prefix_filter};
 use crate::tier2::Tier2Pat;
 use crate::types::{Entry, ScrubError, ScrubResult};
 
@@ -103,8 +103,24 @@ pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> Result<ScrubResult, ScrubE
     let mut entries: Vec<Entry> = Vec::new();
     let mut seen: HashMap<&[u8], usize> = HashMap::new();
     let mut pos = 0;
+    let has_tier2 = patterns.iter().any(|p| p.is_tier2());
 
     while pos < payload.len() {
+        if !has_tier2 {
+            // Jump to next Tier 1 prefix candidate, bulk-copying non-candidate bytes.
+            let next_candidate = prefix_filter()
+                .find(&payload[pos..])
+                .map(|m| pos + m.start())
+                .unwrap_or(payload.len());
+            if next_candidate > pos {
+                output.extend_from_slice(&payload[pos..next_candidate]);
+                pos = next_candidate;
+            }
+            if pos >= payload.len() {
+                break;
+            }
+        }
+
         match find_best_match(payload, pos, patterns)? {
             None => {
                 // INV-2: copy this byte unchanged
