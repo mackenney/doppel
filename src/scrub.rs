@@ -101,7 +101,7 @@ pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> Result<ScrubResult, ScrubE
     let session_key = generate_session_key();
     let mut output = Vec::with_capacity(payload.len());
     let mut entries: Vec<Entry> = Vec::new();
-    let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut seen: HashMap<&[u8], usize> = HashMap::new();
     let mut pos = 0;
 
     while pos < payload.len() {
@@ -112,18 +112,18 @@ pub fn scrub(payload: &[u8], patterns: &[Pattern]) -> Result<ScrubResult, ScrubE
                 pos += 1;
             }
             Some(m) => {
-                let secret = payload[m.start..m.end].to_vec();
+                let matched_slice = &payload[m.start..m.end];
 
-                let (fake, _entry_idx) = if let Some(&idx) = seen.get(&secret) {
+                let (fake, _entry_idx) = if let Some(&idx) = seen.get(matched_slice) {
                     // INV-14: same secret → reuse existing fake and entry
                     (entries[idx].fake.clone(), idx)
                 } else {
                     // New secret: generate fake, encrypt, create entry
-                    let fake = generate_fake_for_match(&m, &secret)?;
-                    let entry = encrypt_secret(&session_key, fake.clone(), &secret)?;
+                    let fake = generate_fake_for_match(&m, matched_slice)?;
+                    let entry = encrypt_secret(&session_key, fake.clone(), matched_slice)?;
                     let idx = entries.len();
                     entries.push(entry);
-                    seen.insert(secret, idx);
+                    seen.insert(matched_slice, idx);
                     (fake, idx)
                 };
 
