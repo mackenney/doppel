@@ -56,7 +56,7 @@ pub(crate) mod tier2;
 pub mod types;
 pub(crate) mod unscrub;
 #[cfg(feature = "async")]
-pub mod unscrub_stream;
+pub(crate) mod unscrub_stream;
 
 pub use patterns_file::{PatternsFile, PatternsFileError, Tier1Entry, Tier2Entry};
 pub use scrub::scrub;

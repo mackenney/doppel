@@ -79,7 +79,7 @@ where
             AhoCorasick::builder()
                 .match_kind(MatchKind::LeftmostFirst)
                 .build(&fakes)
-                .map_err(|e| UnscrubError::Build { msg: e.to_string() })?,
+                .map_err(UnscrubError::from)?,
         )
     };
 
