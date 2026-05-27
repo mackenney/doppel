@@ -24,6 +24,7 @@ pub(crate) mod charsets {
     }
 
     /// [A-Z0-9] (uppercase only)
+    #[allow(dead_code)]
     pub fn uppercase_alphanumeric() -> Vec<u8> {
         let mut v: Vec<u8> = (b'A'..=b'Z').chain(b'0'..=b'9').collect();
         v.sort_unstable();
@@ -31,6 +32,7 @@ pub(crate) mod charsets {
     }
 
     /// [A-Za-z0-9_-]
+    #[allow(dead_code)]
     pub fn url_safe_base64() -> Vec<u8> {
         let mut v: Vec<u8> = (b'A'..=b'Z')
             .chain(b'a'..=b'z')
@@ -54,6 +56,7 @@ pub(crate) mod charsets {
     }
 
     /// [0-9a-f] (lowercase hex)
+    #[allow(dead_code)]
     pub fn hex_lower() -> Vec<u8> {
         let mut v: Vec<u8> = (b'0'..=b'9').chain(b'a'..=b'f').collect();
         v.sort_unstable();
@@ -61,6 +64,7 @@ pub(crate) mod charsets {
     }
 
     /// [0-9]
+    #[allow(dead_code)]
     pub fn digits() -> Vec<u8> {
         (b'0'..=b'9').collect()
     }
@@ -85,11 +89,10 @@ pub(crate) mod charsets {
 
 /// A 256-element bitmap for O(1) charset membership tests.
 #[derive(Clone)]
-#[allow(dead_code)] // callers migrated in next step
 pub(crate) struct CharsetBitmap([bool; 256]);
 
-#[allow(dead_code)] // callers migrated in next step
 impl CharsetBitmap {
+    #[allow(dead_code)]
     pub(crate) const fn empty() -> Self {
         Self([false; 256])
     }
@@ -102,13 +105,11 @@ impl CharsetBitmap {
 }
 
 /// A charset with both bitmap (for membership) and byte slice (for iteration).
-#[allow(dead_code)] // callers migrated in next step
 pub(crate) struct Charset {
     pub(crate) bitmap: CharsetBitmap,
     pub(crate) bytes: &'static [u8],
 }
 
-#[allow(dead_code)] // callers migrated in next step
 impl Charset {
     /// Check if byte is in the charset. O(1).
     #[inline]
@@ -129,7 +130,6 @@ impl Charset {
     }
 }
 
-#[allow(dead_code)] // callers migrated in next step
 fn build_bitmap(bytes: &[u8]) -> CharsetBitmap {
     let mut bits = [false; 256];
     for &b in bytes {
@@ -138,17 +138,12 @@ fn build_bitmap(bytes: &[u8]) -> CharsetBitmap {
     CharsetBitmap(bits)
 }
 
-#[allow(dead_code)]
 static ALPHANUMERIC_BYTES: &[u8] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-#[allow(dead_code)]
 static URL_SAFE_BASE64_BYTES: &[u8] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-#[allow(dead_code)]
 static UPPERCASE_ALPHANUMERIC_BYTES: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-#[allow(dead_code)]
 static DIGITS_BYTES: &[u8] = b"0123456789";
-#[allow(dead_code)]
 static HEX_LOWER_BYTES: &[u8] = b"0123456789abcdef";
 
 pub(crate) static ALPHANUMERIC: LazyLock<Charset> = LazyLock::new(|| Charset {
@@ -176,27 +171,22 @@ pub(crate) static HEX_LOWER: LazyLock<Charset> = LazyLock::new(|| Charset {
     bytes: HEX_LOWER_BYTES,
 });
 
-#[allow(dead_code)] // callers migrated in next step
 pub(crate) fn alphanumeric_ref() -> &'static Charset {
     &ALPHANUMERIC
 }
 
-#[allow(dead_code)] // callers migrated in next step
 pub(crate) fn url_safe_base64_ref() -> &'static Charset {
     &URL_SAFE_BASE64
 }
 
-#[allow(dead_code)] // callers migrated in next step
 pub(crate) fn uppercase_alphanumeric_ref() -> &'static Charset {
     &UPPERCASE_ALPHANUMERIC
 }
 
-#[allow(dead_code)] // callers migrated in next step
 pub(crate) fn digits_ref() -> &'static Charset {
     &DIGITS
 }
 
-#[allow(dead_code)] // callers migrated in next step
 pub(crate) fn hex_lower_ref() -> &'static Charset {
     &HEX_LOWER
 }
@@ -349,7 +339,7 @@ pub(crate) fn derive_fake_tier1_segments(
                                 break (r % cs_len) as usize;
                             }
                         };
-                        fake.push(cs[idx]);
+                        fake.push(cs.bytes()[idx]);
                     }
                 }
             }
@@ -368,7 +358,7 @@ pub(crate) fn derive_fake_tier1_segments(
 fn any_charset_is_empty(segments: &[Segment]) -> bool {
     segments.iter().any(|seg| {
         if let Segment::Variable { charset, .. } = seg {
-            charset.resolve().is_empty()
+            charset.resolve().len() == 0
         } else {
             false
         }

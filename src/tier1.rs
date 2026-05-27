@@ -1,5 +1,4 @@
-use crate::fake::charsets;
-use crate::segment::{BuiltinSegment, MatchCapture, Segment};
+use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use crate::tier2::Tier2Pat;
 use std::sync::{Arc, LazyLock};
 
@@ -63,7 +62,7 @@ fn match_segments(
                 if end > payload.len() {
                     continue;
                 }
-                if payload[cur..end].iter().all(|b| cs.contains(b)) {
+                if payload[cur..end].iter().all(|&b| cs.contains(b)) {
                     let saved = var_lens.len();
                     var_lens.push(var_len);
                     if let Some(result) = match_segments(payload, end, &segs[1..], var_lens) {
@@ -84,7 +83,7 @@ fn match_segments(
 const ANTHROPIC_SEGS: [BuiltinSegment; 3] = [
     BuiltinSegment::Literal(b"sk-ant-api03-"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 93,
         max: 93,
     },
@@ -105,7 +104,7 @@ static ANTHROPIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"sk-"),
     BuiltinSegment::Variable {
-        charset: charsets::alphanumeric,
+        charset: CharsetName::Alphanumeric,
         min: 48,
         max: 48,
     },
@@ -124,13 +123,13 @@ static OPENAI_CLASSIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
     BuiltinSegment::Literal(b"sk-proj-"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 58,
         max: 74,
     },
     BuiltinSegment::Literal(b"T3BlbkFJ"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 58,
         max: 74,
     },
@@ -153,7 +152,7 @@ static OPENAI_PROJECT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"AKIA"),
     BuiltinSegment::Variable {
-        charset: charsets::uppercase_alphanumeric,
+        charset: CharsetName::UppercaseAlphanumeric,
         min: 16,
         max: 16,
     },
@@ -172,7 +171,7 @@ static AWS_AKIA_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"ASIA"),
     BuiltinSegment::Variable {
-        charset: charsets::uppercase_alphanumeric,
+        charset: CharsetName::UppercaseAlphanumeric,
         min: 16,
         max: 16,
     },
@@ -191,7 +190,7 @@ static AWS_ASIA_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"ghp_"),
     BuiltinSegment::Variable {
-        charset: charsets::alphanumeric,
+        charset: CharsetName::Alphanumeric,
         min: 36,
         max: 36,
     },
@@ -210,13 +209,13 @@ static GITHUB_CLASSIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
     BuiltinSegment::Literal(b"github_pat_"),
     BuiltinSegment::Variable {
-        charset: charsets::alphanumeric,
+        charset: CharsetName::Alphanumeric,
         min: 22,
         max: 22,
     },
     BuiltinSegment::Literal(b"_"),
     BuiltinSegment::Variable {
-        charset: charsets::alphanumeric,
+        charset: CharsetName::Alphanumeric,
         min: 59,
         max: 59,
     },
@@ -236,7 +235,7 @@ static GITHUB_FG_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const GCP_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"AIza"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 35,
         max: 35,
     },
@@ -255,7 +254,7 @@ static GCP_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"sk-or-v1-"),
     BuiltinSegment::Variable {
-        charset: charsets::hex_lower,
+        charset: CharsetName::HexLower,
         min: 64,
         max: 64,
     },
@@ -275,13 +274,13 @@ static OPENROUTER_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
     BuiltinSegment::Literal(b"sk-svcacct-"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 58,
         max: 74,
     },
     BuiltinSegment::Literal(b"T3BlbkFJ"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 58,
         max: 74,
     },
@@ -301,7 +300,7 @@ static OPENAI_SVCACCT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"GOCSPX-"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 28,
         max: 28,
     },
@@ -321,19 +320,19 @@ static GOOGLE_OAUTH_SECRET_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
     BuiltinSegment::Literal(b"xoxb-"),
     BuiltinSegment::Variable {
-        charset: charsets::digits,
+        charset: CharsetName::Digits,
         min: 10,
         max: 13,
     },
     BuiltinSegment::Literal(b"-"),
     BuiltinSegment::Variable {
-        charset: charsets::digits,
+        charset: CharsetName::Digits,
         min: 10,
         max: 13,
     },
     BuiltinSegment::Literal(b"-"),
     BuiltinSegment::Variable {
-        charset: charsets::alphanumeric,
+        charset: CharsetName::Alphanumeric,
         min: 24,
         max: 24,
     },
@@ -353,7 +352,7 @@ static SLACK_BOT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
     BuiltinSegment::Literal(b"sk-ant-admin01-"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 93,
         max: 93,
     },
@@ -374,7 +373,7 @@ static ANTHROPIC_ADMIN01_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
     BuiltinSegment::Literal(b"sk-ant-admin03-"),
     BuiltinSegment::Variable {
-        charset: charsets::url_safe_base64,
+        charset: CharsetName::UrlSafeBase64,
         min: 93,
         max: 93,
     },
@@ -395,7 +394,7 @@ static ANTHROPIC_ADMIN03_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
 const LINEAR_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"lin_api_"),
     BuiltinSegment::Variable {
-        charset: charsets::alphanumeric,
+        charset: CharsetName::Alphanumeric,
         min: 40,
         max: 40,
     },

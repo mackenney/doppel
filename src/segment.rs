@@ -15,7 +15,7 @@ pub(crate) enum BuiltinSegment {
     /// A run of bytes all belonging to `charset`, with length in `[min, max]`.
     /// Filled with CSPRNG bytes from `charset` in every fake (INV-29).
     Variable {
-        charset: fn() -> Vec<u8>,
+        charset: CharsetName,
         min: usize,
         max: usize,
     },
@@ -40,37 +40,13 @@ impl From<&BuiltinSegment> for Segment {
     fn from(b: &BuiltinSegment) -> Self {
         match b {
             BuiltinSegment::Literal(bytes) => Segment::Literal(bytes.to_vec()),
-            BuiltinSegment::Variable { charset, min, max } => {
-                let cs_bytes = charset();
-                let charset_name = resolve_charset_fn_to_name(&cs_bytes);
-                Segment::Variable {
-                    charset: charset_name,
-                    min: *min,
-                    max: *max,
-                }
-            }
+            BuiltinSegment::Variable { charset, min, max } => Segment::Variable {
+                charset: *charset,
+                min: *min,
+                max: *max,
+            },
         }
     }
-}
-
-fn resolve_charset_fn_to_name(bytes: &[u8]) -> CharsetName {
-    use crate::fake::charsets;
-    let candidates = [
-        (CharsetName::Alphanumeric, charsets::alphanumeric()),
-        (CharsetName::UrlSafeBase64, charsets::url_safe_base64()),
-        (
-            CharsetName::UppercaseAlphanumeric,
-            charsets::uppercase_alphanumeric(),
-        ),
-        (CharsetName::Digits, charsets::digits()),
-        (CharsetName::HexLower, charsets::hex_lower()),
-    ];
-    for (name, cs) in &candidates {
-        if cs.as_slice() == bytes {
-            return name.clone();
-        }
-    }
-    unreachable!("all built-in charsets must be known")
 }
 
 impl Segment {
@@ -123,7 +99,7 @@ pub(crate) struct MatchCapture {
 ///
 /// Maps 1:1 to the charset names in SPEC.md §Patterns File line 90:
 /// `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CharsetName {
     Alphanumeric,
@@ -135,14 +111,13 @@ pub(crate) enum CharsetName {
 
 impl CharsetName {
     /// Resolve this charset name to the concrete byte set.
-    pub(crate) fn resolve(&self) -> Vec<u8> {
-        use crate::fake::charsets;
+    pub(crate) fn resolve(&self) -> &'static crate::fake::Charset {
         match self {
-            CharsetName::Alphanumeric => charsets::alphanumeric(),
-            CharsetName::UrlSafeBase64 => charsets::url_safe_base64(),
-            CharsetName::UppercaseAlphanumeric => charsets::uppercase_alphanumeric(),
-            CharsetName::Digits => charsets::digits(),
-            CharsetName::HexLower => charsets::hex_lower(),
+            CharsetName::Alphanumeric => crate::fake::alphanumeric_ref(),
+            CharsetName::UrlSafeBase64 => crate::fake::url_safe_base64_ref(),
+            CharsetName::UppercaseAlphanumeric => crate::fake::uppercase_alphanumeric_ref(),
+            CharsetName::Digits => crate::fake::digits_ref(),
+            CharsetName::HexLower => crate::fake::hex_lower_ref(),
         }
     }
 
@@ -314,7 +289,6 @@ mod tests {
 
     #[test]
     fn builtin_to_owned_conversion() {
-        use crate::fake::charsets;
         let builtin_lit = BuiltinSegment::Literal(b"sk-ant-");
         let owned = Segment::from(&builtin_lit);
         match owned {
@@ -323,7 +297,7 @@ mod tests {
         }
 
         let builtin_var = BuiltinSegment::Variable {
-            charset: charsets::alphanumeric,
+            charset: CharsetName::Alphanumeric,
             min: 10,
             max: 20,
         };
