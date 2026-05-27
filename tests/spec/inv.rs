@@ -884,3 +884,49 @@ fn test_inv25_collision_limit_path_exists() {
         "INV-25: CollisionLimit error message must be descriptive"
     );
 }
+
+#[cfg(feature = "async")]
+#[test]
+fn test_inv_empty_fake_sync_rejected() {
+    // The empty-fake guard MUST fire before AhoCorasick build to prevent
+    // an infinite loop (Match{0,0} → drain(..0) no-op).
+    use its_classified::types::{Entry, SessionKey};
+    use its_classified::{UnscrubError, unscrub};
+
+    let bad_entry = Entry {
+        fake: vec![],
+        ciphertext: vec![0u8; 32],
+        nonce: vec![0u8; 12],
+    };
+    let key = SessionKey::from_bytes([1u8; 32]);
+    let mut input = b"some payload".as_slice();
+    let mut output = Vec::new();
+    let result = unscrub(&mut input, &mut output, &[bad_entry], &key);
+    assert!(
+        matches!(result, Err(UnscrubError::Build { .. })),
+        "empty fake MUST return Err(Build), not loop"
+    );
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn test_inv_empty_fake_async_rejected() {
+    use bytes::Bytes;
+    use futures::stream;
+    use its_classified::types::{Entry, SessionKey};
+    use its_classified::{UnscrubError, unscrub_stream};
+    use std::io;
+
+    let bad_entry = Entry {
+        fake: vec![],
+        ciphertext: vec![0u8; 32],
+        nonce: vec![0u8; 12],
+    };
+    let key = SessionKey::from_bytes([1u8; 32]);
+    let inner = stream::empty::<Result<Bytes, io::Error>>();
+    let result = unscrub_stream(inner, vec![bad_entry], key);
+    assert!(
+        matches!(result, Err(UnscrubError::Build { .. })),
+        "empty fake MUST return Err(Build) from constructor"
+    );
+}
