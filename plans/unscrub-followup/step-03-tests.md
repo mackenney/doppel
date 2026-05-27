@@ -91,8 +91,15 @@ fn test_inv_empty_fake_async_rejected() {
 }
 ```
 
-Check what crates are available in `tests/Cargo.toml` — if `futures` and `bytes` are not
-already dev-dependencies of the test crate, add them. Read `tests/Cargo.toml` first.
+`futures = "0.3"` is already in `[dev-dependencies]` in the root `Cargo.toml`.
+`bytes` is NOT in `[dev-dependencies]` (only as an optional main dep). Add it:
+
+```toml
+# root Cargo.toml [dev-dependencies]
+bytes = "1"
+```
+
+Note: there is no `tests/Cargo.toml` — integration tests are governed by the root `Cargo.toml`.
 
 ### Task 3: Add multi-chunk None-branch inline test
 
