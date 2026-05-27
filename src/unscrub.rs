@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-use aho_corasick::{AhoCorasick, MatchKind};
+use aho_corasick::{AhoCorasick, Input, MatchKind};
 
 use crate::crypto::decrypt_entry;
 use crate::types::{Entry, SessionKey};
@@ -91,34 +91,37 @@ pub fn unscrub<R: Read, W: Write>(
         }
 
         // Emit safe bytes (with match handling)
+        let mut cursor: usize = 0;
         loop {
+            let remaining = buffer.len() - cursor;
             let safe_end = if eof {
                 buffer.len()
-            } else if buffer.len() > max_hold {
+            } else if remaining > max_hold {
                 buffer.len() - max_hold
             } else {
-                0
+                break;
             };
-            if safe_end == 0 {
+
+            if safe_end <= cursor {
                 break;
             }
 
-            match ac.find(&buffer) {
+            match ac.find(Input::new(&buffer).range(cursor..)) {
                 None => {
-                    // No match anywhere: emit up to safe_end
-                    output.write_all(&buffer[..safe_end])?;
-                    buffer.drain(..safe_end);
+                    // No match in unprocessed region: emit cursor..safe_end
+                    output.write_all(&buffer[cursor..safe_end])?;
+                    cursor = safe_end;
                     break;
                 }
                 Some(m) if m.start() >= safe_end => {
-                    // Match is in the hold region; emit up to safe_end, hold the rest
-                    output.write_all(&buffer[..safe_end])?;
-                    buffer.drain(..safe_end);
+                    // Match is in the hold region; emit cursor..safe_end, hold the rest
+                    output.write_all(&buffer[cursor..safe_end])?;
+                    cursor = safe_end;
                     break;
                 }
                 Some(m) => {
                     // Match starts before safe_end; decrypt and restore
-                    output.write_all(&buffer[..m.start()])?;
+                    output.write_all(&buffer[cursor..m.start()])?;
                     let entry_idx = m.pattern().as_usize();
                     let plaintext =
                         decrypt_entry(session_key, &entries[entry_idx]).map_err(|_| {
@@ -128,10 +131,13 @@ pub fn unscrub<R: Read, W: Write>(
                         })?;
                     // INV-5: emit plaintext ONLY after successful decryption
                     output.write_all(&plaintext)?;
-                    buffer.drain(..m.end());
+                    cursor = m.end();
                     // Continue inner loop: more matches may exist in the remaining safe region
                 }
             }
+        }
+        if cursor > 0 {
+            buffer.drain(..cursor);
         }
 
         if eof {
