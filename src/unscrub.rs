@@ -4,6 +4,7 @@ use aho_corasick::{AhoCorasick, Input, MatchKind};
 
 use crate::crypto::decrypt_entry;
 use crate::types::{Entry, SessionKey};
+use zeroize::Zeroizing;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UnscrubError {
@@ -123,13 +124,14 @@ pub fn unscrub<R: Read, W: Write>(
                     // Match starts before safe_end; decrypt and restore
                     output.write_all(&buffer[cursor..m.start()])?;
                     let entry_idx = m.pattern().as_usize();
-                    let plaintext =
+                    let plaintext = Zeroizing::new(
                         decrypt_entry(session_key, &entries[entry_idx]).map_err(|e| {
                             log::debug!("AEAD decryption failed for entry {entry_idx}: {e}");
                             UnscrubError::AeadTagFailure {
                                 entry_index: entry_idx,
                             }
-                        })?;
+                        })?,
+                    );
                     // INV-5: emit plaintext ONLY after successful decryption
                     output.write_all(&plaintext)?;
                     cursor = m.end();
