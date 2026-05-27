@@ -15,6 +15,9 @@ debug = 2
 [profile.dev.package."*"]
 debug = "line-tables-only"
 
+[features]
+async = ["dep:futures-core", "dep:bytes"]
+
 [dependencies]
 chacha20poly1305 = "0.10"
 hmac = "0.12"
@@ -30,7 +33,11 @@ log = "0.4"
 thiserror = "1"
 hex = "0.4"
 toml = "0.8"
+futures-core = { version = "0.3", optional = true }
+bytes = { version = "1", optional = true }
 [dev-dependencies]
 zeroize = { version = "1", features = ["derive"] }
 rand = { version = "0.8", features = ["std", "std_rng"] }
 tempfile = "3"
+futures = "0.3"
+bytes = "1"

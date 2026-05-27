@@ -104,8 +104,7 @@ enum Commands {
     },
 }
 
-const INIT_COMMENT_BLOCK: &str = r#"
-# Tier 2 secrets are registered via the CLI:
+const INIT_COMMENT_BLOCK: &str = r#"# Tier 2 secrets are registered via the CLI:
 #
 #   echo -n 'my-secret-value' | its-classified register \
 #     --patterns <this-file> \
@@ -130,6 +129,7 @@ const INIT_COMMENT_BLOCK: &str = r#"
 #     --identifier MY_PATTERN \
 #     --segment literal:prefix_ \
 #     --segment variable:alphanumeric:32:32
+#
 "#;
 
 fn read_patterns_file(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -188,9 +188,9 @@ fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error:
 
     let mut pf = PatternsFile::new();
     pf.generate_missing_tier1_salts_with_segments();
-    let mut data = pf.serialize()?;
-
-    data.extend_from_slice(INIT_COMMENT_BLOCK.as_bytes());
+    let serialized = pf.serialize()?;
+    let mut data = INIT_COMMENT_BLOCK.as_bytes().to_vec();
+    data.extend_from_slice(&serialized);
 
     write_patterns_file(patterns_path, &data, !force).map_err(
         |e| -> Box<dyn std::error::Error> {
