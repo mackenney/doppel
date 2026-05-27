@@ -157,6 +157,7 @@ impl<S> UnscrubStream<S> {
                             match decrypt_entry(&self.session_key, &self.entries[entry_idx]) {
                                 Ok(plaintext) => {
                                     let plaintext = Zeroizing::new(plaintext);
+                                    // INV-5: emit plaintext ONLY after successful decryption.
                                     // copy_from_slice produces an unzeroized Bytes; Zeroizing zeroes the decrypt buffer only.
                                     self.pending
                                         .push_back(Ok(Bytes::copy_from_slice(&plaintext)));

@@ -932,4 +932,6 @@ fn test_inv_empty_fake_async_rejected() {
         matches!(result, Err(UnscrubError::Build { .. })),
         "empty fake MUST return Err(Build) from constructor"
     );
+    // No output check: constructor failure prevents stream creation,
+    // so zero bytes can ever be emitted (no stream object → no I/O).
 }
