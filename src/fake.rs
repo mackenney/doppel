@@ -557,4 +557,48 @@ mod bitmap_tests {
         assert_eq!(DIGITS.bytes().len(), 10);
         assert_eq!(HEX_LOWER.bytes().len(), 16);
     }
+
+    #[test]
+    fn test_bitmap_url_safe_base64() {
+        let vec = charsets::url_safe_base64();
+        for b in 0u8..=255 {
+            assert_eq!(
+                URL_SAFE_BASE64.contains(b),
+                vec.contains(&b),
+                "mismatch at byte {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bitmap_uppercase_alphanumeric() {
+        let vec = charsets::uppercase_alphanumeric();
+        for b in 0u8..=255 {
+            assert_eq!(
+                UPPERCASE_ALPHANUMERIC.contains(b),
+                vec.contains(&b),
+                "mismatch at byte {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bitmap_digits() {
+        let vec = charsets::digits();
+        for b in 0u8..=255 {
+            assert_eq!(DIGITS.contains(b), vec.contains(&b), "mismatch at byte {b}");
+        }
+    }
+
+    #[test]
+    fn test_bitmap_hex_lower() {
+        let vec = charsets::hex_lower();
+        for b in 0u8..=255 {
+            assert_eq!(
+                HEX_LOWER.contains(b),
+                vec.contains(&b),
+                "mismatch at byte {b}"
+            );
+        }
+    }
 }

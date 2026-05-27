@@ -623,7 +623,12 @@ fn write_key_file(path: &Path, key_bytes: &[u8; 32]) -> std::io::Result<()> {
 }
 
 fn hex_encode(bytes: &[u8]) -> zeroize::Zeroizing<String> {
-    zeroize::Zeroizing::new(bytes.iter().map(|b| format!("{:02x}", b)).collect())
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(s, "{:02x}", b).expect("writing to String is infallible");
+    }
+    zeroize::Zeroizing::new(s)
 }
 
 fn run_unscrub(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -641,11 +646,11 @@ fn run_unscrub(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let key_bytes: zeroize::Zeroizing<Vec<u8>> = zeroize::Zeroizing::new(
         hex_decode(&key_hex).map_err(|_| "ITS_CLASSIFIED_KEY is not valid hex")?,
     );
-    let key_array: [u8; 32] = key_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| "ITS_CLASSIFIED_KEY must be 64 hex characters (32 bytes)")?;
-    let session_key = SessionKey::from_bytes(key_array);
+    let key_array = zeroize::Zeroizing::new(
+        <[u8; 32]>::try_from(key_bytes.as_slice())
+            .map_err(|_| "ITS_CLASSIFIED_KEY must be 64 hex characters (32 bytes)")?,
+    );
+    let session_key = SessionKey::from_bytes(*key_array);
 
     let entries_data = std::fs::read(entries_path)?;
     let entries = Entry::deserialize_entries(&entries_data)?;

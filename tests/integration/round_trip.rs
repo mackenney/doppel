@@ -354,3 +354,39 @@ fn test_vc13_non_leading_literal_reproduced_in_fake() {
         assert_eq!(&fake[33..34], b"_", "VC-13: '_' separator at position 33");
     }
 }
+
+#[test]
+fn test_mixed_tier1_tier2_scrub_unscrub() {
+    // When has_tier2=true, scrub falls back to byte-by-byte scanning.
+    // Verify both a Tier 1 and a Tier 2 secret are detected and restored.
+    let tier2_secret = b"my-custom-tier2-token-abcdefghijklmnopqrstuvwxyz0123456789-xyz";
+    let tier2_pattern = register(tier2_secret).expect("register failed");
+
+    let payload = [
+        b"anthropic: ".as_slice(),
+        SYNTH_ANTHROPIC,
+        b" token: ",
+        tier2_secret,
+    ]
+    .concat();
+
+    let sr = scrub(&payload, &[patterns::anthropic(), tier2_pattern]).unwrap();
+    assert_eq!(sr.entries.len(), 2, "must detect both T1 and T2 secrets");
+    assert!(
+        !sr.payload
+            .windows(SYNTH_ANTHROPIC.len())
+            .any(|w| w == SYNTH_ANTHROPIC),
+        "T1 secret must be scrubbed"
+    );
+    assert!(
+        !sr.payload
+            .windows(tier2_secret.len())
+            .any(|w| w == tier2_secret),
+        "T2 secret must be scrubbed"
+    );
+
+    let mut restored = Vec::new();
+    let mut input = std::io::Cursor::new(sr.payload.clone());
+    unscrub(&mut input, &mut restored, &sr.entries, &sr.session_key).unwrap();
+    assert_eq!(restored, payload, "both secrets must be restored");
+}

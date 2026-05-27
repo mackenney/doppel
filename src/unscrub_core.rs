@@ -52,7 +52,6 @@ where
         let remaining = buffer.len() - cursor;
 
         // INV-8: Compute safe_end — how far we can safely process
-        // INV-8: Compute safe_end — how far we can safely process
         let safe_end = if eof {
             buffer.len()
         } else if remaining > max_hold {
@@ -84,6 +83,7 @@ where
                 let entry = &entries[pattern_idx];
                 match decrypt_entry(session_key, entry) {
                     Ok(plaintext) => {
+                        let plaintext = zeroize::Zeroizing::new(plaintext);
                         emit(&plaintext)?;
                     }
                     Err(_) => {
