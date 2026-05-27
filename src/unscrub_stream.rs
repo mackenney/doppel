@@ -6,6 +6,7 @@ use std::task::{Context, Poll};
 use aho_corasick::{AhoCorasick, Input, MatchKind};
 use bytes::Bytes;
 use futures_core::Stream;
+use zeroize::Zeroizing;
 
 use crate::crypto::decrypt_entry;
 use crate::types::{Entry, SessionKey};
@@ -156,9 +157,14 @@ impl<S> UnscrubStream<S> {
                             let entry_idx = m.pattern().as_usize();
                             match decrypt_entry(&self.session_key, &self.entries[entry_idx]) {
                                 Ok(plaintext) => {
-                                    self.pending.push_back(Ok(Bytes::from(plaintext)));
+                                    let plaintext = Zeroizing::new(plaintext);
+                                    self.pending
+                                        .push_back(Ok(Bytes::copy_from_slice(&plaintext)));
                                 }
-                                Err(_) => {
+                                Err(e) => {
+                                    log::debug!(
+                                        "AEAD decryption failed for entry {entry_idx}: {e}"
+                                    );
                                     self.pending.push_back(Err(UnscrubError::AeadTagFailure {
                                         entry_index: entry_idx,
                                     }));
