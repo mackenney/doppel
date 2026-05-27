@@ -132,7 +132,9 @@ pub fn unscrub<R: Read, W: Write>(
                             }
                         })?,
                     );
-                    // INV-5: emit plaintext ONLY after successful decryption
+                    // INV-5: emit plaintext ONLY after successful decryption.
+                    // Zeroizing zeroes the decrypt buffer on drop; write_all copies
+                    // to the caller's writer without further zeroing.
                     output.write_all(&plaintext)?;
                     cursor = m.end();
                     // Continue inner loop: more matches may exist in the remaining safe region
@@ -285,7 +287,7 @@ mod tests {
         let bad_entry = Entry {
             fake: vec![],
             ciphertext: vec![0u8; 32],
-            nonce: vec![0u8; 12],
+            nonce: vec![0u8; 24],
         };
         let session_key = SessionKey::from_bytes([0u8; 32]);
         let mut input = b"some input".as_slice();

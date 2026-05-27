@@ -548,7 +548,7 @@ mod tests {
     fn test_async_empty_entries_multichunk() {
         // ac = None path (no entries) exercised with many small chunks.
         // Verifies the cursor-based None branch drains correctly across multiple
-        // process_buffer iterations rather than a single eof=true flush.
+        // process_buffer calls rather than a single eof=true flush.
         let response = b"hello world this is a multi-chunk passthrough test";
         let sr = scrub(b"unrelated", &[]).unwrap();
         assert!(sr.entries.is_empty());

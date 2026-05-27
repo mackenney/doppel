@@ -895,7 +895,7 @@ fn test_inv_empty_fake_sync_rejected() {
     let bad_entry = Entry {
         fake: vec![],
         ciphertext: vec![0u8; 32],
-        nonce: vec![0u8; 12],
+        nonce: vec![0u8; 24],
     };
     let key = SessionKey::from_bytes([1u8; 32]);
     let mut input = b"some payload".as_slice();
@@ -904,6 +904,10 @@ fn test_inv_empty_fake_sync_rejected() {
     assert!(
         matches!(result, Err(UnscrubError::Build { .. })),
         "empty fake MUST return Err(Build), not loop"
+    );
+    assert!(
+        output.is_empty(),
+        "guard MUST fire before any bytes are written to output"
     );
 }
 
@@ -919,7 +923,7 @@ fn test_inv_empty_fake_async_rejected() {
     let bad_entry = Entry {
         fake: vec![],
         ciphertext: vec![0u8; 32],
-        nonce: vec![0u8; 12],
+        nonce: vec![0u8; 24],
     };
     let key = SessionKey::from_bytes([1u8; 32]);
     let inner = stream::empty::<Result<Bytes, io::Error>>();
