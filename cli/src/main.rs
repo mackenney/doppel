@@ -227,7 +227,7 @@ fn run_register(
     use std::io::Read;
 
     let mut secret = zeroize::Zeroizing::new(Vec::new());
-    std::io::stdin().read_to_end(&mut *secret)?;
+    std::io::stdin().read_to_end(&mut secret)?;
 
     if secret.is_empty() {
         return Err("no secret provided on stdin".into());
@@ -349,7 +349,7 @@ fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .map(|e| e.identifier.len())
             .max()
             .unwrap_or(0);
-        let col_width = max_id_len.max(10).min(40);
+        let col_width = max_id_len.clamp(10, 40);
         for entry in &pf.tier1 {
             let desc = format_tier1_segments(entry);
             println!("  {:width$}  {}", entry.identifier, desc, width = col_width);

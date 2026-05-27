@@ -1,7 +1,3 @@
-fn bin() -> &'static std::path::Path {
-    std::path::Path::new(env!("CARGO_BIN_EXE_its-classified"))
-}
-
 fn init_patterns_file(path: &std::path::Path) {
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
         .args(["init", "--patterns", path.to_str().unwrap(), "--force"])

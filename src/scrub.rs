@@ -38,17 +38,14 @@ fn find_best_match<'a>(
                 tier1_capture: Some(capture),
                 derived_fake: None,
             }),
-            Pattern::Tier2(arc) => match arc.try_match(payload, pos)? {
-                Some((end, fake)) => Some(Match {
-                    start: pos,
-                    end,
-                    is_tier1: false,
-                    pattern_ref: PatternRef::Tier2(arc.as_ref()),
-                    tier1_capture: None,
-                    derived_fake: Some(fake),
-                }),
-                None => None,
-            },
+            Pattern::Tier2(arc) => arc.try_match(payload, pos)?.map(|(end, fake)| Match {
+                start: pos,
+                end,
+                is_tier1: false,
+                pattern_ref: PatternRef::Tier2(arc.as_ref()),
+                tier1_capture: None,
+                derived_fake: Some(fake),
+            }),
         };
 
         if let Some(candidate) = candidate {

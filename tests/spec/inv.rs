@@ -694,7 +694,7 @@ fn test_inv13_cross_serialization_fake_stability() {
     pf.add_tier2_pattern(&pat, None).unwrap();
 
     let payload = [b"token: ".as_slice(), secret].concat();
-    let result1 = scrub(&payload, &[pat.clone()]).unwrap();
+    let result1 = scrub(&payload, std::slice::from_ref(&pat)).unwrap();
 
     let bytes = pf.serialize().unwrap();
     let pf2 = PatternsFile::deserialize(&bytes).unwrap();

@@ -81,13 +81,20 @@ The Pattern produced by registration is an opaque value the caller receives and 
 
 ### Patterns File
 
-A **patterns file** is a JSON document that carries all data needed to reconstruct `Pattern` values across process restarts. It contains:
+A **patterns file** is a TOML document that carries all data needed to reconstruct `Pattern` values across process restarts. It contains:
 
-- **Version field** (`version: 1`). The library MUST reject unknown versions.
-- **Tier 1 entries**: a map of class identifier → 32-byte salt. All other Tier 1 fields (prefix, charset, length bounds) are compiled into the binary and not serialized. A patterns file MUST contain a salt for every built-in Tier 1 class; the library MUST return an error if any class is missing.
-- **Tier 2 entries**: an array of detection fingerprints (start/end fragments, exact length, HMAC salt, HMAC digest) plus derivation parameters (preserve_prefix, preserve_suffix, and optionally the resolved charset). No fake bytes are stored in the file; fakes are derived at detection time.
+- **Version field** (`version = 2`). The library MUST reject any version other than 2 with a clear error message directing the user to re-run `init` or migrate.
+- **Tier 1 entries** (`[[tier1]]`): an ordered array of tables. Each table has:
+  - `identifier` (string): the class identifier, e.g. `"ANTHROPIC_KEY"`.
+  - `salt` (string): the 32-byte pattern salt encoded as 64 lowercase hex characters.
+  - `segments` (array of inline tables, optional): the ordered segment sequence defining the structural pattern. Each segment is either a **Literal** (`{ type = "literal", value = "<utf-8 string>" }`) or a **Variable** (`{ type = "variable", charset = "<name>", min = <n>, max = <n> }`). Valid charset names are: `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`.
+  - When `segments` is present, it overrides the compiled-in definition for that identifier.
+  - When `segments` is absent and the identifier matches a compiled-in definition, the compiled-in definition is used.
+  - When `segments` is absent and the identifier does not match any compiled-in definition, the library MUST return an error.
+  - An entry whose identifier does not match any compiled-in definition is a **user-defined pattern**; its `segments` field is mandatory.
+- **Tier 2 entries** (`[[tier2]]`): an ordered array of tables. Each table has detection fingerprints (start fragment, end fragment, exact length), an HMAC salt, an HMAC digest, and derivation parameters (preserve_prefix, preserve_suffix, optional resolved charset). All binary fields are encoded as lowercase hex strings. An optional `label` (string) field MAY be present for human identification and CLI management.
 
-The patterns file MUST be treated with the same sensitivity as the secrets it detects — it contains detection fragments that serve as a detection oracle. On Unix systems, the file SHOULD be written with mode 0600 (the CLI `init` and `register` commands MUST enforce this — see §CLI Contract). The library provides serialization/deserialization functions operating on `&[u8]`/`Vec<u8>`; filesystem operations are the caller's responsibility.
+The patterns file MUST be treated with the same sensitivity as the secrets it detects — it contains detection fragments that serve as a detection oracle. On Unix systems, the file SHOULD be written with mode 0600 (the CLI `init`, `register`, and `define` commands MUST enforce this — see §CLI Contract). The library provides serialization/deserialization functions operating on `&[u8]`/`Vec<u8>`; filesystem operations are the caller's responsibility.
 
 ## Security Properties
 
@@ -142,7 +149,7 @@ where `declared_prefix` and `declared_suffix` are the non-secret bytes the calle
 The behavioral guarantee is stability: every detection of the same secret under the same Pattern MUST produce the same fake. This applies equally to Tier 1 and Tier 2 Patterns. The mechanism by which stability is achieved is an implementation detail — for example, a keyed derivation from a stable salt embedded in the Pattern. The CSPRNG and collision-avoidance requirements apply to fake generation; once a valid fake has been established for a (secret, Pattern) pair, that fake is returned on all subsequent detections without re-generation.
 ## CLI Contract
 
-The CLI exposes `scrub` and `unscrub` at the process boundary.
+The CLI exposes `scrub`, `unscrub`, `init`, `register`, `define`, `list`, `inspect`, and `remove` at the process boundary.
 
 **`scrub`:** reads the complete payload from stdin; writes the scrubbed payload to stdout; writes the entries to a caller-specified path; writes the session key to a caller-specified path. The session key output file MUST be created with mode 0600. No other file permission is acceptable.
 
@@ -150,9 +157,17 @@ The CLI exposes `scrub` and `unscrub` at the process boundary.
 
 The entries file written by `scrub` contains ciphertext only and is not confidentiality-sensitive on its own. It is integrity-protected: the AEAD tag binds each entry's fake field to its ciphertext, so a tampered entries file produces a decryption error rather than silent secret exfiltration. Deletion of the session key file after `unscrub` completes is the caller's responsibility; the CLI `unscrub` command has no mechanism to locate the file and does not perform this deletion. See Known Limitations.
 
-**`init`:** creates a new patterns file at the caller-specified path with all built-in Tier 1 definitions and freshly generated stable salts. The Tier 2 list is empty. The command MUST fail if the file already exists unless `--force` is specified. When `--force` is used, all salts are regenerated — existing fakes produced from the old salts become invalid. The patterns file MUST be written with mode 0600 on Unix.
+**`init`:** creates a new TOML patterns file (version 2) at the caller-specified path. The file includes all built-in Tier 1 definitions with their full segment sequences and freshly generated stable salts; the Tier 2 list is empty. Because segment definitions are embedded in the output, the file is self-describing and directly editable. The generated file includes a fully-commented block at the end illustrating: (a) an annotated Tier 2 entry template with per-field derivation explanations, and (b) the CLI commands available to extend the file (`register`, `define`). The command MUST fail if the file already exists unless `--force` is specified. When `--force` is used, all salts are regenerated — existing fakes produced from the old salts become invalid. The patterns file MUST be written with mode 0600 on Unix.
 
 **`register`:** reads a secret value from stdin (raw bytes, no trimming), loads the patterns file from the caller-specified path, registers the secret as a Tier 2 Pattern, appends the new entry to the patterns file, and writes it back. Options `--preserve-prefix`, `--preserve-suffix`, and `--restrict-charset` map to `RegistrationOptions`. The secret MUST NOT appear in command-line arguments.
+
+**`define`:** adds a user-defined Tier 1 structural pattern to the patterns file. The caller supplies an identifier, one or more segment specifications, and the patterns file path. A fresh stable salt is generated for the new entry. `define` MUST fail if the identifier already exists in the file. `define` MUST fail if the segment list is empty, if any segment specifies an unrecognised charset name, if any Variable segment has `min > max`, or if the segment list contains no Variable segment (a pure-Literal pattern has no variable bytes and cannot produce a structural fake). The patterns file MUST be written back atomically with mode 0600 on Unix.
+
+**`list`:** reads the patterns file and writes a human-readable summary to stdout: each Tier 1 entry with its identifier and a human-readable segment description; each Tier 2 entry with its label (if present), exact length, and charset summary. `list` MUST NOT modify the patterns file.
+
+**`inspect`:** reads the patterns file and writes full detail for a single pattern to stdout, located by identifier (Tier 1) or label (Tier 2). For a Tier 1 entry: all segments and the salt fingerprint (first 8 hex characters of the salt — not the full salt value). For a Tier 2 entry: all fields with derivation annotations. `inspect` MUST NOT modify the patterns file.
+
+**`remove`:** removes a pattern from the patterns file by identifier (Tier 1) or label (Tier 2) and writes the updated file back atomically (temporary file plus rename) with mode 0600. `remove` MUST fail if the specified identifier or label is not found. `remove` MUST emit a warning to stderr, but MUST NOT fail, when the target identifier matches a built-in Tier 1 definition — fakes for that pattern class will no longer be produced by `scrub`.
 
 **`scrub` `--patterns`:** the `scrub` subcommand MUST accept a `--patterns <FILE>` argument specifying the patterns file. This argument is required; `scrub` MUST NOT fall back to ephemeral patterns when it is absent. The patterns file is loaded via `PatternsFile::deserialize` and `into_patterns` before scrubbing.
 
@@ -187,6 +202,12 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 27. Tier 2 `register` MUST emit a `log::warn`-level diagnostic when the secret's observed byte set is a subset of `[A-Za-z0-9]` and `restrict_charset` is `false`.
 28. Every Literal segment in a matched Tier 1 Pattern MUST appear verbatim at the corresponding byte positions of the fake.
 29. Every Variable segment in a Tier 1 fake MUST contain only bytes drawn from that segment's own character set.
+30. A user-defined Tier 1 pattern MUST specify at least one Variable segment; the `define` command MUST reject a segment list that contains no Variable segment.
+31. A user-defined Tier 1 identifier MUST be unique within the patterns file; the `define` command MUST fail if the identifier already exists.
+32. Removing a built-in Tier 1 identifier from the patterns file is permitted and MUST NOT produce an error; `scrub` will not apply that pattern class when the identifier is absent from the file.
+33. The patterns file version MUST be 2; the library MUST reject any file whose version field is not 2.
+34. `list` and `inspect` MUST NOT modify the patterns file.
+35. `remove` MUST write the updated patterns file atomically; no partial write MUST be observable by concurrent readers.
 
 ## Verifiable Conditions
 
@@ -203,6 +224,9 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 11. A Tier 2 candidate that shares start and end fragments with a registered secret but does not match the HMAC passes through the scrubbed payload unchanged.
 12. Given an empty set of patterns, `scrub` returns the payload unchanged and an empty entries set.
 13. Given a Tier 1 secret whose pattern contains a Literal segment that is not the leading element (e.g., a fixed suffix or an embedded marker), the fake produced by `scrub` reproduces that Literal segment verbatim at the correct byte position.
+14. A user-defined Tier 1 pattern defined with identifier `x` and segments `[{ type = "literal", value = "prefix_" }, { type = "variable", charset = "alphanumeric", min = 32, max = 32 }]` detects and replaces a payload containing `prefix_` followed by exactly 32 alphanumeric characters such that no byte of that variable portion appears in the scrubbed output.
+15. `list` output contains the identifier of every Tier 1 entry and an identifying label or positional marker for every Tier 2 entry present in the patterns file.
+16. After `remove` succeeds on an existing identifier or label, the resulting patterns file MUST NOT contain any entry with that identifier or label.
 
 ## Known Limitations / Accepted Trade-offs
 
@@ -214,3 +238,4 @@ The entries file written by `scrub` contains ciphertext only and is not confiden
 - **Single-session entries.** The entries and session key are designed for exactly one request/response cycle. They are not sharable across processes and are not valid after the cycle ends. The session key is intentionally ephemeral.
 - **Session key file deletion is caller responsibility.** The CLI `unscrub` command receives the session key value via environment variable but has no specified mechanism to locate the key file. Deletion of the key file after `unscrub` completes is an operational step the caller must perform.
 - **Pre-Aug-2024 OpenAI project key format not detected.** The original `sk-proj-` format (56 chars total, no embedded `T3BlbkFJ` marker, issued before August 2024) is not matched by `OPENAI_PROJECT_DEF`. These keys required only `sk-proj-<48 url_safe_b64>` — structurally indistinguishable from arbitrary base64 without the marker. Keys of this age are expected to have been rotated; best-effort coverage is the explicit contract.
+- **Patterns file version 1 (JSON) is not supported.** Version 1 files are rejected by the library with a clear error message. To migrate, re-run `init` to generate a new version 2 TOML file and re-register any Tier 2 secrets using `register`.
