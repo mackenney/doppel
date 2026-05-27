@@ -40,4 +40,3 @@ zeroize = { version = "1", features = ["derive"] }
 rand = { version = "0.8", features = ["std", "std_rng"] }
 tempfile = "3"
 futures = "0.3"
-bytes = "1"
