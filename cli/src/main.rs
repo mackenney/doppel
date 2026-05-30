@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -69,6 +69,8 @@ enum Commands {
         #[arg(long)]
         identifier: String,
         /// Segment spec: "literal:<value>" or "variable:<charset>:<min>:<max>".
+        /// Valid charsets: alphanumeric, url_safe_base64, uppercase_alphanumeric, digits, hex_lower.
+        /// Repeat --segment for each segment in order.
         #[arg(long, required = true, num_args = 1)]
         segment: Vec<String>,
     },
@@ -79,6 +81,7 @@ enum Commands {
         patterns: PathBuf,
     },
     /// Show details for a single Tier 1 pattern or Tier 2 secret.
+    #[command(group(ArgGroup::new("target").required(true).args(["identifier", "label"])))]
     Inspect {
         /// Path to the patterns file.
         #[arg(long)]
@@ -91,6 +94,7 @@ enum Commands {
         label: Option<String>,
     },
     /// Remove a Tier 1 pattern or Tier 2 secret from a patterns file.
+    #[command(group(ArgGroup::new("target").required(true).args(["identifier", "label"])))]
     Remove {
         /// Path to the patterns file.
         #[arg(long)]
@@ -476,7 +480,7 @@ fn run_inspect(
         println!("  Charset: {}", charset_desc);
         println!("  Salt: {}...", &*salt_fingerprint);
     } else {
-        return Err("specify --identifier or --label".into());
+        unreachable!("clap requires --identifier or --label")
     }
 
     Ok(())
@@ -539,7 +543,7 @@ fn run_remove(
 
         eprintln!("removed Tier 2 secret: {}", lbl);
     } else {
-        return Err("specify --identifier or --label".into());
+        unreachable!("clap requires --identifier or --label")
     }
 
     Ok(())
