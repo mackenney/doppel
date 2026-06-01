@@ -275,7 +275,7 @@ max = 40
 
 # Tier 2 secrets are registered via the CLI:
 #
-#   echo -n 'my-secret-value' | its-classified register \
+#   echo -n 'my-secret-value' | doppel register \
 #     --patterns <this-file> \
 #     --label my-secret \
 #     --preserve-prefix 0 \
@@ -294,7 +294,7 @@ max = 40
 #
 # User-defined Tier 1 patterns can be added via:
 #
-#   its-classified define --patterns <this-file> \
+#   doppel define --patterns <this-file> \
 #     --identifier MY_PATTERN \
 #     --segment literal:prefix_ \
 #     --segment variable:alphanumeric:32:32
