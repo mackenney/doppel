@@ -7,9 +7,9 @@ use aho_corasick::{AhoCorasick, MatchKind};
 use bytes::Bytes;
 use futures_core::Stream;
 
-use crate::types::{Entry, SessionKey};
 use crate::restore::RestoreError;
 use crate::restore_core::process_safe_region;
+use crate::types::{Entry, SessionKey};
 
 /// Async stream adapter that restores swapped secrets as bytes flow through.
 ///
@@ -203,8 +203,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::swap::swap;
     use crate::patterns;
+    use crate::swap::swap;
     use futures::StreamExt;
 
     const ANTHROPIC_SECRET: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
@@ -494,7 +494,11 @@ mod tests {
         let payload = [b"Bearer ".as_slice(), secret, b" end"].concat();
 
         let sr = swap(&payload, &[pattern]).unwrap();
-        assert_eq!(sr.entries.len(), 1, "Registered secret swap must produce one entry");
+        assert_eq!(
+            sr.entries.len(),
+            1,
+            "Registered secret swap must produce one entry"
+        );
 
         let inner = single_chunk_stream(sr.payload);
         let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();

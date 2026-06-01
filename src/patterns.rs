@@ -1,5 +1,5 @@
-use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use crate::secrets::Tier2Pat;
+use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use aho_corasick::AhoCorasick;
 use std::sync::{Arc, LazyLock};
 

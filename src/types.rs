@@ -24,7 +24,7 @@ impl SessionKey {
 /// See SPEC.md §Entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
-    /// The fake bytes that replaced the original secret in the scrubbed payload.
+    /// The fake bytes that replaced the original secret in the swapped payload.
     #[serde(with = "base64_serde")]
     pub fake: Vec<u8>,
     /// Random 24-byte nonce used for this entry's AEAD encryption.

@@ -2,8 +2,8 @@ use std::io::{Read, Write};
 
 use aho_corasick::{AhoCorasick, MatchKind};
 
-use crate::types::{Entry, SessionKey};
 use crate::restore_core::process_safe_region;
+use crate::types::{Entry, SessionKey};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RestoreError {
@@ -119,8 +119,8 @@ pub fn restore<R: Read, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::swap::swap;
     use crate::patterns;
+    use crate::swap::swap;
 
     #[test]
     fn test_restore_basic_roundtrip() {

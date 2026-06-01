@@ -124,7 +124,7 @@ carry no stability guarantee — change freely during refactoring.
 // Spec: SPEC.md §Behavioral Invariants
 
 #[test]
-fn test_inv1_scrub_replaces_every_detected_secret() {
+fn test_inv1_swap_replaces_every_detected_secret() {
     // INV-1: "swap MUST replace every secret detected by the supplied Patterns
     //         with a structurally-equivalent fake."
     ...
@@ -137,7 +137,7 @@ The `invN` number matches the invariant number in SPEC.md Behavioral Invariants.
 
 ```rust
 #[test]
-fn test_vc1_scrubbed_output_contains_no_original_secret() {
+fn test_vc1_swapped_output_contains_no_original_secret() {
     // VC-1 from SPEC.md Verifiable Conditions
     ...
 }
@@ -153,7 +153,7 @@ the decision. Inline unit tests carry no such guarantee.
 
 Every implementation MUST pass these specific scenarios:
 
-**Scrub correctness:**
+**Swap correctness:**
 - Tier 1: Anthropic / OpenAI / AWS IAM / GitHub PAT classic / GitHub PAT fine-grained / GCP API key in payload → fake in output, entry produced
 - Tier 2: registered secret in payload → fake in output, entry produced
 - No-op: payload with no secrets → returned unchanged, empty entries
@@ -162,7 +162,7 @@ Every implementation MUST pass these specific scenarios:
 - Overlapping prefix candidates → leftmost-longest match wins
 - Tier 2 structural match + HMAC failure → passed through unchanged
 
-**Unscrub correctness:**
+**Restore correctness:**
 - Fake split across chunk boundary → correctly restored
 - Multiple fakes in stream → all restored
 - No fake in stream → output byte-for-byte identical to input, no error

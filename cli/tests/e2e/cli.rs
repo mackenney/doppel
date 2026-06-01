@@ -7,11 +7,7 @@ fn bin() -> PathBuf {
 }
 
 fn tmp_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "doppel-e2e-{}-{}",
-        name,
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("doppel-e2e-{}-{}", name, std::process::id()))
 }
 
 fn cleanup(paths: &[&PathBuf]) {
@@ -88,7 +84,7 @@ fn test_e2e_key_file_mode_0600() {
 
 // INV-20: restore reads key from DOPPEL_KEY only (no --key flag accepted)
 #[test]
-fn test_e2e_unscrub_no_key_flag() {
+fn test_e2e_restore_no_key_flag() {
     let help_output = Command::new(bin())
         .args(["restore", "--help"])
         .output()
@@ -106,7 +102,7 @@ fn test_e2e_unscrub_no_key_flag() {
 
 // VC-9: restore writes to stdout before stdin reaches EOF (streaming)
 #[test]
-fn test_e2e_unscrub_streams_before_eof() {
+fn test_e2e_restore_streams_before_eof() {
     use std::io::Read;
     use std::thread;
 
@@ -264,7 +260,7 @@ fn test_e2e_full_round_trip() {
 
 // INV-20: missing DOPPEL_KEY → non-zero exit
 #[test]
-fn test_e2e_unscrub_missing_env_var_fails() {
+fn test_e2e_restore_missing_env_var_fails() {
     let entries_path = tmp_path("entries-missing.json");
     std::fs::write(&entries_path, b"[]").unwrap();
     let output = Command::new(bin())
@@ -352,7 +348,7 @@ fn test_e2e_init_force_overwrites() {
 }
 
 #[test]
-fn test_e2e_scrub_missing_patterns_file() {
+fn test_e2e_swap_missing_patterns_file() {
     let entries_path = tmp_path("entries-missing-pat.json");
     let key_path = tmp_path("key-missing-pat.txt");
 
@@ -384,7 +380,7 @@ fn test_e2e_scrub_missing_patterns_file() {
 }
 
 #[test]
-fn test_e2e_scrub_corrupt_patterns_file() {
+fn test_e2e_swap_corrupt_patterns_file() {
     let patterns_path = tmp_path("corrupt-patterns.json");
     std::fs::write(&patterns_path, b"not valid json").unwrap();
     let entries_path = tmp_path("entries-corrupt.json");

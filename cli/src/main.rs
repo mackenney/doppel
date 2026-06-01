@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
     name = "doppel",
-    about = "Secret scrubbing for LLM request/response cycles"
+    about = "Secret swapping and restoration for arbitrary byte payloads"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -13,7 +13,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Swap secrets from stdin. Writes scrubbed payload to stdout.
+    /// Swap secrets from stdin. Writes the swapped payload to stdout.
     Swap {
         /// Path to the patterns file (created by `init`).
         #[arg(long)]
@@ -28,7 +28,7 @@ enum Commands {
     /// Restore secrets in a response stream from stdin to stdout.
     /// Session key must be provided via the DOPPEL_KEY environment variable.
     Restore {
-        /// Path to the entries file written by scrub.
+        /// Path to the entries file written by swap.
         #[arg(long)]
         entries: PathBuf,
         // NO --key flag — INV-20: key via DOPPEL_KEY env var only
@@ -227,7 +227,7 @@ fn run_register(
     preserve_suffix: usize,
     restrict_charset: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use doppel::{SecretsFile, SecretOptions, register_with_options};
+    use doppel::{SecretOptions, SecretsFile, register_with_options};
     use std::io::Read;
 
     let mut secret = zeroize::Zeroizing::new(Vec::new());
@@ -295,10 +295,7 @@ fn run_define(
     Ok(())
 }
 
-fn parse_segment_spec(
-    spec: &str,
-    index: usize,
-) -> Result<doppel::segment::SegmentDef, String> {
+fn parse_segment_spec(spec: &str, index: usize) -> Result<doppel::segment::SegmentDef, String> {
     use doppel::segment::SegmentDef;
 
     let (seg_type, rest) = spec.split_once(':').ok_or_else(|| {
@@ -512,7 +509,7 @@ fn run_remove(
 
         if SecretsFile::is_builtin_identifier(id) {
             eprintln!(
-                "warning: removing built-in Tier 1 pattern \"{}\"; scrub will no longer detect this secret class",
+                "warning: removing built-in pattern \"{}\"; swap will no longer detect this secret class",
                 id
             );
         }
@@ -637,19 +634,17 @@ fn hex_encode(bytes: &[u8]) -> zeroize::Zeroizing<String> {
 
 fn run_restore(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::{
-        types::{Entry, SessionKey},
         restore,
+        types::{Entry, SessionKey},
     };
     use std::io;
 
     // INV-20: session key ONLY via DOPPEL_KEY env var
     let key_hex = zeroize::Zeroizing::new(
-        std::env::var("DOPPEL_KEY")
-            .map_err(|_| "DOPPEL_KEY environment variable not set")?,
+        std::env::var("DOPPEL_KEY").map_err(|_| "DOPPEL_KEY environment variable not set")?,
     );
-    let key_bytes: zeroize::Zeroizing<Vec<u8>> = zeroize::Zeroizing::new(
-        hex_decode(&key_hex).map_err(|_| "DOPPEL_KEY is not valid hex")?,
-    );
+    let key_bytes: zeroize::Zeroizing<Vec<u8>> =
+        zeroize::Zeroizing::new(hex_decode(&key_hex).map_err(|_| "DOPPEL_KEY is not valid hex")?);
     let key_array = zeroize::Zeroizing::new(
         <[u8; 32]>::try_from(key_bytes.as_slice())
             .map_err(|_| "DOPPEL_KEY must be 64 hex characters (32 bytes)")?,

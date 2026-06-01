@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::segment::SegmentDef;
-use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
 use crate::patterns::{self, Pattern, Tier1Def};
 use crate::secrets::Tier2Pat;
+use crate::segment::SegmentDef;
+use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
 
 /// Top-level patterns file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -345,7 +345,9 @@ impl SecretsFile {
 
     /// Check if an identifier matches a compiled-in Tier 1 definition.
     pub fn is_builtin_identifier(identifier: &str) -> bool {
-        patterns::all_defs().iter().any(|d| d.identifier == identifier)
+        patterns::all_defs()
+            .iter()
+            .any(|d| d.identifier == identifier)
     }
 }
 

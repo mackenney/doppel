@@ -8,7 +8,7 @@ then restores them transparently in the response — including SSE streams.
 ## How it works
 
 ```
-swap(payload, patterns)  →  (scrubbed_payload, entries, session_key)
+swap(payload, patterns)  →  (swapped_payload, entries, session_key)
 restore(response_stream, entries, session_key)  →  restored_stream
 ```
 
@@ -150,7 +150,7 @@ doppel swap \
   --patterns secrets.toml \
   --entries  entries.json \
   --key-out  session.key \
-  < request_body.json > scrubbed_body.json
+  < request_body.json > swapped_body.json
 ```
 
 Reads the complete payload from stdin, writes the swapped payload to stdout,

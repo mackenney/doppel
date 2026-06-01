@@ -84,7 +84,7 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
 }
 
 /// Scan `payload` for secrets matching `patterns`, replace each with a
-/// structurally-equivalent fake, and return the scrubbed payload, encrypted
+/// structurally-equivalent fake, and return the swapped payload, encrypted
 /// entries, and a fresh session key.
 ///
 /// # Examples
@@ -166,7 +166,7 @@ mod tests {
     const TEST_ANTHROPIC_KEY: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     #[test]
-    fn test_scrub_tier1_basic() {
+    fn test_swap_tier1_basic() {
         // INV-1: secret replaced with fake
         let payload = [b"Authorization: ".as_slice(), TEST_ANTHROPIC_KEY, b" end"].concat();
         let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_no_modification_outside_secret() {
+    fn test_swap_no_modification_outside_secret() {
         // INV-2: bytes outside detected secrets are unchanged
         let prefix = b"Authorization: ";
         let suffix = b" end";
@@ -193,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_empty_patterns() {
+    fn test_swap_empty_patterns() {
         // INV-23: empty patterns → payload unchanged, entries empty
         let payload = b"some payload with stuff";
         let result = swap(payload, &[]).expect("swap failed");
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_no_secrets_in_payload() {
+    fn test_swap_no_secrets_in_payload() {
         // INV-23: payload with no detectable secrets → unchanged, empty entries
         let payload = b"Hello, world! No secrets here.";
         let result = swap(payload, &patterns::all()).expect("swap failed");
@@ -211,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_multiple_occurrences_same_secret() {
+    fn test_swap_multiple_occurrences_same_secret() {
         // INV-14: two occurrences of same secret → same fake, ONE entry
         let secret = TEST_ANTHROPIC_KEY;
         let payload = [secret, b" separator ", secret].concat();
@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_entries_contain_no_plaintext() {
+    fn test_swap_entries_contain_no_plaintext() {
         // INV-9: entries must not contain plaintext secret bytes
         let secret = TEST_ANTHROPIC_KEY;
         let payload = [b"token: ".as_slice(), secret].concat();
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_tier2_hmac_failure_passthrough() {
+    fn test_swap_tier2_hmac_failure_passthrough() {
         // INV-16: Tier 2 structural match + HMAC failure → pass through
         use rand::{SeedableRng, rngs::StdRng};
         let real_secret = b"my-registered-secret-value-here";
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scrub_fake_stability() {
+    fn test_swap_fake_stability() {
         // INV-13: same secret + same Pattern → same fake across calls
         let payload = [b"token: ".as_slice(), TEST_ANTHROPIC_KEY].concat();
         let pat = patterns::anthropic();

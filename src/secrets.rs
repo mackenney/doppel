@@ -72,9 +72,7 @@ pub enum SecretError {
 impl From<FakeError> for SecretError {
     fn from(e: FakeError) -> Self {
         match e {
-            FakeError::CollisionLimit { attempts } => {
-                SecretError::CollisionLimit { attempts }
-            }
+            FakeError::CollisionLimit { attempts } => SecretError::CollisionLimit { attempts },
         }
     }
 }

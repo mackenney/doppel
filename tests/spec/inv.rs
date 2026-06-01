@@ -1,4 +1,4 @@
-use doppel::{register, swap, patterns, types::Entry, restore};
+use doppel::{patterns, register, restore, swap, types::Entry};
 
 // Synthetic test keys — NOT real credentials. Format matches real format for structural testing.
 const SYNTH_ANTHROPIC: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -12,7 +12,7 @@ const SYNTH_GITHUB_FG: &[u8] =
 const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 #[test]
-fn test_inv1_scrub_replaces_every_detected_secret() {
+fn test_inv1_swap_replaces_every_detected_secret() {
     // INV-1: "swap MUST replace every secret detected by the supplied Patterns
     //         with a structurally-equivalent fake."
     let payload = [b"Authorization: ".as_slice(), SYNTH_ANTHROPIC].concat();
@@ -27,7 +27,7 @@ fn test_inv1_scrub_replaces_every_detected_secret() {
 }
 
 #[test]
-fn test_inv2_scrub_does_not_modify_non_secret_bytes() {
+fn test_inv2_swap_does_not_modify_non_secret_bytes() {
     // INV-2: "swap MUST NOT modify bytes that are not identified as secrets."
     let prefix = b"Authorization: ";
     let suffix = b" end-of-header";
@@ -59,7 +59,7 @@ fn test_inv3_entries_exactly_one_per_distinct_secret() {
 }
 
 #[test]
-fn test_inv4_unscrub_restores_across_chunk_boundaries() {
+fn test_inv4_restore_restores_across_chunk_boundaries() {
     // INV-4: "restore MUST restore every fake present in the response stream
     //         regardless of where chunk boundaries fall."
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
@@ -96,7 +96,7 @@ fn test_inv4_unscrub_restores_across_chunk_boundaries() {
 }
 
 #[test]
-fn test_inv5_unscrub_does_not_emit_before_aead_verified() {
+fn test_inv5_restore_does_not_emit_before_aead_verified() {
     // INV-5: "restore MUST NOT emit restored plaintext before the AEAD tag has been verified."
     // Proxy test: tamper with tag → Err → no secret bytes in output
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
@@ -125,8 +125,8 @@ fn test_inv5_async_no_plaintext_before_aead_verified() {
     // INV-5: "restore MUST NOT emit restored plaintext before the AEAD tag has been verified."
     // Async variant: tamper tag, verify secret never appears in any emitted chunk.
     use bytes::Bytes;
-    use futures::{StreamExt, stream};
     use doppel::restore_stream;
+    use futures::{StreamExt, stream};
     use std::io;
 
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
@@ -186,8 +186,8 @@ fn test_inv6_aead_tag_failure_produces_error() {
 fn test_inv6_async_aead_tag_failure_produces_error() {
     // INV-6: "An AEAD tag failure MUST produce an error; the stream MUST NOT continue."
     use bytes::Bytes;
-    use futures::{StreamExt, stream};
     use doppel::{RestoreError, restore_stream};
+    use futures::{StreamExt, stream};
     use std::io;
 
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
@@ -230,7 +230,7 @@ fn test_inv6_async_aead_tag_failure_produces_error() {
 }
 
 #[test]
-fn test_inv7_unscrub_no_fake_forwarded_unchanged() {
+fn test_inv7_restore_no_fake_forwarded_unchanged() {
     // INV-7: "restore MUST forward all bytes unchanged when no fake appears in stream;
     //         it MUST NOT produce an error."
     let payload = b"no secrets here at all";
@@ -252,7 +252,7 @@ fn test_inv7_unscrub_no_fake_forwarded_unchanged() {
 }
 
 #[test]
-fn test_inv8_unscrub_bounded_hold() {
+fn test_inv8_restore_bounded_hold() {
     // INV-8: "restore MUST NOT hold more than max{|fake_i|} bytes unemitted at any point."
     // Proxy: verify round-trip is correct with 1-byte input chunks (bound enforced by impl)
     let payload = [b"ctx: ".as_slice(), SYNTH_ANTHROPIC].concat();
@@ -297,8 +297,8 @@ fn test_inv8_async_hold_bound_observed() {
     // INV-8: "restore MUST NOT hold more than max{|fake_i|} bytes unemitted at any point."
     // Direct observation: feed bytes one at a time, verify output never lags input by more than max_hold.
     use bytes::Bytes;
-    use futures::StreamExt;
     use doppel::restore_stream;
+    use futures::StreamExt;
     use std::io;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -531,7 +531,7 @@ fn test_inv18_leftmost_longest_match() {
 }
 
 #[test]
-fn test_inv19_unscrub_exact_matching_only() {
+fn test_inv19_restore_exact_matching_only() {
     // INV-19: "restore MUST perform only exact matching against fake byte strings;
     //          it MUST NOT run pattern detection of any kind."
     let payload = b"no secret here";
@@ -827,7 +827,7 @@ fn test_inv29_variable_segment_bytes_in_charset() {
 #[test]
 fn test_inv13_cross_serialization_fake_stability() {
     // INV-13: register → serialize patterns → deserialize → swap → same fake
-    use doppel::{SecretsFile, SecretOptions, register_with_options, swap};
+    use doppel::{SecretOptions, SecretsFile, register_with_options, swap};
 
     let secret = b"my-custom-secret-for-cross-serial-test";
     let pat = register_with_options(secret, &SecretOptions::default()).unwrap();
@@ -1058,9 +1058,9 @@ fn test_inv_empty_fake_sync_rejected() {
 #[test]
 fn test_inv_empty_fake_async_rejected() {
     use bytes::Bytes;
-    use futures::stream;
     use doppel::types::{Entry, SessionKey};
     use doppel::{RestoreError, restore_stream};
+    use futures::stream;
     use std::io;
 
     let bad_entry = Entry {

@@ -18,7 +18,7 @@
 //! ```rust
 //! use doppel::{swap, restore, patterns};
 //!
-//! // A synthetic Anthropic key embedded in a payload
+//! // NOT real credentials — synthetic key matching the Tier 1 Anthropic pattern
 //! let payload = b"Authorization: sk-ant-api03-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA";
 //!
 //! // 1. Swap: detect and replace the key before sending to an external service
@@ -47,23 +47,23 @@
 
 pub(crate) mod crypto;
 pub(crate) mod fake;
-pub mod secrets_file;
-pub(crate) mod swap;
-pub mod segment;
-pub(crate) mod serde_helpers;
 pub mod patterns;
-pub(crate) mod secrets;
-pub mod types;
 pub(crate) mod restore;
 pub(crate) mod restore_core;
 #[cfg(feature = "async")]
 pub(crate) mod restore_stream;
+pub(crate) mod secrets;
+pub mod secrets_file;
+pub mod segment;
+pub(crate) mod serde_helpers;
+pub(crate) mod swap;
+pub mod types;
 
-pub use secrets_file::{SecretsFile, SecretsFileError, PatternEntry, SecretEntry};
-pub use swap::swap;
 pub use patterns::Pattern;
-pub use secrets::{SecretError, SecretOptions, register, register_with_options};
-pub use types::{Entry, SwapError, SwapResult, SessionKey};
 pub use restore::{RestoreError, restore};
 #[cfg(feature = "async")]
 pub use restore_stream::{RestoreStream, restore_stream};
+pub use secrets::{SecretError, SecretOptions, register, register_with_options};
+pub use secrets_file::{PatternEntry, SecretEntry, SecretsFile, SecretsFileError};
+pub use swap::swap;
+pub use types::{Entry, SessionKey, SwapError, SwapResult};

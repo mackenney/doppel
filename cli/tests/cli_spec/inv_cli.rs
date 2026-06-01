@@ -7,7 +7,7 @@ fn init_patterns_file(path: &std::path::Path) {
 }
 
 #[test]
-fn test_inv20_cli_no_key_flag_on_unscrub() {
+fn test_inv20_cli_no_key_flag_on_restore() {
     // INV-20: "The CLI restore command MUST accept the session key only via
     //          DOPPEL_KEY environment variable; no other mechanism."
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_doppel"))
@@ -26,7 +26,7 @@ fn test_inv20_cli_no_key_flag_on_unscrub() {
 }
 
 #[test]
-fn test_inv21_cli_scrub_key_file_mode_0600() {
+fn test_inv21_cli_swap_key_file_mode_0600() {
     // INV-21: "The CLI swap command MUST create the session key output file
     //          with permission mode 0600."
     #[cfg(unix)]

@@ -1,4 +1,4 @@
-use doppel::{register, swap, patterns, restore};
+use doppel::{patterns, register, restore, swap};
 
 // Synthetic test secrets — NOT real credentials
 const SYNTH_ANTHROPIC: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -67,7 +67,7 @@ fn round_trip_chunked(
 
 // VC-1: Given a Tier 1 secret, scrubbed output contains no byte subsequence equal to original
 #[test]
-fn test_vc1_scrubbed_contains_no_original_secret() {
+fn test_vc1_swapped_contains_no_original_secret() {
     // VC-1 from SPEC.md Verifiable Conditions
     let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
@@ -82,7 +82,7 @@ fn test_vc1_scrubbed_contains_no_original_secret() {
 
 // VC-2: Round-trip: swap → restore → original
 #[test]
-fn test_vc2_scrub_unscrub_round_trip_tier1() {
+fn test_vc2_swap_restore_round_trip_tier1() {
     // VC-2 from SPEC.md Verifiable Conditions
     for (key, pats) in [
         (SYNTH_ANTHROPIC, vec![patterns::anthropic()]),
@@ -105,7 +105,7 @@ fn test_vc2_scrub_unscrub_round_trip_tier1() {
 
 // VC-3: Same secret, same Pattern → identical fake across two swap calls
 #[test]
-fn test_vc3_two_scrub_calls_same_fake() {
+fn test_vc3_two_swap_calls_same_fake() {
     // VC-3 from SPEC.md Verifiable Conditions
     let payload = [b"k: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let pat = patterns::anthropic();
@@ -356,7 +356,7 @@ fn test_vc13_non_leading_literal_reproduced_in_fake() {
 }
 
 #[test]
-fn test_mixed_tier1_tier2_scrub_unscrub() {
+fn test_mixed_tier1_tier2_swap_restore() {
     // When has_tier2=true, swap falls back to byte-by-byte scanning.
     // Verify both a Tier 1 and a Tier 2 secret are detected and restored.
     let tier2_secret = b"my-custom-tier2-token-abcdefghijklmnopqrstuvwxyz0123456789-xyz";
