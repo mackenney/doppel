@@ -1,4 +1,4 @@
-use its_classified::{register, scrub, tier1::patterns, types::Entry, unscrub};
+use doppel::{register, swap, patterns, types::Entry, restore};
 
 // Synthetic test keys — NOT real credentials. Format matches real format for structural testing.
 const SYNTH_ANTHROPIC: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -13,10 +13,10 @@ const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 #[test]
 fn test_inv1_scrub_replaces_every_detected_secret() {
-    // INV-1: "scrub MUST replace every secret detected by the supplied Patterns
+    // INV-1: "swap MUST replace every secret detected by the supplied Patterns
     //         with a structurally-equivalent fake."
     let payload = [b"Authorization: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     assert!(
         !result
             .payload
@@ -28,11 +28,11 @@ fn test_inv1_scrub_replaces_every_detected_secret() {
 
 #[test]
 fn test_inv2_scrub_does_not_modify_non_secret_bytes() {
-    // INV-2: "scrub MUST NOT modify bytes that are not identified as secrets."
+    // INV-2: "swap MUST NOT modify bytes that are not identified as secrets."
     let prefix = b"Authorization: ";
     let suffix = b" end-of-header";
     let payload = [prefix.as_slice(), SYNTH_ANTHROPIC, suffix].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     assert!(
         result.payload.starts_with(prefix),
         "INV-2: prefix unchanged"
@@ -47,10 +47,10 @@ fn test_inv2_scrub_does_not_modify_non_secret_bytes() {
 
 #[test]
 fn test_inv3_entries_exactly_one_per_distinct_secret() {
-    // INV-3: "scrub MUST return entries containing exactly one record per distinct secret."
+    // INV-3: "swap MUST return entries containing exactly one record per distinct secret."
     let payload = [SYNTH_ANTHROPIC, b" separator ".as_slice(), SYNTH_AWS_AKIA].concat();
     let result =
-        scrub(&payload, &[patterns::anthropic(), patterns::aws_akia()]).expect("scrub failed");
+        swap(&payload, &[patterns::anthropic(), patterns::aws_akia()]).expect("swap failed");
     assert_eq!(
         result.entries.len(),
         2,
@@ -60,10 +60,10 @@ fn test_inv3_entries_exactly_one_per_distinct_secret() {
 
 #[test]
 fn test_inv4_unscrub_restores_across_chunk_boundaries() {
-    // INV-4: "unscrub MUST restore every fake present in the response stream
+    // INV-4: "restore MUST restore every fake present in the response stream
     //         regardless of where chunk boundaries fall."
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let scrub_result = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
+    let scrub_result = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
 
     struct ByteByByteReader<'a> {
         data: &'a [u8],
@@ -85,7 +85,7 @@ fn test_inv4_unscrub_restores_across_chunk_boundaries() {
         pos: 0,
     };
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut reader,
         &mut output,
         &scrub_result.entries,
@@ -97,15 +97,15 @@ fn test_inv4_unscrub_restores_across_chunk_boundaries() {
 
 #[test]
 fn test_inv5_unscrub_does_not_emit_before_aead_verified() {
-    // INV-5: "unscrub MUST NOT emit restored plaintext before the AEAD tag has been verified."
+    // INV-5: "restore MUST NOT emit restored plaintext before the AEAD tag has been verified."
     // Proxy test: tamper with tag → Err → no secret bytes in output
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let mut scrub_result = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
+    let mut scrub_result = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
     let last = scrub_result.entries[0].ciphertext.len() - 1;
     scrub_result.entries[0].ciphertext[last] ^= 0xFF;
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
-    let _ = unscrub(
+    let _ = restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -122,15 +122,15 @@ fn test_inv5_unscrub_does_not_emit_before_aead_verified() {
 #[cfg(feature = "async")]
 #[test]
 fn test_inv5_async_no_plaintext_before_aead_verified() {
-    // INV-5: "unscrub MUST NOT emit restored plaintext before the AEAD tag has been verified."
+    // INV-5: "restore MUST NOT emit restored plaintext before the AEAD tag has been verified."
     // Async variant: tamper tag, verify secret never appears in any emitted chunk.
     use bytes::Bytes;
     use futures::{StreamExt, stream};
-    use its_classified::unscrub_stream;
+    use doppel::restore_stream;
     use std::io;
 
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let mut sr = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
+    let mut sr = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
     let last = sr.entries[0].ciphertext.len() - 1;
     sr.entries[0].ciphertext[last] ^= 0xFF; // tamper tag
 
@@ -140,7 +140,7 @@ fn test_inv5_async_no_plaintext_before_aead_verified() {
         .map(|c| Ok(Bytes::copy_from_slice(c)))
         .collect();
     let inner = stream::iter(chunks);
-    let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+    let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
 
     let result = futures::executor::block_on(async {
         let mut all: Vec<u8> = Vec::new();
@@ -167,12 +167,12 @@ fn test_inv5_async_no_plaintext_before_aead_verified() {
 fn test_inv6_aead_tag_failure_produces_error() {
     // INV-6: "An AEAD tag failure MUST produce an error; the stream MUST NOT continue."
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let mut scrub_result = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
+    let mut scrub_result = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
     let last = scrub_result.entries[0].ciphertext.len() - 1;
     scrub_result.entries[0].ciphertext[last] ^= 0xFF;
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
-    let result = unscrub(
+    let result = restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -187,11 +187,11 @@ fn test_inv6_async_aead_tag_failure_produces_error() {
     // INV-6: "An AEAD tag failure MUST produce an error; the stream MUST NOT continue."
     use bytes::Bytes;
     use futures::{StreamExt, stream};
-    use its_classified::{UnscrubError, unscrub_stream};
+    use doppel::{RestoreError, restore_stream};
     use std::io;
 
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
-    let mut sr = scrub(&payload, &[patterns::github_classic()]).expect("scrub failed");
+    let mut sr = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
     let last = sr.entries[0].ciphertext.len() - 1;
     sr.entries[0].ciphertext[last] ^= 0xFF; // tamper tag
 
@@ -201,7 +201,7 @@ fn test_inv6_async_aead_tag_failure_produces_error() {
         .map(|c| Ok(Bytes::copy_from_slice(c)))
         .collect();
     let inner = stream::iter(chunks);
-    let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+    let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
 
     let result = futures::executor::block_on(async {
         let mut items_after_err = 0usize;
@@ -213,7 +213,7 @@ fn test_inv6_async_aead_tag_failure_produces_error() {
             }
             if item.is_err() {
                 assert!(
-                    matches!(item, Err(UnscrubError::AeadTagFailure { .. })),
+                    matches!(item, Err(RestoreError::AeadTagFailure { .. })),
                     "INV-6: must yield AeadTagFailure"
                 );
                 saw_err = true;
@@ -231,14 +231,14 @@ fn test_inv6_async_aead_tag_failure_produces_error() {
 
 #[test]
 fn test_inv7_unscrub_no_fake_forwarded_unchanged() {
-    // INV-7: "unscrub MUST forward all bytes unchanged when no fake appears in stream;
+    // INV-7: "restore MUST forward all bytes unchanged when no fake appears in stream;
     //         it MUST NOT produce an error."
     let payload = b"no secrets here at all";
-    let scrub_result = scrub(payload, &[patterns::anthropic()]).expect("scrub failed");
+    let scrub_result = swap(payload, &[patterns::anthropic()]).expect("swap failed");
     let response = b"a response with no matching content";
     let mut input = response.as_slice();
     let mut output = Vec::new();
-    let result = unscrub(
+    let result = restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -253,10 +253,10 @@ fn test_inv7_unscrub_no_fake_forwarded_unchanged() {
 
 #[test]
 fn test_inv8_unscrub_bounded_hold() {
-    // INV-8: "unscrub MUST NOT hold more than max{|fake_i|} bytes unemitted at any point."
+    // INV-8: "restore MUST NOT hold more than max{|fake_i|} bytes unemitted at any point."
     // Proxy: verify round-trip is correct with 1-byte input chunks (bound enforced by impl)
     let payload = [b"ctx: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let scrub_result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
 
     struct OneByteReader<'a> {
         data: &'a [u8],
@@ -278,7 +278,7 @@ fn test_inv8_unscrub_bounded_hold() {
         pos: 0,
     };
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut reader,
         &mut output,
         &scrub_result.entries,
@@ -294,17 +294,17 @@ fn test_inv8_unscrub_bounded_hold() {
 #[cfg(feature = "async")]
 #[test]
 fn test_inv8_async_hold_bound_observed() {
-    // INV-8: "unscrub MUST NOT hold more than max{|fake_i|} bytes unemitted at any point."
+    // INV-8: "restore MUST NOT hold more than max{|fake_i|} bytes unemitted at any point."
     // Direct observation: feed bytes one at a time, verify output never lags input by more than max_hold.
     use bytes::Bytes;
     use futures::StreamExt;
-    use its_classified::unscrub_stream;
+    use doppel::restore_stream;
     use std::io;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let payload = [b"prefix ".as_slice(), SYNTH_ANTHROPIC, b" suffix"].concat();
-    let sr = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let sr = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     let max_hold = sr.entries.iter().map(|e| e.fake.len()).max().unwrap_or(0);
 
     let fed = Arc::new(AtomicUsize::new(0));
@@ -315,7 +315,7 @@ fn test_inv8_async_hold_bound_observed() {
         Ok::<_, io::Error>(Bytes::from(vec![b]))
     });
     let inner = futures::stream::iter(chunks);
-    let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+    let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
 
     let mut max_lag = 0usize;
     let mut total_out = 0usize;
@@ -346,7 +346,7 @@ fn test_inv8_async_hold_bound_observed() {
 fn test_inv9_entries_contain_no_plaintext_secret() {
     // INV-9: "entries MUST NOT contain plaintext secret bytes in any field or serialized form."
     let payload = [b"token: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     let json = Entry::serialize_entries(&result.entries).unwrap();
     assert!(
         !json
@@ -360,7 +360,7 @@ fn test_inv9_entries_contain_no_plaintext_secret() {
 fn test_inv9_tier2_no_secret_bytes_in_entries() {
     // INV-9 (Tier 2): the variable portion of a registered secret must not appear
     // in the serialized entries — not even as a 4-byte sliding-window fragment.
-    // With the default RegistrationOptions (wide charset, no prefix preservation),
+    // With the default SecretOptions (wide charset, no prefix preservation),
     // the fake is drawn from a charset with no overlap with the secret bytes.
     //
     // This test closes the gap that was previously undetected: the old implementation
@@ -369,7 +369,7 @@ fn test_inv9_tier2_no_secret_bytes_in_entries() {
     let secret = b"my-arb-secret-value-0123456789!"; // 31 bytes, mixed charset
     let pat = register(secret).unwrap();
     let payload = [b"Authorization: ".as_slice(), secret].concat();
-    let result = scrub(&payload, &[pat]).expect("scrub failed");
+    let result = swap(&payload, &[pat]).expect("swap failed");
     let json = Entry::serialize_entries(&result.entries).unwrap();
     // No 4-byte window of the secret should appear anywhere in the serialized entries.
     for window in secret.windows(4) {
@@ -386,7 +386,7 @@ fn test_inv9_tier2_no_secret_bytes_in_entries() {
 fn test_inv10_session_key_not_in_entries() {
     // INV-10: "The session key MUST NOT be serialized together with or embedded within the entries."
     let payload = [b"token: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     let json = Entry::serialize_entries(&result.entries).unwrap();
     let key_bytes = result.session_key.as_bytes();
     assert!(
@@ -399,7 +399,7 @@ fn test_inv10_session_key_not_in_entries() {
 fn test_inv11_session_key_zeroized_on_drop() {
     // INV-11,12: "key material MUST be destroyed when the session cycle ends."
     // Verify ZeroizeOnDrop is implemented on SessionKey.
-    use its_classified::types::SessionKey;
+    use doppel::types::SessionKey;
     fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
     assert_zeroize_on_drop::<SessionKey>();
 }
@@ -409,7 +409,7 @@ fn test_inv12_key_material_destroyed_on_drop() {
     // INV-12: covered by ZeroizeOnDrop derive on SessionKey (verified in test_inv11).
     // Compile-time guarantee: SessionKey has no Clone or Debug impl.
     // Code review and type system enforce no Clone/Debug; test_inv10 exercises the type.
-    use its_classified::types::SessionKey;
+    use doppel::types::SessionKey;
     let _ = std::mem::size_of::<SessionKey>();
 }
 
@@ -418,8 +418,8 @@ fn test_inv13_same_secret_same_pattern_same_fake() {
     // INV-13: "The same secret detected under the same Pattern MUST produce the same fake."
     let payload = [b"x: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let pat = patterns::anthropic();
-    let result1 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
-    let result2 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
+    let result1 = swap(&payload, std::slice::from_ref(&pat)).expect("swap failed");
+    let result2 = swap(&payload, std::slice::from_ref(&pat)).expect("swap failed");
     assert_eq!(
         result1.entries[0].fake, result2.entries[0].fake,
         "INV-13: same secret + same Pattern must produce same fake"
@@ -431,7 +431,7 @@ fn test_inv14_multiple_occurrences_one_entry_same_fake() {
     // INV-14: "Multiple occurrences of the same secret produce the same fake; one entry."
     let sep = b" separator ";
     let payload = [SYNTH_ANTHROPIC, sep.as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     assert_eq!(
         result.entries.len(),
         1,
@@ -453,7 +453,7 @@ fn test_inv15_fake_not_equal_to_original() {
     // INV-15: "A fake MUST NOT equal the original secret."
     let payload = [b"k: ".as_slice(), SYNTH_ANTHROPIC].concat();
     for _ in 0..10 {
-        let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+        let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert_ne!(
             fake.as_slice(),
@@ -476,12 +476,12 @@ fn test_inv15_fake_not_equal_to_original() {
 fn test_inv16_tier2_hmac_failure_passthrough() {
     // INV-16: "A Tier 2 candidate that matches structurally but fails HMAC verification
     //          MUST be passed through unchanged; no replacement occurs."
-    use its_classified::register;
+    use doppel::register;
     let real_secret = b"my-registered-api-secret-value!";
     let pat = register(real_secret).unwrap();
     let mut tampered = real_secret.to_vec();
     tampered[12] ^= 0xFF;
-    let result = scrub(&tampered, &[pat]).expect("scrub failed");
+    let result = swap(&tampered, &[pat]).expect("swap failed");
     assert_eq!(
         result.payload, tampered,
         "INV-16: HMAC failure → pass through unchanged"
@@ -495,13 +495,13 @@ fn test_inv16_tier2_hmac_failure_passthrough() {
 #[test]
 fn test_inv17_tier2_unique_salt_per_registration() {
     // INV-17: "Each Tier 2 registration MUST use a unique HMAC salt."
-    use its_classified::register;
+    use doppel::register;
     let secret = b"my-secret-value-for-registration";
     let pat1 = register(secret).unwrap();
     let pat2 = register(secret).unwrap();
     let payload1 = [b"token: ".as_slice(), secret].concat();
-    let r1 = scrub(&payload1, &[pat1]).expect("scrub failed");
-    let r2 = scrub(&payload1, &[pat2]).expect("scrub failed");
+    let r1 = swap(&payload1, &[pat1]).expect("swap failed");
+    let r2 = swap(&payload1, &[pat2]).expect("swap failed");
     // Both produce a fake (detection works independently)
     assert_eq!(r1.entries.len(), 1);
     assert_eq!(r2.entries.len(), 1);
@@ -514,11 +514,11 @@ fn test_inv18_leftmost_longest_match() {
     // openai_classic fails because 'proj-' contains '-' (not alphanumeric).
     let payload: &[u8] = b"sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
     // "sk-proj-" (8) + 58 B's + "T3BlbkFJ" (8) + 58 B's = 132 chars total
-    let result = scrub(
+    let result = swap(
         payload,
         &[patterns::openai_classic(), patterns::openai_project()],
     )
-    .expect("scrub failed");
+    .expect("swap failed");
     assert_eq!(
         result.entries.len(),
         1,
@@ -532,14 +532,14 @@ fn test_inv18_leftmost_longest_match() {
 
 #[test]
 fn test_inv19_unscrub_exact_matching_only() {
-    // INV-19: "unscrub MUST perform only exact matching against fake byte strings;
+    // INV-19: "restore MUST perform only exact matching against fake byte strings;
     //          it MUST NOT run pattern detection of any kind."
     let payload = b"no secret here";
-    let scrub_result = scrub(payload, &[patterns::anthropic()]).expect("scrub failed");
+    let scrub_result = swap(payload, &[patterns::anthropic()]).expect("swap failed");
     let response_with_real_key = [b"response: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let mut input = response_with_real_key.as_slice();
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -557,7 +557,7 @@ fn test_inv22_all_tier1_built_in_classes_present() {
     // INV-22: built-in Tier 1 MUST cover Anthropic, OpenAI (classic + project),
     //         AWS IAM (AKIA + ASIA), GitHub PAT (classic + fine-grained), and GCP API keys.
     //
-    // Validates behaviorally: scrub a synthetic key of each class and assert detection.
+    // Validates behaviorally: swap a synthetic key of each class and assert detection.
     let cases: &[(&str, &[u8])] = &[
         // Anthropic: prefix "sk-ant-api03-", exactly 108, url_safe_base64
         (
@@ -611,7 +611,7 @@ fn test_inv22_all_tier1_built_in_classes_present() {
     ];
     let all = patterns::all();
     for (name, secret) in cases {
-        let result = scrub(secret, &all).expect("scrub failed");
+        let result = swap(secret, &all).expect("swap failed");
         assert_eq!(
             result.entries.len(),
             1,
@@ -622,10 +622,10 @@ fn test_inv22_all_tier1_built_in_classes_present() {
 
 #[test]
 fn test_inv23_no_detectable_secrets_returns_unchanged() {
-    // INV-23: "scrub called on a payload containing no detectable secrets MUST return
+    // INV-23: "swap called on a payload containing no detectable secrets MUST return
     //          the payload bytes unchanged and an empty entries set."
     let payload = b"Hello, world! This is a normal message with no API keys.";
-    let result = scrub(payload, &patterns::all()).expect("scrub failed");
+    let result = swap(payload, &patterns::all()).expect("swap failed");
     assert_eq!(
         result.payload.as_slice(),
         payload,
@@ -633,7 +633,7 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
     );
     assert!(result.entries.is_empty(), "INV-23: entries empty");
 
-    let result2 = scrub(payload, &[]).expect("scrub failed");
+    let result2 = swap(payload, &[]).expect("swap failed");
     assert_eq!(
         result2.payload.as_slice(),
         payload,
@@ -646,23 +646,23 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
 }
 
 // INV-AAD: AEAD tag covers the fake field (AAD binding).
-// Replacing Entry.fake after scrub MUST cause decrypt_entry to return
-// AeadTagFailure — unscrub MUST NOT emit the original secret.
+// Replacing Entry.fake after swap MUST cause decrypt_entry to return
+// AeadTagFailure — restore MUST NOT emit the original secret.
 #[test]
 fn test_inv_aad_fake_binding() {
     let secret = SYNTH_ANTHROPIC;
     let payload = [b"token: ".as_slice(), secret].concat();
-    let scrub_result = scrub(&payload, &[patterns::anthropic()]).unwrap();
+    let scrub_result = swap(&payload, &[patterns::anthropic()]).unwrap();
 
     // Tamper: replace fake with attacker-controlled trigger.
     let mut tampered = scrub_result.entries.clone();
     tampered[0].fake = b"ATTACKER_TRIGGER".to_vec();
 
-    // Victim runs unscrub against tampered entries.
+    // Victim runs restore against tampered entries.
     let response = b"response contains ATTACKER_TRIGGER here";
     let mut input = response.as_slice();
     let mut output = Vec::new();
-    let result = unscrub(
+    let result = restore(
         &mut input,
         &mut output,
         &tampered,
@@ -689,7 +689,7 @@ fn test_inv28_literal_segments_reproduced_verbatim_in_fake() {
     // Anthropic: leading literal "sk-ant-api03-" and trailing literal "AA"
     {
         let secret = SYNTH_ANTHROPIC;
-        let result = scrub(secret, &[anthropic()]).expect("scrub failed");
+        let result = swap(secret, &[anthropic()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert!(
             fake.starts_with(b"sk-ant-api03-"),
@@ -704,7 +704,7 @@ fn test_inv28_literal_segments_reproduced_verbatim_in_fake() {
     // OpenAI project: leading literal "sk-proj-" and embedded literal "T3BlbkFJ" at position 8+58
     {
         let secret: &[u8] = b"sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-        let result = scrub(secret, &[openai_project()]).expect("scrub failed");
+        let result = swap(secret, &[openai_project()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert!(
             fake.starts_with(b"sk-proj-"),
@@ -720,7 +720,7 @@ fn test_inv28_literal_segments_reproduced_verbatim_in_fake() {
     // GitHub fine-grained: leading literal "github_pat_" and separator "_" at position 11+22
     {
         let secret = SYNTH_GITHUB_FG;
-        let result = scrub(secret, &[github_fine_grained()]).expect("scrub failed");
+        let result = swap(secret, &[github_fine_grained()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert!(
             fake.starts_with(b"github_pat_"),
@@ -736,7 +736,7 @@ fn test_inv28_literal_segments_reproduced_verbatim_in_fake() {
     // Slack bot: leading literal "xoxb-" and both "-" separators
     {
         let secret = b"xoxb-1234567890-1234567890-AAAAAAAAAAAAAAAAAAAAAAAA";
-        let result = scrub(secret, &[slack_bot()]).expect("scrub failed");
+        let result = swap(secret, &[slack_bot()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert!(fake.starts_with(b"xoxb-"), "INV-28: Slack prefix literal");
         // xoxb-(10-13 digits)-(10-13 digits)-(24 alnum)
@@ -776,7 +776,7 @@ fn test_inv29_variable_segment_bytes_in_charset() {
 
     // Anthropic: variable region is fake[13..106] (93 bytes), must be url_safe_b64
     {
-        let result = scrub(SYNTH_ANTHROPIC, &[anthropic()]).expect("scrub failed");
+        let result = swap(SYNTH_ANTHROPIC, &[anthropic()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert_eq!(fake.len(), 108);
         assert!(
@@ -788,7 +788,7 @@ fn test_inv29_variable_segment_bytes_in_charset() {
     // GitHub fine-grained: variable region 1 fake[11..33] = 22 alphanumeric bytes
     //                       variable region 2 fake[34..93] = 59 alphanumeric bytes
     {
-        let result = scrub(SYNTH_GITHUB_FG, &[github_fine_grained()]).expect("scrub failed");
+        let result = swap(SYNTH_GITHUB_FG, &[github_fine_grained()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert_eq!(fake.len(), 93);
         assert!(
@@ -806,7 +806,7 @@ fn test_inv29_variable_segment_bytes_in_charset() {
     //   var3 = fake[27..51] (24 alnum)
     {
         let secret = b"xoxb-1234567890-1234567890-AAAAAAAAAAAAAAAAAAAAAAAA";
-        let result = scrub(secret, &[slack_bot()]).expect("scrub failed");
+        let result = swap(secret, &[slack_bot()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert_eq!(fake.len(), 51);
         assert!(
@@ -826,24 +826,24 @@ fn test_inv29_variable_segment_bytes_in_charset() {
 
 #[test]
 fn test_inv13_cross_serialization_fake_stability() {
-    // INV-13: register → serialize patterns → deserialize → scrub → same fake
-    use its_classified::{PatternsFile, RegistrationOptions, register_with_options, scrub};
+    // INV-13: register → serialize patterns → deserialize → swap → same fake
+    use doppel::{SecretsFile, SecretOptions, register_with_options, swap};
 
     let secret = b"my-custom-secret-for-cross-serial-test";
-    let pat = register_with_options(secret, &RegistrationOptions::default()).unwrap();
+    let pat = register_with_options(secret, &SecretOptions::default()).unwrap();
 
-    let mut pf = PatternsFile::new();
+    let mut pf = SecretsFile::new();
     pf.generate_missing_tier1_salts();
-    pf.add_tier2_pattern(&pat, None).unwrap();
+    pf.add_secret_pattern(&pat, None).unwrap();
 
     let payload = [b"token: ".as_slice(), secret].concat();
-    let result1 = scrub(&payload, std::slice::from_ref(&pat)).unwrap();
+    let result1 = swap(&payload, std::slice::from_ref(&pat)).unwrap();
 
     let bytes = pf.serialize().unwrap();
-    let pf2 = PatternsFile::deserialize(&bytes).unwrap();
+    let pf2 = SecretsFile::deserialize(&bytes).unwrap();
     let patterns2 = pf2.into_patterns().unwrap();
 
-    let result2 = scrub(&payload, &patterns2).unwrap();
+    let result2 = swap(&payload, &patterns2).unwrap();
 
     assert_eq!(
         result1.entries[0].fake, result2.entries[0].fake,
@@ -854,10 +854,10 @@ fn test_inv13_cross_serialization_fake_stability() {
 #[test]
 fn test_inv25_register_empty_secret_returns_tooshort() {
     // INV-25: empty secret MUST return TooShort, MUST NOT panic.
-    use its_classified::RegistrationError;
-    let result = its_classified::register(b"");
+    use doppel::SecretError;
+    let result = doppel::register(b"");
     assert!(
-        matches!(result, Err(RegistrationError::TooShort)),
+        matches!(result, Err(SecretError::TooShort)),
         "INV-25: empty secret must yield TooShort"
     );
 }
@@ -865,16 +865,16 @@ fn test_inv25_register_empty_secret_returns_tooshort() {
 #[test]
 fn test_inv25_register_no_variable_bytes_returns_error() {
     // INV-25: preserve_prefix + preserve_suffix >= secret.len() → NoVariableBytes.
-    use its_classified::{RegistrationError, RegistrationOptions, register_with_options};
+    use doppel::{SecretError, SecretOptions, register_with_options};
     let secret = b"abcdefgh"; // 8 bytes
-    let opts = RegistrationOptions {
+    let opts = SecretOptions {
         preserve_prefix: 5,
         preserve_suffix: 3, // 5+3 == 8 == secret.len()
         restrict_charset: false,
     };
     let result = register_with_options(secret, &opts);
     assert!(
-        matches!(result, Err(RegistrationError::NoVariableBytes { .. })),
+        matches!(result, Err(SecretError::NoVariableBytes { .. })),
         "INV-25: fully-preserved secret must yield NoVariableBytes"
     );
 }
@@ -884,9 +884,9 @@ fn test_inv26_register_short_variable_portion_succeeds() {
     // INV-26: variable portion < 14 bytes → MUST emit log::warn diagnostic.
     // This test verifies the function succeeds; log capture not yet wired.
     // TODO: add log-capture assertion when a test logger harness is available.
-    use its_classified::{RegistrationOptions, register_with_options};
+    use doppel::{SecretOptions, register_with_options};
     let secret = b"PREFIX_secret"; // 13 bytes, preserve_prefix=7 → variable=6 < 14
-    let opts = RegistrationOptions {
+    let opts = SecretOptions {
         preserve_prefix: 7,
         preserve_suffix: 0,
         restrict_charset: false,
@@ -903,9 +903,9 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
     // INV-27: alphanumeric secret + restrict_charset=false → MUST emit log::warn.
     // This test verifies the function succeeds; log capture not yet wired.
     // TODO: add log-capture assertion when a test logger harness is available.
-    use its_classified::{RegistrationOptions, register_with_options};
+    use doppel::{SecretOptions, register_with_options};
     let secret = b"myAlphaNumericSecret123";
-    let opts = RegistrationOptions {
+    let opts = SecretOptions {
         preserve_prefix: 0,
         preserve_suffix: 0,
         restrict_charset: false,
@@ -920,8 +920,8 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
 #[test]
 fn test_inv30_user_tier1_requires_variable_segment() {
     // INV-30: "A user-defined Tier 1 pattern MUST specify at least one Variable segment"
-    use its_classified::{PatternsFile, segment::SegmentDef};
-    let mut pf = PatternsFile::new();
+    use doppel::{SecretsFile, segment::SegmentDef};
+    let mut pf = SecretsFile::new();
     pf.generate_missing_tier1_salts();
     let result = pf.add_tier1_entry(
         "pure_literal".into(),
@@ -943,8 +943,8 @@ fn test_inv30_user_tier1_requires_variable_segment() {
 #[test]
 fn test_inv31_duplicate_identifier_rejected() {
     // INV-31: "A user-defined Tier 1 identifier MUST be unique within the patterns file"
-    use its_classified::{PatternsFile, segment::SegmentDef};
-    let mut pf = PatternsFile::new();
+    use doppel::{SecretsFile, segment::SegmentDef};
+    let mut pf = SecretsFile::new();
     pf.generate_missing_tier1_salts();
     let segs = vec![SegmentDef::Variable {
         charset: "alphanumeric".into(),
@@ -965,8 +965,8 @@ fn test_inv31_duplicate_identifier_rejected() {
 #[test]
 fn test_inv32_missing_builtin_is_allowed() {
     // INV-32: "Removing a built-in Tier 1 identifier from the patterns file is permitted"
-    use its_classified::PatternsFile;
-    let pf = PatternsFile {
+    use doppel::SecretsFile;
+    let pf = SecretsFile {
         version: 2,
         tier1: vec![],
         tier2: vec![],
@@ -982,16 +982,16 @@ fn test_inv32_missing_builtin_is_allowed() {
 #[test]
 fn test_inv33_version_must_be_2() {
     // INV-33: "The patterns file version MUST be 2"
-    use its_classified::PatternsFile;
+    use doppel::SecretsFile;
     let data = b"version = 1\ntier1 = []\ntier2 = []\n";
-    let err = PatternsFile::deserialize(data).unwrap_err();
+    let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),
         "INV-33: version 1 must be rejected"
     );
 
     let data = b"version = 3\ntier1 = []\ntier2 = []\n";
-    let err = PatternsFile::deserialize(data).unwrap_err();
+    let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),
         "INV-33: version 3 must be rejected"
@@ -1000,20 +1000,20 @@ fn test_inv33_version_must_be_2() {
 
 #[test]
 fn test_inv25_collision_limit_path_exists() {
-    // INV-25: RegistrationError::CollisionLimit must be returned when fake generation
+    // INV-25: SecretError::CollisionLimit must be returned when fake generation
     // exhausts retries. The trial derivation in register_with_options checks for collision
     // at registration time. A genuine collision requires a secret whose derived fake
     // equals itself — astronomically unlikely for secrets > 14 bytes.
     //
     // This test verifies the code path exists by confirming that registration performs
-    // the trial derivation (if it didn't, a collision would surface at scrub time as
-    // ScrubError::Fake instead of RegistrationError::CollisionLimit).
+    // the trial derivation (if it didn't, a collision would surface at swap time as
+    // SwapError::Fake instead of SecretError::CollisionLimit).
     //
     // A synthetic collision test would require reverse-engineering the HMAC-based
     // derivation to find a secret that maps to itself — not feasible.
-    use its_classified::{RegistrationError, RegistrationOptions, register_with_options};
+    use doppel::{SecretError, SecretOptions, register_with_options};
     let secret = b"short-but-valid-secret-value";
-    let opts = RegistrationOptions {
+    let opts = SecretOptions {
         preserve_prefix: 0,
         preserve_suffix: 0,
         restrict_charset: false,
@@ -1021,7 +1021,7 @@ fn test_inv25_collision_limit_path_exists() {
     // Succeeds because no collision occurs for this secret.
     let _ = register_with_options(secret, &opts).unwrap();
     // Verify the CollisionLimit variant is discriminable (not dead code).
-    let err: RegistrationError = RegistrationError::CollisionLimit { attempts: 1 };
+    let err: SecretError = SecretError::CollisionLimit { attempts: 1 };
     assert!(
         err.to_string().contains("exhausted"),
         "INV-25: CollisionLimit error message must be descriptive"
@@ -1032,8 +1032,8 @@ fn test_inv25_collision_limit_path_exists() {
 fn test_inv_empty_fake_sync_rejected() {
     // The empty-fake guard MUST fire before AhoCorasick build to prevent
     // an infinite loop (Match{0,0} → drain(..0) no-op).
-    use its_classified::types::{Entry, SessionKey};
-    use its_classified::{UnscrubError, unscrub};
+    use doppel::types::{Entry, SessionKey};
+    use doppel::{RestoreError, restore};
 
     let bad_entry = Entry {
         fake: vec![],
@@ -1043,9 +1043,9 @@ fn test_inv_empty_fake_sync_rejected() {
     let key = SessionKey::from_bytes([1u8; 32]);
     let mut input = b"some payload".as_slice();
     let mut output = Vec::new();
-    let result = unscrub(&mut input, &mut output, &[bad_entry], &key);
+    let result = restore(&mut input, &mut output, &[bad_entry], &key);
     assert!(
-        matches!(result, Err(UnscrubError::Build { .. })),
+        matches!(result, Err(RestoreError::Build { .. })),
         "empty fake MUST return Err(Build), not loop"
     );
     assert!(
@@ -1059,8 +1059,8 @@ fn test_inv_empty_fake_sync_rejected() {
 fn test_inv_empty_fake_async_rejected() {
     use bytes::Bytes;
     use futures::stream;
-    use its_classified::types::{Entry, SessionKey};
-    use its_classified::{UnscrubError, unscrub_stream};
+    use doppel::types::{Entry, SessionKey};
+    use doppel::{RestoreError, restore_stream};
     use std::io;
 
     let bad_entry = Entry {
@@ -1070,9 +1070,9 @@ fn test_inv_empty_fake_async_rejected() {
     };
     let key = SessionKey::from_bytes([1u8; 32]);
     let inner = stream::empty::<Result<Bytes, io::Error>>();
-    let result = unscrub_stream(inner, vec![bad_entry], key);
+    let result = restore_stream(inner, vec![bad_entry], key);
     assert!(
-        matches!(result, Err(UnscrubError::Build { .. })),
+        matches!(result, Err(RestoreError::Build { .. })),
         "empty fake MUST return Err(Build) from constructor"
     );
     // No output check: constructor failure prevents stream creation,

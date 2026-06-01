@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
-    name = "its-classified",
+    name = "doppel",
     about = "Secret scrubbing for LLM request/response cycles"
 )]
 struct Cli {
@@ -13,8 +13,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Scrub secrets from stdin. Writes scrubbed payload to stdout.
-    Scrub {
+    /// Swap secrets from stdin. Writes scrubbed payload to stdout.
+    Swap {
         /// Path to the patterns file (created by `init`).
         #[arg(long)]
         patterns: PathBuf,
@@ -26,12 +26,12 @@ enum Commands {
         key_out: PathBuf,
     },
     /// Restore secrets in a response stream from stdin to stdout.
-    /// Session key must be provided via the ITS_CLASSIFIED_KEY environment variable.
-    Unscrub {
+    /// Session key must be provided via the DOPPEL_KEY environment variable.
+    Restore {
         /// Path to the entries file written by scrub.
         #[arg(long)]
         entries: PathBuf,
-        // NO --key flag — INV-20: key via ITS_CLASSIFIED_KEY env var only
+        // NO --key flag — INV-20: key via DOPPEL_KEY env var only
     },
     /// Create a new patterns file with all built-in Tier 1 definitions and stable salts.
     Init {
@@ -110,7 +110,7 @@ enum Commands {
 
 const INIT_COMMENT_BLOCK: &str = r#"# Tier 2 secrets are registered via the CLI:
 #
-#   echo -n 'my-secret-value' | its-classified register \
+#   echo -n 'my-secret-value' | doppel register \
 #     --patterns <this-file> \
 #     --label my-secret \
 #     --preserve-prefix 0 \
@@ -129,7 +129,7 @@ const INIT_COMMENT_BLOCK: &str = r#"# Tier 2 secrets are registered via the CLI:
 #
 # User-defined Tier 1 patterns can be added via:
 #
-#   its-classified define --patterns <this-file> \
+#   doppel define --patterns <this-file> \
 #     --identifier MY_PATTERN \
 #     --segment literal:prefix_ \
 #     --segment variable:alphanumeric:32:32
@@ -140,7 +140,7 @@ fn read_patterns_file(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>
     std::fs::read(path).map_err(|e| -> Box<dyn std::error::Error> {
         if e.kind() == std::io::ErrorKind::NotFound {
             format!(
-                "patterns file not found: {}\n  tip: create it with: its-classified init --patterns {}",
+                "patterns file not found: {}\n  tip: create it with: doppel init --patterns {}",
                 path.display(),
                 path.display()
             )
@@ -151,17 +151,17 @@ fn read_patterns_file(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>
     })
 }
 
-fn run_scrub(
+fn run_swap(
     patterns_path: &Path,
     entries_path: &Path,
     key_out_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::{PatternsFile, scrub, types::Entry};
+    use doppel::{SecretsFile, swap, types::Entry};
     use std::io::{self, Read, Write};
 
     let file_data = read_patterns_file(patterns_path)?;
 
-    let pf = PatternsFile::deserialize(&file_data)
+    let pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     let patterns = pf.into_patterns().map_err(|e| {
@@ -175,7 +175,7 @@ fn run_scrub(
     let mut payload = Vec::new();
     io::stdin().read_to_end(&mut payload)?;
 
-    let result = scrub(&payload, &patterns)?;
+    let result = swap(&payload, &patterns)?;
 
     io::stdout().write_all(&result.payload)?;
 
@@ -188,9 +188,9 @@ fn run_scrub(
 }
 
 fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::PatternsFile;
+    use doppel::SecretsFile;
 
-    let mut pf = PatternsFile::new();
+    let mut pf = SecretsFile::new();
     pf.generate_missing_tier1_salts_with_segments();
     let serialized = pf.serialize()?;
     let mut data = INIT_COMMENT_BLOCK.as_bytes().to_vec();
@@ -227,7 +227,7 @@ fn run_register(
     preserve_suffix: usize,
     restrict_charset: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::{PatternsFile, RegistrationOptions, register_with_options};
+    use doppel::{SecretsFile, SecretOptions, register_with_options};
     use std::io::Read;
 
     let mut secret = zeroize::Zeroizing::new(Vec::new());
@@ -238,15 +238,15 @@ fn run_register(
     }
 
     let file_data = read_patterns_file(patterns_path)?;
-    let mut pf = PatternsFile::deserialize(&file_data)?;
+    let mut pf = SecretsFile::deserialize(&file_data)?;
 
-    let opts = RegistrationOptions {
+    let opts = SecretOptions {
         preserve_prefix,
         preserve_suffix,
         restrict_charset,
     };
     let pattern = register_with_options(&secret, &opts)?;
-    pf.add_tier2_pattern(&pattern, Some(label.to_string()))?;
+    pf.add_secret_pattern(&pattern, Some(label.to_string()))?;
 
     let data = pf.serialize()?;
     write_patterns_file(patterns_path, &data, false)?;
@@ -265,17 +265,17 @@ fn run_define(
     identifier: &str,
     segment_specs: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::PatternsFile;
+    use doppel::SecretsFile;
     use rand::RngCore;
 
-    let seg_defs: Vec<its_classified::segment::SegmentDef> = segment_specs
+    let seg_defs: Vec<doppel::segment::SegmentDef> = segment_specs
         .iter()
         .enumerate()
         .map(|(i, spec)| parse_segment_spec(spec, i))
         .collect::<Result<_, _>>()?;
 
     let file_data = read_patterns_file(patterns_path)?;
-    let mut pf = PatternsFile::deserialize(&file_data)
+    let mut pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     let mut salt = [0u8; 32];
@@ -298,8 +298,8 @@ fn run_define(
 fn parse_segment_spec(
     spec: &str,
     index: usize,
-) -> Result<its_classified::segment::SegmentDef, String> {
-    use its_classified::segment::SegmentDef;
+) -> Result<doppel::segment::SegmentDef, String> {
+    use doppel::segment::SegmentDef;
 
     let (seg_type, rest) = spec.split_once(':').ok_or_else(|| {
         format!(
@@ -337,10 +337,10 @@ fn parse_segment_spec(
 }
 
 fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::PatternsFile;
+    use doppel::SecretsFile;
 
     let file_data = read_patterns_file(patterns_path)?;
-    let pf = PatternsFile::deserialize(&file_data)
+    let pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     println!("Tier 1 patterns:");
@@ -355,7 +355,7 @@ fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(0);
         let col_width = max_id_len.clamp(10, 40);
         for entry in &pf.tier1 {
-            let desc = format_tier1_segments(entry);
+            let desc = format_pattern_segments(entry);
             println!("  {:width$}  {}", entry.identifier, desc, width = col_width);
         }
     }
@@ -378,15 +378,15 @@ fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn format_tier1_segments(entry: &its_classified::Tier1Entry) -> String {
+fn format_pattern_segments(entry: &doppel::PatternEntry) -> String {
     match &entry.segments {
         Some(defs) => defs
             .iter()
             .map(|d| match d {
-                its_classified::segment::SegmentDef::Literal { value } => {
+                doppel::segment::SegmentDef::Literal { value } => {
                     format!("\"{}\"", value)
                 }
-                its_classified::segment::SegmentDef::Variable { charset, min, max } => {
+                doppel::segment::SegmentDef::Variable { charset, min, max } => {
                     if min == max {
                         format!("<{} {}>", min, charset)
                     } else {
@@ -412,10 +412,10 @@ fn run_inspect(
     identifier: Option<&str>,
     label: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::PatternsFile;
+    use doppel::SecretsFile;
 
     let file_data = read_patterns_file(patterns_path)?;
-    let pf = PatternsFile::deserialize(&file_data)
+    let pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     if let Some(id) = identifier {
@@ -425,7 +425,7 @@ fn run_inspect(
             .find(|e| e.identifier == id)
             .ok_or_else(|| format!("no Tier 1 pattern with identifier \"{}\"", id))?;
 
-        let is_builtin = its_classified::PatternsFile::is_builtin_identifier(id);
+        let is_builtin = doppel::SecretsFile::is_builtin_identifier(id);
         let type_str = if is_builtin {
             "built-in"
         } else {
@@ -442,10 +442,10 @@ fn run_inspect(
             Some(defs) => {
                 for (i, d) in defs.iter().enumerate() {
                     match d {
-                        its_classified::segment::SegmentDef::Literal { value } => {
+                        doppel::segment::SegmentDef::Literal { value } => {
                             println!("    {}. literal \"{}\"", i + 1, value);
                         }
-                        its_classified::segment::SegmentDef::Variable { charset, min, max } => {
+                        doppel::segment::SegmentDef::Variable { charset, min, max } => {
                             println!(
                                 "    {}. variable charset={} min={} max={}",
                                 i + 1,
@@ -491,10 +491,10 @@ fn run_remove(
     identifier: Option<&str>,
     label: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::PatternsFile;
+    use doppel::SecretsFile;
 
     let file_data = read_patterns_file(patterns_path)?;
-    let mut pf = PatternsFile::deserialize(&file_data)
+    let mut pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     if let Some(id) = identifier {
@@ -510,7 +510,7 @@ fn run_remove(
                 )
             })?;
 
-        if PatternsFile::is_builtin_identifier(id) {
+        if SecretsFile::is_builtin_identifier(id) {
             eprintln!(
                 "warning: removing built-in Tier 1 pattern \"{}\"; scrub will no longer detect this secret class",
                 id
@@ -635,24 +635,24 @@ fn hex_encode(bytes: &[u8]) -> zeroize::Zeroizing<String> {
     zeroize::Zeroizing::new(s)
 }
 
-fn run_unscrub(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use its_classified::{
+fn run_restore(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use doppel::{
         types::{Entry, SessionKey},
-        unscrub,
+        restore,
     };
     use std::io;
 
-    // INV-20: session key ONLY via ITS_CLASSIFIED_KEY env var
+    // INV-20: session key ONLY via DOPPEL_KEY env var
     let key_hex = zeroize::Zeroizing::new(
-        std::env::var("ITS_CLASSIFIED_KEY")
-            .map_err(|_| "ITS_CLASSIFIED_KEY environment variable not set")?,
+        std::env::var("DOPPEL_KEY")
+            .map_err(|_| "DOPPEL_KEY environment variable not set")?,
     );
     let key_bytes: zeroize::Zeroizing<Vec<u8>> = zeroize::Zeroizing::new(
-        hex_decode(&key_hex).map_err(|_| "ITS_CLASSIFIED_KEY is not valid hex")?,
+        hex_decode(&key_hex).map_err(|_| "DOPPEL_KEY is not valid hex")?,
     );
     let key_array = zeroize::Zeroizing::new(
         <[u8; 32]>::try_from(key_bytes.as_slice())
-            .map_err(|_| "ITS_CLASSIFIED_KEY must be 64 hex characters (32 bytes)")?,
+            .map_err(|_| "DOPPEL_KEY must be 64 hex characters (32 bytes)")?,
     );
     let session_key = SessionKey::from_bytes(*key_array);
 
@@ -661,7 +661,7 @@ fn run_unscrub(entries_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let stdin = io::stdin();
     let stdout = io::stdout();
-    unscrub(
+    restore(
         &mut stdin.lock(),
         &mut stdout.lock(),
         &entries,
@@ -697,12 +697,12 @@ fn hex_nibble(b: u8) -> Result<u8, ()> {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Scrub {
+        Commands::Swap {
             patterns,
             entries,
             key_out,
-        } => run_scrub(&patterns, &entries, &key_out),
-        Commands::Unscrub { entries } => run_unscrub(&entries),
+        } => run_swap(&patterns, &entries, &key_out),
+        Commands::Restore { entries } => run_restore(&entries),
         Commands::Init { patterns, force } => run_init(&patterns, force),
         Commands::Register {
             patterns,

@@ -1,15 +1,15 @@
 [package]
-name = "its-classified-cli"
+name = "doppel-cli"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "its-classified"
+name = "doppel"
 path = "src/main.rs"
 doc = false
 
 [dependencies]
-its-classified = { path = ".." }
+doppel = { path = ".." }
 clap = { version = "4", features = ["derive"] }
 zeroize = "1"
 rand = { version = "0.8", features = ["std", "std_rng"] }

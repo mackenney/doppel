@@ -3,10 +3,10 @@ use std::io::{Read, Write};
 use aho_corasick::{AhoCorasick, MatchKind};
 
 use crate::types::{Entry, SessionKey};
-use crate::unscrub_core::process_safe_region;
+use crate::restore_core::process_safe_region;
 
 #[derive(Debug, thiserror::Error)]
-pub enum UnscrubError {
+pub enum RestoreError {
     #[error("AEAD tag verification failed for entry {entry_index}")]
     AeadTagFailure { entry_index: usize },
     #[error("I/O error: {0}")]
@@ -15,9 +15,9 @@ pub enum UnscrubError {
     Build { msg: String },
 }
 
-impl From<aho_corasick::BuildError> for UnscrubError {
+impl From<aho_corasick::BuildError> for RestoreError {
     fn from(e: aho_corasick::BuildError) -> Self {
-        UnscrubError::Build { msg: e.to_string() }
+        RestoreError::Build { msg: e.to_string() }
     }
 }
 
@@ -29,12 +29,12 @@ const CHUNK_SIZE: usize = 4096;
 /// # Examples
 ///
 /// ```
-/// use its_classified::{scrub, unscrub, tier1::patterns};
+/// use doppel::{swap, restore, patterns};
 ///
 /// let payload = b"safe content";
-/// let result = scrub(payload, &patterns::all()).unwrap();
+/// let result = swap(payload, &patterns::all()).unwrap();
 /// let mut restored = Vec::new();
-/// unscrub(
+/// restore(
 ///     &mut result.payload.as_slice(),
 ///     &mut restored,
 ///     &result.entries,
@@ -46,14 +46,14 @@ const CHUNK_SIZE: usize = 4096;
 ///
 /// # Ownership
 ///
-/// Borrows `SessionKey` (unlike async `unscrub_stream` which takes ownership).
+/// Borrows `SessionKey` (unlike async `restore_stream` which takes ownership).
 /// The function runs to completion synchronously, so borrowing is sufficient.
-pub fn unscrub<R: Read, W: Write>(
+pub fn restore<R: Read, W: Write>(
     input: &mut R,
     output: &mut W,
     entries: &[Entry],
     session_key: &SessionKey,
-) -> Result<(), UnscrubError> {
+) -> Result<(), RestoreError> {
     // Empty entries: forward everything immediately (INV-7 edge case)
     if entries.is_empty() {
         let mut buf = [0u8; CHUNK_SIZE];
@@ -69,7 +69,7 @@ pub fn unscrub<R: Read, W: Write>(
 
     for (idx, e) in entries.iter().enumerate() {
         if e.fake.is_empty() {
-            return Err(UnscrubError::Build {
+            return Err(RestoreError::Build {
                 msg: format!("empty fake in entry at index {idx}"),
             });
         }
@@ -79,7 +79,7 @@ pub fn unscrub<R: Read, W: Write>(
     let ac = AhoCorasick::builder()
         .match_kind(MatchKind::LeftmostFirst)
         .build(&fakes)
-        .map_err(UnscrubError::from)?;
+        .map_err(RestoreError::from)?;
 
     // max_hold: maximum fake length; we must not emit bytes that could be the start of a fake
     let max_hold: usize = entries.iter().map(|e| e.fake.len()).max().unwrap_or(0);
@@ -102,8 +102,8 @@ pub fn unscrub<R: Read, W: Write>(
             session_key,
             eof,
             max_hold,
-            &mut |bytes| output.write_all(bytes).map_err(UnscrubError::Io),
-            &mut |entry_idx| UnscrubError::AeadTagFailure {
+            &mut |bytes| output.write_all(bytes).map_err(RestoreError::Io),
+            &mut |entry_idx| RestoreError::AeadTagFailure {
                 entry_index: entry_idx,
             },
         )?;
@@ -119,32 +119,32 @@ pub fn unscrub<R: Read, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scrub::scrub;
-    use crate::tier1::patterns;
+    use crate::swap::swap;
+    use crate::patterns;
 
     #[test]
-    fn test_unscrub_basic_roundtrip() {
+    fn test_restore_basic_roundtrip() {
         let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let payload = [b"Authorization: ".as_slice(), secret].concat();
-        let scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
-        let mut input = scrub_result.payload.as_slice();
+        let swap_result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
+        let mut input = swap_result.payload.as_slice();
         let mut output = Vec::new();
-        unscrub(
+        restore(
             &mut input,
             &mut output,
-            &scrub_result.entries,
-            &scrub_result.session_key,
+            &swap_result.entries,
+            &swap_result.session_key,
         )
         .unwrap();
-        assert_eq!(output, payload, "unscrub must restore original payload");
+        assert_eq!(output, payload, "restore must restore original payload");
     }
 
     #[test]
-    fn test_unscrub_chunk_boundary() {
+    fn test_restore_chunk_boundary() {
         // INV-4: fake split across chunk boundary must still be restored
         let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let payload = [b"ctx: ".as_slice(), secret, b" end"].concat();
-        let scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+        let swap_result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
 
         struct OneByteReader<'a> {
             data: &'a [u8],
@@ -162,33 +162,33 @@ mod tests {
         }
 
         let mut reader = OneByteReader {
-            data: &scrub_result.payload,
+            data: &swap_result.payload,
             pos: 0,
         };
         let mut output = Vec::new();
-        unscrub(
+        restore(
             &mut reader,
             &mut output,
-            &scrub_result.entries,
-            &scrub_result.session_key,
+            &swap_result.entries,
+            &swap_result.session_key,
         )
         .unwrap();
         assert_eq!(output, payload, "INV-4: chunk-boundary restoration failed");
     }
 
     #[test]
-    fn test_unscrub_no_fake_in_stream() {
+    fn test_restore_no_fake_in_stream() {
         // INV-7: no fake → forward unchanged, no error
         let payload = b"no secrets here";
-        let scrub_result = scrub(payload, &[patterns::anthropic()]).expect("scrub failed");
+        let swap_result = swap(payload, &[patterns::anthropic()]).expect("swap failed");
         let response = b"response with no fakes in it";
         let mut input = response.as_slice();
         let mut output = Vec::new();
-        let result = unscrub(
+        let result = restore(
             &mut input,
             &mut output,
-            &scrub_result.entries,
-            &scrub_result.session_key,
+            &swap_result.entries,
+            &swap_result.session_key,
         );
         assert!(result.is_ok(), "INV-7: no error when no fake present");
         assert_eq!(
@@ -198,22 +198,22 @@ mod tests {
     }
 
     #[test]
-    fn test_unscrub_tampered_aead_tag_returns_err() {
+    fn test_restore_tampered_aead_tag_returns_err() {
         // INV-6: tampered AEAD tag → Err, no partial plaintext emitted
         let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let payload = [b"Authorization: ".as_slice(), secret].concat();
-        let mut scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
-        let entry = &mut scrub_result.entries[0];
+        let mut swap_result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
+        let entry = &mut swap_result.entries[0];
         let last = entry.ciphertext.len() - 1;
         entry.ciphertext[last] ^= 0xFF;
 
-        let mut input = scrub_result.payload.as_slice();
+        let mut input = swap_result.payload.as_slice();
         let mut output = Vec::new();
-        let result = unscrub(
+        let result = restore(
             &mut input,
             &mut output,
-            &scrub_result.entries,
-            &scrub_result.session_key,
+            &swap_result.entries,
+            &swap_result.session_key,
         );
         assert!(result.is_err(), "INV-6: tampered tag must return Err");
         assert!(
@@ -223,18 +223,18 @@ mod tests {
     }
 
     #[test]
-    fn test_unscrub_exact_matching_only() {
-        // INV-19: unscrub must NOT detect secrets by pattern, only exact fake matching
+    fn test_restore_exact_matching_only() {
+        // INV-19: restore must NOT detect secrets by pattern, only exact fake matching
         let real_key_in_response = b"sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB-BBBBBB";
-        let scrub_result =
-            scrub(b"unrelated payload", &[patterns::anthropic()]).expect("scrub failed");
+        let swap_result =
+            swap(b"unrelated payload", &[patterns::anthropic()]).expect("swap failed");
         let mut input = real_key_in_response.as_slice();
         let mut output = Vec::new();
-        unscrub(
+        restore(
             &mut input,
             &mut output,
-            &scrub_result.entries,
-            &scrub_result.session_key,
+            &swap_result.entries,
+            &swap_result.session_key,
         )
         .unwrap();
         assert_eq!(
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn test_empty_fake_rejected_sync() {
         use crate::types::{Entry, SessionKey};
-        // An Entry with an empty fake must cause unscrub() to return Err(Build),
+        // An Entry with an empty fake must cause restore() to return Err(Build),
         // not succeed and produce an infinite loop.
         let bad_entry = Entry {
             fake: vec![],
@@ -255,9 +255,9 @@ mod tests {
         let session_key = SessionKey::from_bytes([0u8; 32]);
         let mut input = b"some input".as_slice();
         let mut output = Vec::new();
-        let result = unscrub(&mut input, &mut output, &[bad_entry], &session_key);
+        let result = restore(&mut input, &mut output, &[bad_entry], &session_key);
         assert!(
-            matches!(result, Err(UnscrubError::Build { .. })),
+            matches!(result, Err(RestoreError::Build { .. })),
             "empty fake must return Err(Build)"
         );
         assert!(
@@ -267,24 +267,24 @@ mod tests {
     }
 
     #[test]
-    fn test_unscrub_empty_input() {
+    fn test_restore_empty_input() {
         // Empty input with entries present must produce empty output with no error.
         // Exercises the eof-on-first-read path through the AhoCorasick inner loop.
         let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
         let payload = [b"Authorization: ".as_slice(), secret].concat();
-        let sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
+        let sr = swap(&payload, &[patterns::anthropic()]).unwrap();
         assert!(
             !sr.entries.is_empty(),
             "entries must be present for this test to be meaningful"
         );
         let mut input = b"".as_slice();
         let mut output = Vec::new();
-        unscrub(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
+        restore(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
         assert!(output.is_empty(), "empty input must produce empty output");
     }
 
     #[test]
-    fn test_unscrub_two_distinct_secrets() {
+    fn test_restore_two_distinct_secrets() {
         // Two different key types → two entries → validates multi-entry AC indexing.
         // sk-proj- (8) + 58×'A' + T3BlbkFJ (8) + 58×'B' = 132 chars total.
         let anthropic_key = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
@@ -304,7 +304,7 @@ mod tests {
         ]
         .concat();
 
-        let sr = scrub(
+        let sr = swap(
             &payload,
             &[patterns::anthropic(), patterns::openai_project()],
         )
@@ -313,23 +313,23 @@ mod tests {
 
         let mut input = sr.payload.as_slice();
         let mut output = Vec::new();
-        unscrub(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
+        restore(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
         assert_eq!(output, payload, "both distinct secrets must be restored");
     }
 
     #[test]
-    fn test_unscrub_tier2_roundtrip() {
+    fn test_restore_tier2_roundtrip() {
         // Tier 2 registered secret exercises the HMAC-based fake path.
         let secret = b"my-custom-tier2-api-token-that-is-long-enough-for-registration-abcd1234";
         let pattern = crate::register(secret).expect("register failed");
         let payload = [b"Bearer ".as_slice(), secret, b" end"].concat();
 
-        let sr = scrub(&payload, &[pattern]).unwrap();
-        assert_eq!(sr.entries.len(), 1, "Tier 2 scrub must produce one entry");
+        let sr = swap(&payload, &[pattern]).unwrap();
+        assert_eq!(sr.entries.len(), 1, "Tier 2 swap must produce one entry");
 
         let mut input = sr.payload.as_slice();
         let mut output = Vec::new();
-        unscrub(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
+        restore(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
         assert_eq!(output, payload, "Tier 2 secret must be restored correctly");
     }
 }

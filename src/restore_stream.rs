@@ -8,21 +8,21 @@ use bytes::Bytes;
 use futures_core::Stream;
 
 use crate::types::{Entry, SessionKey};
-use crate::unscrub::UnscrubError;
-use crate::unscrub_core::process_safe_region;
+use crate::restore::RestoreError;
+use crate::restore_core::process_safe_region;
 
-/// Async stream adapter that restores scrubbed secrets as bytes flow through.
+/// Async stream adapter that restores swapped secrets as bytes flow through.
 ///
-/// Constructed via [`unscrub_stream`]. Applies the same sliding-window
-/// algorithm as the synchronous [`unscrub`] function: fakes are replaced
+/// Constructed via [`restore_stream`]. Applies the same sliding-window
+/// algorithm as the synchronous [`restore`] function: fakes are replaced
 /// with decrypted originals; all other bytes are forwarded unchanged.
 ///
-/// The stream terminates with [`UnscrubError::AeadTagFailure`] if a fake is
+/// The stream terminates with [`RestoreError::AeadTagFailure`] if a fake is
 /// matched but its AEAD tag does not verify. No plaintext is emitted for a
 /// failing entry (INV-5/INV-6).
 ///
-/// [`unscrub`]: crate::unscrub
-pub struct UnscrubStream<S> {
+/// [`restore`]: crate::restore
+pub struct RestoreStream<S> {
     inner: S,
     /// None when entries is empty — skips AC lookup entirely.
     ac: Option<AhoCorasick>,
@@ -33,11 +33,11 @@ pub struct UnscrubStream<S> {
     max_hold: usize,
     eof: bool,
     /// Output items ready to yield before pulling more input.
-    pending: VecDeque<Result<Bytes, UnscrubError>>,
+    pending: VecDeque<Result<Bytes, RestoreError>>,
     done: bool,
 }
 
-/// Wrap `inner` in an async unscrub adapter.
+/// Wrap `inner` in an async restore adapter.
 ///
 /// Each [`Bytes`] chunk from `inner` is processed through a sliding-window
 /// algorithm: fakes present in `entries` are replaced with their decrypted
@@ -51,22 +51,22 @@ pub struct UnscrubStream<S> {
 ///
 /// Returns `Err` immediately if the [`AhoCorasick`] automaton cannot be
 /// built from the provided entries (degenerate input only; does not happen
-/// with entries produced by [`scrub`]).
+/// with entries produced by [`swap`]).
 ///
-/// [`scrub`]: crate::scrub
+/// [`swap`]: crate::swap
 ///
 /// # Ownership
 ///
-/// Takes `SessionKey` by value (unlike sync [`unscrub`] which borrows).
+/// Takes `SessionKey` by value (unlike sync [`restore`] which borrows).
 /// The stream must own the key for its `'static` lifetime across poll cycles.
 ///
-/// [`unscrub`]: crate::unscrub
+/// [`restore`]: crate::restore
 #[must_use = "the stream must be polled to process data"]
-pub fn unscrub_stream<S>(
+pub fn restore_stream<S>(
     inner: S,
     entries: Vec<Entry>,
     session_key: SessionKey,
-) -> Result<UnscrubStream<S>, UnscrubError>
+) -> Result<RestoreStream<S>, RestoreError>
 where
     S: Stream<Item = Result<Bytes, io::Error>> + Unpin,
 {
@@ -75,7 +75,7 @@ where
     } else {
         for (idx, e) in entries.iter().enumerate() {
             if e.fake.is_empty() {
-                return Err(UnscrubError::Build {
+                return Err(RestoreError::Build {
                     msg: format!("empty fake in entry at index {idx}"),
                 });
             }
@@ -85,13 +85,13 @@ where
             AhoCorasick::builder()
                 .match_kind(MatchKind::LeftmostFirst)
                 .build(&fakes)
-                .map_err(UnscrubError::from)?,
+                .map_err(RestoreError::from)?,
         )
     };
 
     let max_hold = entries.iter().map(|e| e.fake.len()).max().unwrap_or(0);
 
-    Ok(UnscrubStream {
+    Ok(RestoreStream {
         inner,
         ac,
         entries,
@@ -104,7 +104,7 @@ where
     })
 }
 
-impl<S> UnscrubStream<S> {
+impl<S> RestoreStream<S> {
     /// Drain the safe region of `self.buffer` into `self.pending`.
     ///
     /// Delegates to [`process_safe_region`] when entries are present.
@@ -131,9 +131,9 @@ impl<S> UnscrubStream<S> {
             self.max_hold,
             &mut |bytes| {
                 pending.push_back(Ok(Bytes::copy_from_slice(bytes)));
-                Ok::<(), UnscrubError>(())
+                Ok::<(), RestoreError>(())
             },
-            &mut |entry_idx| UnscrubError::AeadTagFailure {
+            &mut |entry_idx| RestoreError::AeadTagFailure {
                 entry_index: entry_idx,
             },
         );
@@ -144,11 +144,11 @@ impl<S> UnscrubStream<S> {
     }
 }
 
-impl<S> Stream for UnscrubStream<S>
+impl<S> Stream for RestoreStream<S>
 where
     S: Stream<Item = Result<Bytes, io::Error>> + Unpin,
 {
-    type Item = Result<Bytes, UnscrubError>;
+    type Item = Result<Bytes, RestoreError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -186,7 +186,7 @@ where
                 }
                 Poll::Ready(Some(Err(e))) => {
                     this.done = true;
-                    return Poll::Ready(Some(Err(UnscrubError::Io(e))));
+                    return Poll::Ready(Some(Err(RestoreError::Io(e))));
                 }
                 Poll::Ready(None) => {
                     this.eof = true;
@@ -203,14 +203,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scrub::scrub;
-    use crate::tier1::patterns;
+    use crate::swap::swap;
+    use crate::patterns;
     use futures::StreamExt;
 
     const ANTHROPIC_SECRET: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
 
-    /// Drive an UnscrubStream to completion, collecting all bytes.
-    async fn collect_stream<S>(stream: UnscrubStream<S>) -> Result<Vec<u8>, UnscrubError>
+    /// Drive an RestoreStream to completion, collecting all bytes.
+    async fn collect_stream<S>(stream: RestoreStream<S>) -> Result<Vec<u8>, RestoreError>
     where
         S: Stream<Item = Result<Bytes, io::Error>> + Unpin,
     {
@@ -280,9 +280,9 @@ mod tests {
     #[test]
     fn test_async_basic_roundtrip() {
         let payload = [b"Authorization: ".as_slice(), ANTHROPIC_SECRET].concat();
-        let sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
+        let sr = swap(&payload, &[patterns::anthropic()]).unwrap();
         let inner = single_chunk_stream(sr.payload);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(result, payload);
     }
@@ -291,9 +291,9 @@ mod tests {
     fn test_async_chunk_boundary() {
         // INV-4: fake split across many 1-byte chunks must still be restored.
         let payload = [b"ctx: ".as_slice(), ANTHROPIC_SECRET, b" end"].concat();
-        let sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
+        let sr = swap(&payload, &[patterns::anthropic()]).unwrap();
         let inner = chunked_stream(sr.payload, 1);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(
             result, payload,
@@ -304,10 +304,10 @@ mod tests {
     #[test]
     fn test_async_no_fake_in_stream() {
         // INV-7: no fake in response → forward unchanged, no error.
-        let sr = scrub(b"unrelated", &[patterns::anthropic()]).unwrap();
+        let sr = swap(b"unrelated", &[patterns::anthropic()]).unwrap();
         let response = b"response with no fakes in it";
         let inner = single_chunk_stream(response.to_vec());
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(
             result, response,
@@ -318,11 +318,11 @@ mod tests {
     #[test]
     fn test_async_empty_entries_passthrough() {
         // No patterns at all: stream passes through unchanged.
-        let sr = scrub(b"payload", &[]).unwrap();
+        let sr = swap(b"payload", &[]).unwrap();
         assert!(sr.entries.is_empty());
         let response = b"any response bytes";
         let inner = single_chunk_stream(response.to_vec());
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(result, response);
     }
@@ -331,13 +331,13 @@ mod tests {
     fn test_async_tampered_aead_tag_returns_err() {
         // INV-6: tampered AEAD tag → stream yields Err, no secret bytes emitted.
         let payload = [b"Authorization: ".as_slice(), ANTHROPIC_SECRET].concat();
-        let mut sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
+        let mut sr = swap(&payload, &[patterns::anthropic()]).unwrap();
         let last = sr.entries[0].ciphertext.len() - 1;
         sr.entries[0].ciphertext[last] ^= 0xFF;
 
-        let scrubbed = sr.payload.clone();
-        let inner = single_chunk_stream(scrubbed);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let swapped = sr.payload.clone();
+        let inner = single_chunk_stream(swapped);
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
 
         let result = futures::executor::block_on(async {
             let mut out: Vec<u8> = Vec::new();
@@ -353,7 +353,7 @@ mod tests {
 
         let (err, out) = result.unwrap_err();
         assert!(
-            matches!(err, UnscrubError::AeadTagFailure { .. }),
+            matches!(err, RestoreError::AeadTagFailure { .. }),
             "INV-6: must yield AeadTagFailure"
         );
         assert!(
@@ -367,11 +367,11 @@ mod tests {
     fn test_async_multiple_fakes_in_stream() {
         // Two occurrences of the same fake in the response are both restored.
         let payload = [ANTHROPIC_SECRET, b" and again: ", ANTHROPIC_SECRET].concat();
-        let sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
-        // One entry covers both occurrences (INV-14 in scrub).
+        let sr = swap(&payload, &[patterns::anthropic()]).unwrap();
+        // One entry covers both occurrences (INV-14 in swap).
         assert_eq!(sr.entries.len(), 1);
         let inner = single_chunk_stream(sr.payload);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(result, payload, "both occurrences must be restored");
     }
@@ -380,9 +380,9 @@ mod tests {
     fn test_async_exact_matching_only() {
         // INV-19: a real key in the response (not a fake) must pass through unchanged.
         let real_key = b"sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB-BBBBBB";
-        let sr = scrub(b"unrelated payload", &[patterns::anthropic()]).unwrap();
+        let sr = swap(b"unrelated payload", &[patterns::anthropic()]).unwrap();
         let inner = single_chunk_stream(real_key.to_vec());
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(
             result, real_key,
@@ -392,9 +392,9 @@ mod tests {
 
     #[test]
     fn test_async_empty_stream() {
-        let sr = scrub(b"payload", &[patterns::anthropic()]).unwrap();
+        let sr = swap(b"payload", &[patterns::anthropic()]).unwrap();
         let inner = futures::stream::empty::<Result<Bytes, io::Error>>();
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert!(result.is_empty(), "empty stream must yield no bytes");
     }
@@ -403,13 +403,13 @@ mod tests {
     fn test_async_fake_exactly_at_chunk_boundary() {
         // The fake starts at the last byte of one chunk and ends at the start of the next.
         let payload = [b"prefix ".as_slice(), ANTHROPIC_SECRET, b" suffix"].concat();
-        let sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
+        let sr = swap(&payload, &[patterns::anthropic()]).unwrap();
         let fake_len = sr.entries[0].fake.len();
 
         // Split so the chunk boundary falls in the middle of the fake.
         let split_at = 7 + fake_len / 2; // "prefix " + half of fake
         let inner = chunked_stream(sr.payload.clone(), split_at.max(1));
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(
             result, payload,
@@ -428,9 +428,9 @@ mod tests {
         };
         let session_key = SessionKey::from_bytes([0u8; 32]);
         let inner = futures::stream::empty::<Result<Bytes, io::Error>>();
-        let result = unscrub_stream(inner, vec![bad_entry], session_key);
+        let result = restore_stream(inner, vec![bad_entry], session_key);
         assert!(
-            matches!(result, Err(UnscrubError::Build { .. })),
+            matches!(result, Err(RestoreError::Build { .. })),
             "empty fake must return Err(Build)"
         );
     }
@@ -455,7 +455,7 @@ mod tests {
         ]
         .concat();
 
-        let sr = scrub(
+        let sr = swap(
             &payload,
             &[patterns::anthropic(), patterns::openai_project()],
         )
@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(sr.entries.len(), 2, "must detect two distinct secrets");
 
         let inner = single_chunk_stream(sr.payload);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(
             result, payload,
@@ -475,9 +475,9 @@ mod tests {
     fn test_async_pending_then_ready() {
         // Exercises the waker path: first poll of the inner stream returns Pending.
         let payload = [b"prefix ".as_slice(), ANTHROPIC_SECRET, b" suffix"].concat();
-        let sr = scrub(&payload, &[patterns::anthropic()]).unwrap();
+        let sr = swap(&payload, &[patterns::anthropic()]).unwrap();
         let inner = PendingOnceStream::new(sr.payload.clone(), 32);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(
             result, payload,
@@ -486,18 +486,18 @@ mod tests {
     }
 
     #[test]
-    fn test_async_tier2_pattern_restoration() {
+    fn test_async_registered_secret_restoration() {
         // Tier 2: user-registered secret with deterministic fake derivation.
         // Must be long enough to meet the minimum length requirement of register().
         let secret = b"my-custom-tier2-api-token-that-is-long-enough-for-registration-abcd1234";
         let pattern = crate::register(secret).expect("register failed");
         let payload = [b"Bearer ".as_slice(), secret, b" end"].concat();
 
-        let sr = scrub(&payload, &[pattern]).unwrap();
-        assert_eq!(sr.entries.len(), 1, "Tier 2 scrub must produce one entry");
+        let sr = swap(&payload, &[pattern]).unwrap();
+        assert_eq!(sr.entries.len(), 1, "Registered secret swap must produce one entry");
 
         let inner = single_chunk_stream(sr.payload);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(result, payload, "Tier 2 fake must restore correctly");
     }
@@ -508,11 +508,11 @@ mod tests {
         // Verifies the cursor-based None branch drains correctly across multiple
         // process_buffer calls rather than a single eof=true flush.
         let response = b"hello world this is a multi-chunk passthrough test";
-        let sr = scrub(b"unrelated", &[]).unwrap();
+        let sr = swap(b"unrelated", &[]).unwrap();
         assert!(sr.entries.is_empty());
 
         let inner = chunked_stream(response.to_vec(), 4);
-        let stream = unscrub_stream(inner, sr.entries, sr.session_key).unwrap();
+        let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
         assert_eq!(
             result, response,

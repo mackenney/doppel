@@ -4,20 +4,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::segment::SegmentDef;
 use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
-use crate::tier1::{self, Pattern, Tier1Def};
-use crate::tier2::Tier2Pat;
+use crate::patterns::{self, Pattern, Tier1Def};
+use crate::secrets::Tier2Pat;
 
 /// Top-level patterns file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatternsFile {
+pub struct SecretsFile {
     pub version: u64,
-    pub tier1: Vec<Tier1Entry>,
-    pub tier2: Vec<Tier2Entry>,
+    pub tier1: Vec<PatternEntry>,
+    pub tier2: Vec<SecretEntry>,
 }
 
 /// A Tier 1 entry: identifier, salt, and optional user-defined segments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tier1Entry {
+pub struct PatternEntry {
     pub identifier: String,
     #[serde(with = "hex_32")]
     pub salt: [u8; 32],
@@ -27,7 +27,7 @@ pub struct Tier1Entry {
 
 /// A Tier 2 entry: detection fingerprint + derivation parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tier2Entry {
+pub struct SecretEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(with = "hex_vec")]
@@ -50,7 +50,7 @@ pub struct Tier2Entry {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum PatternsFileError {
+pub enum SecretsFileError {
     #[error("{0}")]
     Toml(String),
 
@@ -82,7 +82,7 @@ pub enum PatternsFileError {
     MissingSegments { identifier: String },
 }
 
-impl PatternsFile {
+impl SecretsFile {
     /// Create an empty patterns file (version 2, no entries).
     pub fn new() -> Self {
         Self {
@@ -93,23 +93,23 @@ impl PatternsFile {
     }
 
     /// Serialize to TOML bytes.
-    pub fn serialize(&self) -> Result<Vec<u8>, PatternsFileError> {
-        let s = toml::to_string_pretty(self).map_err(|e| PatternsFileError::Toml(e.to_string()))?;
+    pub fn serialize(&self) -> Result<Vec<u8>, SecretsFileError> {
+        let s = toml::to_string_pretty(self).map_err(|e| SecretsFileError::Toml(e.to_string()))?;
         Ok(s.into_bytes())
     }
 
     /// Deserialize from TOML bytes with validation.
-    pub fn deserialize(data: &[u8]) -> Result<Self, PatternsFileError> {
-        let s = std::str::from_utf8(data).map_err(|_| PatternsFileError::InvalidUtf8)?;
-        let file: PatternsFile =
-            toml::from_str(s).map_err(|e| PatternsFileError::Toml(e.to_string()))?;
+    pub fn deserialize(data: &[u8]) -> Result<Self, SecretsFileError> {
+        let s = std::str::from_utf8(data).map_err(|_| SecretsFileError::InvalidUtf8)?;
+        let file: SecretsFile =
+            toml::from_str(s).map_err(|e| SecretsFileError::Toml(e.to_string()))?;
         file.validate()?;
         Ok(file)
     }
 
-    fn validate(&self) -> Result<(), PatternsFileError> {
+    fn validate(&self) -> Result<(), SecretsFileError> {
         if self.version != 2 {
-            return Err(PatternsFileError::UnsupportedVersion {
+            return Err(SecretsFileError::UnsupportedVersion {
                 found: self.version,
             });
         }
@@ -117,7 +117,7 @@ impl PatternsFile {
         let mut seen_ids = std::collections::HashSet::new();
         for entry in &self.tier1 {
             if !seen_ids.insert(&entry.identifier) {
-                return Err(PatternsFileError::DuplicateIdentifier {
+                return Err(SecretsFileError::DuplicateIdentifier {
                     identifier: entry.identifier.clone(),
                 });
             }
@@ -131,33 +131,33 @@ impl PatternsFile {
         for (index, entry) in self.tier2.iter().enumerate() {
             if let Some(ref label) = entry.label {
                 if !seen_labels.insert(label) {
-                    return Err(PatternsFileError::DuplicateLabel {
+                    return Err(SecretsFileError::DuplicateLabel {
                         label: label.clone(),
                     });
                 }
             }
 
             if entry.exact_length == 0 {
-                return Err(PatternsFileError::InvalidTier2 {
+                return Err(SecretsFileError::InvalidTier2 {
                     index,
                     reason: "exact_length must not be zero".into(),
                 });
             }
             if entry.start_fragment.is_empty() {
-                return Err(PatternsFileError::InvalidTier2 {
+                return Err(SecretsFileError::InvalidTier2 {
                     index,
                     reason: "start_fragment must not be empty".into(),
                 });
             }
             if entry.end_fragment.is_empty() {
-                return Err(PatternsFileError::InvalidTier2 {
+                return Err(SecretsFileError::InvalidTier2 {
                     index,
                     reason: "end_fragment must not be empty".into(),
                 });
             }
             if let Some(ref cs) = entry.charset {
                 if cs.is_empty() {
-                    return Err(PatternsFileError::InvalidTier2 {
+                    return Err(SecretsFileError::InvalidTier2 {
                         index,
                         reason: "charset must not be empty when present".into(),
                     });
@@ -178,10 +178,10 @@ impl PatternsFile {
     ///   `MissingSegments`.
     ///
     /// Built-in identifiers absent from the file are silently skipped (INV-32).
-    pub fn into_patterns(self) -> Result<Vec<Pattern>, PatternsFileError> {
+    pub fn into_patterns(self) -> Result<Vec<Pattern>, SecretsFileError> {
         use crate::segment::Segment;
 
-        let builtin_defs = tier1::all_defs();
+        let builtin_defs = patterns::all_defs();
         let mut patterns = Vec::new();
 
         for entry in &self.tier1 {
@@ -197,7 +197,7 @@ impl PatternsFile {
                 }
                 (None, Some(def)) => def.segments.clone(),
                 (None, None) => {
-                    return Err(PatternsFileError::MissingSegments {
+                    return Err(SecretsFileError::MissingSegments {
                         identifier: entry.identifier.clone(),
                     });
                 }
@@ -235,17 +235,17 @@ impl PatternsFile {
 
     /// Extract a Tier 2 entry from a Pattern and append it to this file.
     /// Returns error if the pattern is not Tier 2 or if the label is a duplicate.
-    pub fn add_tier2_pattern(
+    pub fn add_secret_pattern(
         &mut self,
         pattern: &Pattern,
         label: Option<String>,
-    ) -> Result<(), PatternsFileError> {
+    ) -> Result<(), SecretsFileError> {
         match pattern {
             Pattern::Tier2(arc) => {
                 if let Some(ref l) = label {
                     let duplicate = self.tier2.iter().any(|e| e.label.as_deref() == Some(l));
                     if duplicate {
-                        return Err(PatternsFileError::DuplicateLabel { label: l.clone() });
+                        return Err(SecretsFileError::DuplicateLabel { label: l.clone() });
                     }
                 }
 
@@ -256,7 +256,7 @@ impl PatternsFile {
                     Some(p.charset.clone())
                 };
 
-                self.tier2.push(Tier2Entry {
+                self.tier2.push(SecretEntry {
                     label,
                     start_fragment: p.start_fragment.clone(),
                     end_fragment: p.end_fragment.clone(),
@@ -270,7 +270,7 @@ impl PatternsFile {
 
                 Ok(())
             }
-            _ => Err(PatternsFileError::WrongPatternType),
+            _ => Err(SecretsFileError::WrongPatternType),
         }
     }
 
@@ -284,15 +284,15 @@ impl PatternsFile {
         identifier: String,
         segments: Vec<SegmentDef>,
         salt: [u8; 32],
-    ) -> Result<(), PatternsFileError> {
+    ) -> Result<(), SecretsFileError> {
         let duplicate = self.tier1.iter().any(|e| e.identifier == identifier);
         if duplicate {
-            return Err(PatternsFileError::DuplicateIdentifier { identifier });
+            return Err(SecretsFileError::DuplicateIdentifier { identifier });
         }
 
         crate::segment::validate_segment_defs(&segments)?;
 
-        self.tier1.push(Tier1Entry {
+        self.tier1.push(PatternEntry {
             identifier,
             salt,
             segments: Some(segments),
@@ -306,12 +306,12 @@ impl PatternsFile {
     pub fn generate_missing_tier1_salts(&mut self) {
         use rand::RngCore;
 
-        for def in tier1::all_defs() {
+        for def in patterns::all_defs() {
             let already_present = self.tier1.iter().any(|e| e.identifier == def.identifier);
             if !already_present {
                 let mut salt = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut salt);
-                self.tier1.push(Tier1Entry {
+                self.tier1.push(PatternEntry {
                     identifier: def.identifier.clone(),
                     salt,
                     segments: None,
@@ -326,7 +326,7 @@ impl PatternsFile {
     pub fn generate_missing_tier1_salts_with_segments(&mut self) {
         use rand::RngCore;
 
-        for def in tier1::all_defs() {
+        for def in patterns::all_defs() {
             let already_present = self.tier1.iter().any(|e| e.identifier == def.identifier);
             if !already_present {
                 let mut salt = [0u8; 32];
@@ -334,7 +334,7 @@ impl PatternsFile {
 
                 let seg_defs: Vec<SegmentDef> = def.segments.iter().map(|s| s.to_def()).collect();
 
-                self.tier1.push(Tier1Entry {
+                self.tier1.push(PatternEntry {
                     identifier: def.identifier.clone(),
                     salt,
                     segments: Some(seg_defs),
@@ -345,11 +345,11 @@ impl PatternsFile {
 
     /// Check if an identifier matches a compiled-in Tier 1 definition.
     pub fn is_builtin_identifier(identifier: &str) -> bool {
-        tier1::all_defs().iter().any(|d| d.identifier == identifier)
+        patterns::all_defs().iter().any(|d| d.identifier == identifier)
     }
 }
 
-impl Default for PatternsFile {
+impl Default for SecretsFile {
     fn default() -> Self {
         Self::new()
     }
@@ -361,10 +361,10 @@ mod tests {
 
     #[test]
     fn test_round_trip_serialize_deserialize() {
-        let mut pf = PatternsFile::new();
+        let mut pf = SecretsFile::new();
         pf.generate_missing_tier1_salts();
         let bytes = pf.serialize().unwrap();
-        let pf2 = PatternsFile::deserialize(&bytes).unwrap();
+        let pf2 = SecretsFile::deserialize(&bytes).unwrap();
         assert_eq!(pf2.version, 2);
         assert_eq!(pf2.tier1.len(), 15);
         let orig_salt = pf
@@ -385,16 +385,16 @@ mod tests {
     #[test]
     fn test_version_rejection() {
         let data = b"version = 1\ntier1 = []\ntier2 = []\n";
-        let err = PatternsFile::deserialize(data).unwrap_err();
+        let err = SecretsFile::deserialize(data).unwrap_err();
         assert!(matches!(
             err,
-            PatternsFileError::UnsupportedVersion { found: 1 }
+            SecretsFileError::UnsupportedVersion { found: 1 }
         ));
     }
 
     #[test]
     fn test_empty_tier1_into_patterns_succeeds() {
-        let pf = PatternsFile {
+        let pf = SecretsFile {
             version: 2,
             tier1: vec![],
             tier2: vec![],
@@ -405,10 +405,10 @@ mod tests {
 
     #[test]
     fn test_generate_missing_fills_all_fifteen() {
-        let mut pf = PatternsFile::new();
+        let mut pf = SecretsFile::new();
         pf.generate_missing_tier1_salts();
         assert_eq!(pf.tier1.len(), 15);
-        for def in crate::tier1::all_defs() {
+        for def in crate::patterns::all_defs() {
             assert!(pf.tier1.iter().any(|e| e.identifier == def.identifier));
         }
     }
@@ -416,8 +416,8 @@ mod tests {
     #[test]
     fn test_generate_missing_does_not_overwrite() {
         let custom_salt = [0xAB; 32];
-        let mut pf = PatternsFile::new();
-        pf.tier1.push(Tier1Entry {
+        let mut pf = SecretsFile::new();
+        pf.tier1.push(PatternEntry {
             identifier: "anthropic".into(),
             salt: custom_salt,
             segments: None,
@@ -446,7 +446,7 @@ hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
 preserve_prefix = 0
 preserve_suffix = 0
 "#;
-        let err = PatternsFile::deserialize(data).unwrap_err();
+        let err = SecretsFile::deserialize(data).unwrap_err();
         assert!(err.to_string().contains("exact_length"), "error: {err}");
     }
 
@@ -465,35 +465,35 @@ hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
 preserve_prefix = 0
 preserve_suffix = 0
 "#;
-        let err = PatternsFile::deserialize(data).unwrap_err();
+        let err = SecretsFile::deserialize(data).unwrap_err();
         assert!(err.to_string().contains("start_fragment"), "error: {err}");
     }
 
     #[test]
     fn test_tier2_with_charset_round_trips() {
-        use crate::{RegistrationOptions, register_with_options};
+        use crate::{SecretOptions, register_with_options};
         let secret = b"my-custom-api-token-round-trip-test";
-        let opts = RegistrationOptions {
+        let opts = SecretOptions {
             preserve_prefix: 3,
             preserve_suffix: 0,
             restrict_charset: false,
         };
         let pat = register_with_options(secret, &opts).unwrap();
-        let mut pf = PatternsFile::new();
-        pf.add_tier2_pattern(&pat, None).unwrap();
+        let mut pf = SecretsFile::new();
+        pf.add_secret_pattern(&pat, None).unwrap();
         let bytes = pf.serialize().unwrap();
-        let pf2 = PatternsFile::deserialize(&bytes).unwrap();
+        let pf2 = SecretsFile::deserialize(&bytes).unwrap();
         assert_eq!(pf2.tier2.len(), 1);
     }
 
     #[test]
     fn test_tier2_without_charset_uses_wide() {
-        use crate::{RegistrationOptions, register_with_options};
+        use crate::{SecretOptions, register_with_options};
         let secret = b"my-custom-api-token-wide-charset-test";
-        let opts = RegistrationOptions::default();
+        let opts = SecretOptions::default();
         let pat = register_with_options(secret, &opts).unwrap();
-        let mut pf = PatternsFile::new();
-        pf.add_tier2_pattern(&pat, None).unwrap();
+        let mut pf = SecretsFile::new();
+        pf.add_secret_pattern(&pat, None).unwrap();
         assert!(pf.tier2[0].charset.is_none());
     }
 
@@ -514,7 +514,7 @@ identifier = "my_pattern"
 salt = "0000000000000000000000000000000000000000000000000000000000000002"
 segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
 "#;
-        let err = PatternsFile::deserialize(pf_data).unwrap_err();
+        let err = SecretsFile::deserialize(pf_data).unwrap_err();
         assert!(err.to_string().contains("duplicate Tier 1 identifier"));
     }
 
@@ -544,14 +544,14 @@ hmac_digest = "0000000000000000000000000000000000000000000000000000000000000001"
 preserve_prefix = 0
 preserve_suffix = 0
 "#;
-        let err = PatternsFile::deserialize(pf_data).unwrap_err();
+        let err = SecretsFile::deserialize(pf_data).unwrap_err();
         assert!(err.to_string().contains("duplicate Tier 2 label"));
     }
 
     #[test]
     fn test_version_1_error_message() {
         let data = b"version = 1\ntier1 = []\ntier2 = []\n";
-        let err = PatternsFile::deserialize(data).unwrap_err();
+        let err = SecretsFile::deserialize(data).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unsupported"), "error: {msg}");
         assert!(msg.contains("expected 2"), "error: {msg}");
@@ -560,9 +560,9 @@ preserve_suffix = 0
     #[test]
     fn test_user_defined_tier1_into_patterns() {
         use crate::segment::SegmentDef;
-        let pf = PatternsFile {
+        let pf = SecretsFile {
             version: 2,
-            tier1: vec![Tier1Entry {
+            tier1: vec![PatternEntry {
                 identifier: "custom".into(),
                 salt: [0xAA; 32],
                 segments: Some(vec![
@@ -584,9 +584,9 @@ preserve_suffix = 0
 
     #[test]
     fn test_user_defined_without_segments_errors() {
-        let pf = PatternsFile {
+        let pf = SecretsFile {
             version: 2,
-            tier1: vec![Tier1Entry {
+            tier1: vec![PatternEntry {
                 identifier: "unknown_thing".into(),
                 salt: [0u8; 32],
                 segments: None,

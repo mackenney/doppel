@@ -3,14 +3,14 @@ use std::sync::Arc;
 
 use crate::crypto::hmac_sha256;
 use crate::fake::{FakeError, charsets, derive_fake_tier2_deterministic};
-use crate::tier1::Pattern;
+use crate::patterns::Pattern;
 
 /// Options for Tier 2 secret registration.
 ///
 /// All fields default to the secure-by-default configuration: no prefix/suffix
 /// preservation, wide charset for fake generation.
 #[derive(Debug, Clone, Default)]
-pub struct RegistrationOptions {
+pub struct SecretOptions {
     /// Number of bytes at the start of the secret that are declared **non-secret**
     /// by the caller and will appear verbatim in the fake.
     ///
@@ -45,7 +45,7 @@ pub struct RegistrationOptions {
 
 /// Errors returned by Tier 2 registration.
 #[derive(Debug, thiserror::Error)]
-pub enum RegistrationError {
+pub enum SecretError {
     /// Secret is empty; there are no bytes to protect.
     #[error("secret is empty; Tier 2 registration requires at least 1 byte")]
     TooShort,
@@ -69,11 +69,11 @@ pub enum RegistrationError {
     CollisionLimit { attempts: u32 },
 }
 
-impl From<FakeError> for RegistrationError {
+impl From<FakeError> for SecretError {
     fn from(e: FakeError) -> Self {
         match e {
             FakeError::CollisionLimit { attempts } => {
-                RegistrationError::CollisionLimit { attempts }
+                SecretError::CollisionLimit { attempts }
             }
         }
     }
@@ -108,31 +108,31 @@ const END_FRAGMENT_LEN: usize = 8;
 
 /// Register an arbitrary secret with default options and produce a Tier 2 Pattern.
 ///
-/// Returns `Err` instead of panicking on invalid input. See [`RegistrationError`]
+/// Returns `Err` instead of panicking on invalid input. See [`SecretError`]
 /// for the error conditions. See [`register_with_options`] to customise prefix/suffix
 /// preservation or charset restriction.
 ///
 /// # Examples
 ///
 /// ```
-/// use its_classified::{register, scrub};
+/// use doppel::{register, swap};
 ///
 /// let secret = b"my-custom-api-token-that-is-long-enough-for-tier2";
 /// let pattern = register(secret).unwrap();
-/// let result = scrub(secret, &[pattern]).unwrap();
+/// let result = swap(secret, &[pattern]).unwrap();
 /// assert_eq!(result.entries.len(), 1);
 /// ```
-pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, RegistrationError> {
-    register_with_options(secret, &RegistrationOptions::default())
+pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, SecretError> {
+    register_with_options(secret, &SecretOptions::default())
 }
 
 /// Register an arbitrary secret with explicit options.
 ///
-/// See [`RegistrationOptions`] for the available knobs.
+/// See [`SecretOptions`] for the available knobs.
 pub fn register_with_options(
     secret: impl AsRef<[u8]>,
-    opts: &RegistrationOptions,
-) -> Result<Pattern, RegistrationError> {
+    opts: &SecretOptions,
+) -> Result<Pattern, SecretError> {
     register_with_options_rng(secret.as_ref(), opts, &mut OsRng)
 }
 
@@ -141,26 +141,26 @@ pub fn register_with_options(
 pub(crate) fn register_with_rng<R: RngCore>(
     secret: &[u8],
     rng: &mut R,
-) -> Result<Pattern, RegistrationError> {
-    register_with_options_rng(secret, &RegistrationOptions::default(), rng)
+) -> Result<Pattern, SecretError> {
+    register_with_options_rng(secret, &SecretOptions::default(), rng)
 }
 
 /// Core registration logic. All public entry points funnel here.
 pub(crate) fn register_with_options_rng<R: RngCore>(
     secret: &[u8],
-    opts: &RegistrationOptions,
+    opts: &SecretOptions,
     rng: &mut R,
-) -> Result<Pattern, RegistrationError> {
+) -> Result<Pattern, SecretError> {
     // INV-25: return error, never panic.
     if secret.is_empty() {
-        return Err(RegistrationError::TooShort);
+        return Err(SecretError::TooShort);
     }
 
     let pp = opts.preserve_prefix;
     let ps = opts.preserve_suffix;
 
     if pp + ps >= secret.len() {
-        return Err(RegistrationError::NoVariableBytes {
+        return Err(SecretError::NoVariableBytes {
             preserve_prefix: pp,
             preserve_suffix: ps,
             secret_len: secret.len(),
@@ -172,7 +172,7 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
     // INV-26: warn when variable portion is small.
     if variable_len < MIN_VARIABLE_BYTES_WARNING {
         log::warn!(
-            "its-classified: Tier 2 registration has only {} variable byte(s) (minimum recommended: {}). \
+            "doppel: registered secret registration has only {} variable byte(s) (minimum recommended: {}). \
              Secrets with small variable portions offer weak protection.",
             variable_len,
             MIN_VARIABLE_BYTES_WARNING
@@ -185,7 +185,7 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         let alnum = charsets::alphanumeric();
         if observed.iter().all(|b| alnum.contains(b)) {
             log::warn!(
-                "its-classified: registered secret appears alphanumeric ([A-Za-z0-9]) but \
+                "doppel: registered secret appears alphanumeric ([A-Za-z0-9]) but \
                  restrict_charset is false. The fake will be drawn from the wide charset, \
                  which may look structurally different from the original. Set \
                  restrict_charset: true if the replacement must also be alphanumeric."
@@ -246,7 +246,7 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         &pat.charset,
         secret.len(),
     )
-    .map_err(RegistrationError::from)?;
+    .map_err(SecretError::from)?;
 
     Ok(Pattern::Tier2(Arc::new(pat)))
 }
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn test_register_with_preserve_prefix_affix_in_fake() {
         let secret = b"MY_ORG_secretbytes1234END";
-        let opts = RegistrationOptions {
+        let opts = SecretOptions {
             preserve_prefix: 7,
             preserve_suffix: 3,
             restrict_charset: false,
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn test_register_restrict_charset_uses_secret_charset() {
         let secret = b"abcdef1234567890abcdef";
-        let opts = RegistrationOptions {
+        let opts = SecretOptions {
             preserve_prefix: 0,
             preserve_suffix: 0,
             restrict_charset: true,
@@ -524,7 +524,7 @@ mod tests {
         // A normal secret should register without collision.
         // Verifies that trial derivation runs (INV-25) and does not false-positive.
         let secret = b"sk-test-abcdefghijklmnopqrstuvwxyz1234567890abcdef";
-        let opts = RegistrationOptions {
+        let opts = SecretOptions {
             preserve_prefix: 0,
             preserve_suffix: 0,
             restrict_charset: false,
@@ -545,7 +545,7 @@ mod derivation_param_tests {
     #[test]
     fn test_register_stores_derivation_params() {
         let secret = b"MY_ORG_secretbytes1234END";
-        let opts = RegistrationOptions {
+        let opts = SecretOptions {
             preserve_prefix: 7,
             preserve_suffix: 3,
             restrict_charset: true,

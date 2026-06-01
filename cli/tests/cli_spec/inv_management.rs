@@ -3,7 +3,7 @@
 use std::process::Command;
 
 fn cli_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_its-classified"))
+    Command::new(env!("CARGO_BIN_EXE_doppel"))
 }
 
 fn init_patterns(dir: &std::path::Path) -> std::path::PathBuf {
