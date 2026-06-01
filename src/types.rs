@@ -19,12 +19,12 @@ impl SessionKey {
 
 // No Clone, no Debug, no Display — prevents accidental logging or copying.
 
-/// One substitution record produced by a single scrub call.
+/// One substitution record produced by a single swap call.
 /// Contains the fake bytes (not secret) and the AEAD-encrypted original secret.
 /// See SPEC.md §Entries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
-    /// The fake bytes that replaced the original secret in the scrubbed payload.
+    /// The fake bytes that replaced the original secret in the swapped payload.
     #[serde(with = "base64_serde")]
     pub fake: Vec<u8>,
     /// Random 24-byte nonce used for this entry's AEAD encryption.
@@ -47,8 +47,8 @@ impl Entry {
     }
 }
 
-/// Result of a scrub() call.
-pub struct ScrubResult {
+/// Result of a swap() call.
+pub struct SwapResult {
     pub payload: Vec<u8>,
     pub entries: Vec<Entry>,
     pub session_key: SessionKey,
@@ -56,26 +56,26 @@ pub struct ScrubResult {
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum ScrubError {
+pub enum SwapError {
     #[error("encryption failed: {msg}")]
     Crypto { msg: String },
     #[error("fake generation failed: {msg}")]
     Fake { msg: String },
 }
 
-impl From<crate::crypto::Error> for ScrubError {
+impl From<crate::crypto::Error> for SwapError {
     fn from(e: crate::crypto::Error) -> Self {
-        ScrubError::Crypto { msg: e.to_string() }
+        SwapError::Crypto { msg: e.to_string() }
     }
 }
 
-impl From<crate::fake::FakeError> for ScrubError {
+impl From<crate::fake::FakeError> for SwapError {
     fn from(e: crate::fake::FakeError) -> Self {
-        ScrubError::Fake { msg: e.to_string() }
+        SwapError::Fake { msg: e.to_string() }
     }
 }
 
-/// Re-export Pattern from tier1 so callers can reach it via its_classified::types::Pattern.
-pub use crate::tier1::Pattern;
+/// Re-export Pattern from patterns module so callers can reach it via doppel::types::Pattern.
+pub use crate::patterns::Pattern;
 
 use crate::serde_helpers::base64_vec as base64_serde;

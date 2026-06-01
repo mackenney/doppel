@@ -3,15 +3,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_its-classified"))
+    PathBuf::from(env!("CARGO_BIN_EXE_doppel"))
 }
 
 fn tmp_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "its-classified-e2e-{}-{}",
-        name,
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("doppel-e2e-{}-{}", name, std::process::id()))
 }
 
 fn cleanup(paths: &[&PathBuf]) {
@@ -34,7 +30,7 @@ fn create_test_patterns_file(name: &str) -> PathBuf {
     path
 }
 
-// VC-8 / INV-21: scrub creates session key file with mode 0600
+// VC-8 / INV-21: swap creates session key file with mode 0600
 #[test]
 fn test_e2e_key_file_mode_0600() {
     let patterns_path = create_test_patterns_file("key-mode");
@@ -43,7 +39,7 @@ fn test_e2e_key_file_mode_0600() {
 
     let mut child = Command::new(bin())
         .args([
-            "scrub",
+            "swap",
             "--patterns",
             patterns_path.to_str().unwrap(),
             "--entries",
@@ -55,7 +51,7 @@ fn test_e2e_key_file_mode_0600() {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("failed to start scrub");
+        .expect("failed to start swap");
 
     child
         .stdin
@@ -67,7 +63,7 @@ fn test_e2e_key_file_mode_0600() {
     let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
-        "scrub failed: {:?}",
+        "swap failed: {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -86,27 +82,27 @@ fn test_e2e_key_file_mode_0600() {
     cleanup(&[&patterns_path, &entries_path, &key_path]);
 }
 
-// INV-20: unscrub reads key from ITS_CLASSIFIED_KEY only (no --key flag accepted)
+// INV-20: restore reads key from DOPPEL_KEY only (no --key flag accepted)
 #[test]
-fn test_e2e_unscrub_no_key_flag() {
+fn test_e2e_restore_no_key_flag() {
     let help_output = Command::new(bin())
-        .args(["unscrub", "--help"])
+        .args(["restore", "--help"])
         .output()
         .expect("failed to get help");
     let help_text = String::from_utf8_lossy(&help_output.stdout);
     assert!(
         !help_text.contains("--key "),
-        "INV-20: --key flag must not appear in unscrub --help"
+        "INV-20: --key flag must not appear in restore --help"
     );
     assert!(
         !help_text.to_lowercase().contains("--key-file"),
-        "INV-20: --key-file must not appear in unscrub --help"
+        "INV-20: --key-file must not appear in restore --help"
     );
 }
 
-// VC-9: unscrub writes to stdout before stdin reaches EOF (streaming)
+// VC-9: restore writes to stdout before stdin reaches EOF (streaming)
 #[test]
-fn test_e2e_unscrub_streams_before_eof() {
+fn test_e2e_restore_streams_before_eof() {
     use std::io::Read;
     use std::thread;
 
@@ -117,7 +113,7 @@ fn test_e2e_unscrub_streams_before_eof() {
 
     let mut scrub_child = Command::new(bin())
         .args([
-            "scrub",
+            "swap",
             "--patterns",
             patterns_path.to_str().unwrap(),
             "--entries",
@@ -148,8 +144,8 @@ fn test_e2e_unscrub_streams_before_eof() {
         .to_string();
 
     let mut unscrub_child = Command::new(bin())
-        .args(["unscrub", "--entries", entries_path.to_str().unwrap()])
-        .env("ITS_CLASSIFIED_KEY", &key_hex)
+        .args(["restore", "--entries", entries_path.to_str().unwrap()])
+        .env("DOPPEL_KEY", &key_hex)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -174,7 +170,7 @@ fn test_e2e_unscrub_streams_before_eof() {
     writer.join().unwrap();
 
     let status = unscrub_child.wait().unwrap();
-    assert!(status.success(), "unscrub failed");
+    assert!(status.success(), "restore failed");
     assert_eq!(
         output, payload,
         "VC-9: round-trip output must match original"
@@ -183,7 +179,7 @@ fn test_e2e_unscrub_streams_before_eof() {
     cleanup(&[&patterns_path, &entries_path, &key_path]);
 }
 
-// Full E2E round-trip: scrub + unscrub at process boundary
+// Full E2E round-trip: swap + restore at process boundary
 #[test]
 fn test_e2e_full_round_trip() {
     let patterns_path = create_test_patterns_file("round-trip");
@@ -194,7 +190,7 @@ fn test_e2e_full_round_trip() {
 
     let mut scrub_child = Command::new(bin())
         .args([
-            "scrub",
+            "swap",
             "--patterns",
             patterns_path.to_str().unwrap(),
             "--entries",
@@ -217,7 +213,7 @@ fn test_e2e_full_round_trip() {
     let scrub_out = scrub_child.wait_with_output().unwrap();
     assert!(
         scrub_out.status.success(),
-        "scrub failed: {}",
+        "swap failed: {}",
         String::from_utf8_lossy(&scrub_out.stderr)
     );
     let scrubbed = scrub_out.stdout;
@@ -234,8 +230,8 @@ fn test_e2e_full_round_trip() {
     );
 
     let mut unscrub_child = Command::new(bin())
-        .args(["unscrub", "--entries", entries_path.to_str().unwrap()])
-        .env("ITS_CLASSIFIED_KEY", &key_hex)
+        .args(["restore", "--entries", entries_path.to_str().unwrap()])
+        .env("DOPPEL_KEY", &key_hex)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -251,7 +247,7 @@ fn test_e2e_full_round_trip() {
     let unscrub_out = unscrub_child.wait_with_output().unwrap();
     assert!(
         unscrub_out.status.success(),
-        "unscrub failed: {}",
+        "restore failed: {}",
         String::from_utf8_lossy(&unscrub_out.stderr)
     );
     assert_eq!(
@@ -262,14 +258,14 @@ fn test_e2e_full_round_trip() {
     cleanup(&[&patterns_path, &entries_path, &key_path]);
 }
 
-// INV-20: missing ITS_CLASSIFIED_KEY → non-zero exit
+// INV-20: missing DOPPEL_KEY → non-zero exit
 #[test]
-fn test_e2e_unscrub_missing_env_var_fails() {
+fn test_e2e_restore_missing_env_var_fails() {
     let entries_path = tmp_path("entries-missing.json");
     std::fs::write(&entries_path, b"[]").unwrap();
     let output = Command::new(bin())
-        .args(["unscrub", "--entries", entries_path.to_str().unwrap()])
-        .env_remove("ITS_CLASSIFIED_KEY")
+        .args(["restore", "--entries", entries_path.to_str().unwrap()])
+        .env_remove("DOPPEL_KEY")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -277,7 +273,7 @@ fn test_e2e_unscrub_missing_env_var_fails() {
         .unwrap();
     assert!(
         !output.status.success(),
-        "INV-20: missing ITS_CLASSIFIED_KEY must cause non-zero exit"
+        "INV-20: missing DOPPEL_KEY must cause non-zero exit"
     );
     cleanup(&[&entries_path]);
 }
@@ -352,13 +348,13 @@ fn test_e2e_init_force_overwrites() {
 }
 
 #[test]
-fn test_e2e_scrub_missing_patterns_file() {
+fn test_e2e_swap_missing_patterns_file() {
     let entries_path = tmp_path("entries-missing-pat.json");
     let key_path = tmp_path("key-missing-pat.txt");
 
     let output = Command::new(bin())
         .args([
-            "scrub",
+            "swap",
             "--patterns",
             "/tmp/nonexistent-patterns-file.json",
             "--entries",
@@ -368,11 +364,11 @@ fn test_e2e_scrub_missing_patterns_file() {
         ])
         .stdin(std::process::Stdio::null())
         .output()
-        .expect("failed to run scrub");
+        .expect("failed to run swap");
 
     assert!(
         !output.status.success(),
-        "scrub must fail with missing patterns file"
+        "swap must fail with missing patterns file"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -384,7 +380,7 @@ fn test_e2e_scrub_missing_patterns_file() {
 }
 
 #[test]
-fn test_e2e_scrub_corrupt_patterns_file() {
+fn test_e2e_swap_corrupt_patterns_file() {
     let patterns_path = tmp_path("corrupt-patterns.json");
     std::fs::write(&patterns_path, b"not valid json").unwrap();
     let entries_path = tmp_path("entries-corrupt.json");
@@ -392,7 +388,7 @@ fn test_e2e_scrub_corrupt_patterns_file() {
 
     let output = Command::new(bin())
         .args([
-            "scrub",
+            "swap",
             "--patterns",
             patterns_path.to_str().unwrap(),
             "--entries",
@@ -402,7 +398,7 @@ fn test_e2e_scrub_corrupt_patterns_file() {
         ])
         .stdin(std::process::Stdio::null())
         .output()
-        .expect("failed to run scrub");
+        .expect("failed to run swap");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -451,7 +447,7 @@ fn test_e2e_register_tier2_round_trip() {
     let payload = [b"token: ".as_slice(), secret, b" end"].concat();
     let mut scrub_child = Command::new(bin())
         .args([
-            "scrub",
+            "swap",
             "--patterns",
             patterns_path.to_str().unwrap(),
             "--entries",
@@ -463,7 +459,7 @@ fn test_e2e_register_tier2_round_trip() {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("failed to start scrub");
+        .expect("failed to start swap");
     scrub_child
         .stdin
         .as_mut()
@@ -474,7 +470,7 @@ fn test_e2e_register_tier2_round_trip() {
     let scrub_out = scrub_child.wait_with_output().unwrap();
     assert!(
         scrub_out.status.success(),
-        "scrub failed: {}",
+        "swap failed: {}",
         String::from_utf8_lossy(&scrub_out.stderr)
     );
 
@@ -489,13 +485,13 @@ fn test_e2e_register_tier2_round_trip() {
         .trim()
         .to_string();
     let mut unscrub_child = Command::new(bin())
-        .args(["unscrub", "--entries", entries_path.to_str().unwrap()])
-        .env("ITS_CLASSIFIED_KEY", &key_hex)
+        .args(["restore", "--entries", entries_path.to_str().unwrap()])
+        .env("DOPPEL_KEY", &key_hex)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("failed to start unscrub");
+        .expect("failed to start restore");
     unscrub_child
         .stdin
         .as_mut()
@@ -506,7 +502,7 @@ fn test_e2e_register_tier2_round_trip() {
     let unscrub_out = unscrub_child.wait_with_output().unwrap();
     assert!(
         unscrub_out.status.success(),
-        "unscrub failed: {}",
+        "restore failed: {}",
         String::from_utf8_lossy(&unscrub_out.stderr)
     );
     assert_eq!(
@@ -564,7 +560,7 @@ fn test_e2e_register_empty_stdin() {
 
 #[test]
 fn test_e2e_inv13_cross_run_fake_stability() {
-    // INV-13: Two separate scrub invocations with the same patterns file
+    // INV-13: Two separate swap invocations with the same patterns file
     // and same secret must produce the same fake.
     let patterns_path = create_test_patterns_file("inv13-cross");
     let entries1_path = tmp_path("entries-inv13-1.json");
@@ -577,7 +573,7 @@ fn test_e2e_inv13_cross_run_fake_stability() {
     for (ep, kp) in [(&entries1_path, &key1_path), (&entries2_path, &key2_path)] {
         let mut child = Command::new(bin())
             .args([
-                "scrub",
+                "swap",
                 "--patterns",
                 patterns_path.to_str().unwrap(),
                 "--entries",
@@ -595,7 +591,7 @@ fn test_e2e_inv13_cross_run_fake_stability() {
         let out = child.wait_with_output().unwrap();
         assert!(
             out.status.success(),
-            "scrub failed: {}",
+            "swap failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
     }

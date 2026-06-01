@@ -1,4 +1,4 @@
-# its-classified
+# doppel
 
 Scrubs secrets from arbitrary byte payloads before they leave your machine,
 then restores them transparently in the response — including SSE streams.
@@ -8,18 +8,18 @@ then restores them transparently in the response — including SSE streams.
 ## How it works
 
 ```
-scrub(payload, patterns)  →  (scrubbed_payload, entries, session_key)
-unscrub(response_stream, entries, session_key)  →  restored_stream
+swap(payload, patterns)  →  (swapped_payload, entries, session_key)
+restore(response_stream, entries, session_key)  →  restored_stream
 ```
 
-You supply the patterns. `scrub` applies exactly the patterns you pass — nothing
+You supply the patterns. `swap` applies exactly the patterns you pass — nothing
 more. Secrets matching those patterns are replaced with structurally-equivalent
-fakes before the payload leaves. `unscrub` reverses the substitution in the
+fakes before the payload leaves. `restore` reverses the substitution in the
 response stream using the encrypted entries and the session key.
 
 ## Patterns
 
-**You decide what gets scrubbed.** A pattern describes how to detect and replace
+**You decide what gets swapped.** A pattern describes how to detect and replace
 one secret or one class of secrets. There are two kinds:
 
 ### Tier 1 — structural classes
@@ -36,7 +36,7 @@ them; they are not applied automatically.
 ### Tier 2 — specific known secrets
 
 A Tier 2 pattern covers a secret that has no structural class: you know the
-actual value and want it scrubbed wherever it appears. You register the full
+actual value and want it swapped wherever it appears. You register the full
 secret bytes; the library derives a detection fingerprint and generates a fake
 at registration time. The original value is never stored.
 
@@ -45,14 +45,14 @@ at registration time. The original value is never stored.
 let pat = register(b"my-super-secret-api-token")?;
 
 // With options: preserve a non-secret prefix, restrict fake charset
-let pat = register_with_options(b"MY_ORG_secretpart_END", &RegistrationOptions {
+let pat = register_with_options(b"MY_ORG_secretpart_END", &SecretOptions {
     preserve_prefix: 7,  // "MY_ORG_" reproduced verbatim in every fake
     preserve_suffix: 4,  // "_END" reproduced verbatim in every fake
     restrict_charset: false,
 })?;
 ```
 
-`RegistrationOptions` lets you declare a non-secret prefix/suffix (preserved
+`SecretOptions` lets you declare a non-secret prefix/suffix (preserved
 verbatim in the fake) and restrict the fake's character set to match the
 original's. `register` is shorthand for `register_with_options` with all defaults.
 
@@ -80,7 +80,7 @@ are stable across process restarts.
 **Create a new patterns file:**
 
 ```sh
-its-classified init --patterns secrets.toml
+doppel init --patterns secrets.toml
 ```
 
 This writes a self-describing TOML file with all built-in Tier 1 definitions and
@@ -136,43 +136,43 @@ contains detection fragments. On Unix systems, all write operations (`init`,
 ### `init` — create a patterns file
 
 ```sh
-its-classified init --patterns secrets.toml [--force]
+doppel init --patterns secrets.toml [--force]
 ```
 
 Creates a new TOML patterns file with all built-in Tier 1 definitions and freshly
 generated salts. Fails if the file already exists; use `--force` to overwrite
 (warning: regenerates all salts — existing fakes become invalid).
 
-### `scrub` — scrub a payload
+### `swap` — swap a payload
 
 ```sh
-its-classified scrub \
+doppel swap \
   --patterns secrets.toml \
   --entries  entries.json \
   --key-out  session.key \
-  < request_body.json > scrubbed_body.json
+  < request_body.json > swapped_body.json
 ```
 
-Reads the complete payload from stdin, writes the scrubbed payload to stdout,
+Reads the complete payload from stdin, writes the swapped payload to stdout,
 writes the entries (ciphertext; not sensitive on its own) to `--entries`, and
 writes the session key (sensitive; mode 0600) to `--key-out`.
 
-### `unscrub` — restore a response stream
+### `restore` — restore a response stream
 
 ```sh
-export ITS_CLASSIFIED_KEY=$(cat session.key)
-its-classified unscrub --entries entries.json < response_stream > restored.txt
+export DOPPEL_KEY=$(cat session.key)
+doppel restore --entries entries.json < response_stream > restored.txt
 ```
 
 Reads the response stream from stdin incrementally and writes restored output to
 stdout as each chunk resolves. The session key is supplied **only** via the
-`ITS_CLASSIFIED_KEY` environment variable — no `--key` flag exists (command-line
+`DOPPEL_KEY` environment variable — no `--key` flag exists (command-line
 arguments are visible in process listings and shell history).
 
 ### `register` — register a Tier 2 secret
 
 ```sh
-echo -n 'my-secret-value' | its-classified register \
+echo -n 'my-secret-value' | doppel register \
   --patterns secrets.toml \
   --label    my-api-key \
   [--preserve-prefix N] \
@@ -187,7 +187,7 @@ command-line arguments. `--label` is required and must be unique within the file
 ### `define` — add a user-defined Tier 1 pattern
 
 ```sh
-its-classified define \
+doppel define \
   --patterns   secrets.toml \
   --identifier MY_PATTERN \
   --segment    literal:MY_PREFIX_ \
@@ -208,7 +208,7 @@ file.
 ### `list` — list all patterns
 
 ```sh
-its-classified list --patterns secrets.toml
+doppel list --patterns secrets.toml
 ```
 
 Prints a human-readable summary: Tier 1 entries with identifier and segment
@@ -218,8 +218,8 @@ not modify the file.
 ### `inspect` — show detail for one pattern
 
 ```sh
-its-classified inspect --patterns secrets.toml --identifier anthropic
-its-classified inspect --patterns secrets.toml --label my-api-key
+doppel inspect --patterns secrets.toml --identifier anthropic
+doppel inspect --patterns secrets.toml --label my-api-key
 ```
 
 Exactly one of `--identifier` (Tier 1) or `--label` (Tier 2) is required.
@@ -230,17 +230,17 @@ Does not modify the file.
 ### `remove` — remove a pattern
 
 ```sh
-its-classified remove --patterns secrets.toml --identifier anthropic
-its-classified remove --patterns secrets.toml --label my-api-key
+doppel remove --patterns secrets.toml --identifier anthropic
+doppel remove --patterns secrets.toml --label my-api-key
 ```
 
 Exactly one of `--identifier` (Tier 1) or `--label` (Tier 2) is required.
 Removes the specified entry and writes the file back atomically. Removing a
-built-in Tier 1 identifier emits a warning but succeeds; `scrub` will no longer
+built-in Tier 1 identifier emits a warning but succeeds; `swap` will no longer
 detect that secret class.
 
 ## Streaming
 
-`unscrub` works over a stream of `Bytes` chunks. It uses suspicion-driven
+`restore` works over a stream of `Bytes` chunks. It uses suspicion-driven
 buffering: chunks are held only while a potential match is in flight, bounded by
 the longest secret length across active patterns (typically 100–200 bytes).

@@ -1,5 +1,5 @@
+use crate::secrets::Tier2Pat;
 use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
-use crate::tier2::Tier2Pat;
 use aho_corasick::AhoCorasick;
 use std::sync::{Arc, LazyLock};
 
@@ -79,7 +79,7 @@ fn match_segments(
 
 // Note on sk-proj- vs sk-: at a "sk-proj-..." position, OPENAI_PROJECT_DEF produces a longer
 // match because it finds T3BlbkFJ at the correct offset; OPENAI_CLASSIC_DEF fails because
-// 'proj-' contains '-' which is not alphanumeric. The scrub engine picks the longest match (INV-18).
+// 'proj-' contains '-' which is not alphanumeric. The swap engine picks the longest match (INV-18).
 
 const ANTHROPIC_SEGS: [BuiltinSegment; 3] = [
     BuiltinSegment::Literal(b"sk-ant-api03-"),
@@ -464,10 +464,10 @@ pub(crate) fn prefix_filter() -> &'static AhoCorasick {
     &TIER1_PREFIX_FILTER
 }
 
-/// A detection descriptor for [`crate::scrub`].
+/// A detection descriptor for [`crate::swap`].
 ///
 /// Obtain via [`patterns`] functions or [`crate::register`]/[`crate::register_with_options`].
-/// Pass to [`crate::scrub`] — do not match on variants in stable code; the variant
+/// Pass to [`crate::swap`] — do not match on variants in stable code; the variant
 /// set may change in future versions.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -482,158 +482,155 @@ impl Pattern {
     }
 }
 
-/// Built-in Tier 1 patterns. Pass these to scrub() to detect well-known API key formats.
-pub mod patterns {
-    use super::*;
-    use rand::RngCore;
-    use rand::rngs::OsRng;
+/// Built-in Tier 1 patterns. Pass these to swap() to detect well-known API key formats.
+use rand::RngCore;
+use rand::rngs::OsRng;
 
-    fn random_salt() -> [u8; 32] {
-        let mut salt = [0u8; 32];
-        OsRng.fill_bytes(&mut salt);
-        salt
-    }
+fn random_salt() -> [u8; 32] {
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
+    salt
+}
 
-    /// Returns an Anthropic key pattern with an ephemeral salt.
-    ///
-    /// Fakes are stable for the lifetime of the returned `Pattern` value but differ
-    /// across calls and process restarts. For cross-restart stability, use
-    /// `PatternsFile::into_patterns()`.
-    pub fn anthropic() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..ANTHROPIC_DEF.clone()
-        })
-    }
+/// Returns an Anthropic key pattern with an ephemeral salt.
+///
+/// Fakes are stable for the lifetime of the returned `Pattern` value but differ
+/// across calls and process restarts. For cross-restart stability, use
+/// `SecretsFile::into_patterns()`.
+pub fn anthropic() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..ANTHROPIC_DEF.clone()
+    })
+}
 
-    pub fn anthropic_admin01() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..ANTHROPIC_ADMIN01_DEF.clone()
-        })
-    }
+pub fn anthropic_admin01() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..ANTHROPIC_ADMIN01_DEF.clone()
+    })
+}
 
-    pub fn anthropic_admin03() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..ANTHROPIC_ADMIN03_DEF.clone()
-        })
-    }
+pub fn anthropic_admin03() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..ANTHROPIC_ADMIN03_DEF.clone()
+    })
+}
 
-    pub fn openai_classic() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..OPENAI_CLASSIC_DEF.clone()
-        })
-    }
+pub fn openai_classic() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..OPENAI_CLASSIC_DEF.clone()
+    })
+}
 
-    pub fn openai_project() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..OPENAI_PROJECT_DEF.clone()
-        })
-    }
+pub fn openai_project() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..OPENAI_PROJECT_DEF.clone()
+    })
+}
 
-    pub fn openai_svcacct() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..OPENAI_SVCACCT_DEF.clone()
-        })
-    }
+pub fn openai_svcacct() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..OPENAI_SVCACCT_DEF.clone()
+    })
+}
 
-    pub fn aws_akia() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..AWS_AKIA_DEF.clone()
-        })
-    }
+pub fn aws_akia() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..AWS_AKIA_DEF.clone()
+    })
+}
 
-    pub fn aws_asia() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..AWS_ASIA_DEF.clone()
-        })
-    }
+pub fn aws_asia() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..AWS_ASIA_DEF.clone()
+    })
+}
 
-    pub fn github_classic() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..GITHUB_CLASSIC_DEF.clone()
-        })
-    }
+pub fn github_classic() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..GITHUB_CLASSIC_DEF.clone()
+    })
+}
 
-    pub fn github_fine_grained() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..GITHUB_FG_DEF.clone()
-        })
-    }
+pub fn github_fine_grained() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..GITHUB_FG_DEF.clone()
+    })
+}
 
-    pub fn gcp() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..GCP_DEF.clone()
-        })
-    }
+pub fn gcp() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..GCP_DEF.clone()
+    })
+}
 
-    pub fn openrouter() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..OPENROUTER_DEF.clone()
-        })
-    }
+pub fn openrouter() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..OPENROUTER_DEF.clone()
+    })
+}
 
-    pub fn google_oauth_secret() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..GOOGLE_OAUTH_SECRET_DEF.clone()
-        })
-    }
+pub fn google_oauth_secret() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..GOOGLE_OAUTH_SECRET_DEF.clone()
+    })
+}
 
-    pub fn slack_bot() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..SLACK_BOT_DEF.clone()
-        })
-    }
+pub fn slack_bot() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..SLACK_BOT_DEF.clone()
+    })
+}
 
-    pub fn linear() -> Pattern {
-        Pattern::Tier1(Tier1Def {
-            salt: random_salt(),
-            ..LINEAR_DEF.clone()
-        })
-    }
+pub fn linear() -> Pattern {
+    Pattern::Tier1(Tier1Def {
+        salt: random_salt(),
+        ..LINEAR_DEF.clone()
+    })
+}
 
-    /// Returns all built-in Tier 1 patterns with ephemeral per-call salts.
-    ///
-    /// Fakes produced by these patterns are stable within the returned `Vec<Pattern>`
-    /// instance but differ across calls to `all()` and across process restarts.
-    /// For persistent cross-restart stability, use `PatternsFile::into_patterns()`.
-    ///
-    /// Covers: Anthropic API (`sk-ant-api03-`), Anthropic Admin (`sk-ant-admin01-`,
-    /// `sk-ant-admin03-`), OpenAI classic (`sk-`), OpenAI project (`sk-proj-`),
-    /// OpenAI service account (`sk-svcacct-`), AWS AKIA/ASIA, GitHub classic/fine-grained,
-    /// GCP/Gemini (`AIza`), OpenRouter (`sk-or-v1-`), Google OAuth secret (`GOCSPX-`),
-    /// Slack bot (`xoxb-`), Linear (`lin_api_`).
-    pub fn all() -> Vec<Pattern> {
-        vec![
-            anthropic(),
-            anthropic_admin01(),
-            anthropic_admin03(),
-            openai_classic(),
-            openai_project(),
-            openai_svcacct(),
-            aws_akia(),
-            aws_asia(),
-            github_classic(),
-            github_fine_grained(),
-            gcp(),
-            openrouter(),
-            google_oauth_secret(),
-            slack_bot(),
-            linear(),
-        ]
-    }
+/// Returns all built-in Tier 1 patterns with ephemeral per-call salts.
+///
+/// Fakes produced by these patterns are stable within the returned `Vec<Pattern>`
+/// instance but differ across calls to `all()` and across process restarts.
+/// For persistent cross-restart stability, use `SecretsFile::into_patterns()`.
+///
+/// Covers: Anthropic API (`sk-ant-api03-`), Anthropic Admin (`sk-ant-admin01-`,
+/// `sk-ant-admin03-`), OpenAI classic (`sk-`), OpenAI project (`sk-proj-`),
+/// OpenAI service account (`sk-svcacct-`), AWS AKIA/ASIA, GitHub classic/fine-grained,
+/// GCP/Gemini (`AIza`), OpenRouter (`sk-or-v1-`), Google OAuth secret (`GOCSPX-`),
+/// Slack bot (`xoxb-`), Linear (`lin_api_`).
+pub fn all() -> Vec<Pattern> {
+    vec![
+        anthropic(),
+        anthropic_admin01(),
+        anthropic_admin03(),
+        openai_classic(),
+        openai_project(),
+        openai_svcacct(),
+        aws_akia(),
+        aws_asia(),
+        github_classic(),
+        github_fine_grained(),
+        gcp(),
+        openrouter(),
+        google_oauth_secret(),
+        slack_bot(),
+        linear(),
+    ]
 }
 
 #[cfg(test)]
@@ -644,7 +641,7 @@ mod tests {
     #[test]
     fn test_tier1_all_classes_present() {
         // INV-22: all built-in classes present in patterns::all()
-        let all = patterns::all();
+        let all = all();
         // Verify by probing each pattern's first Literal segment
         let leading_lits: Vec<&[u8]> = all
             .iter()
@@ -783,7 +780,7 @@ mod tests {
     #[test]
     fn test_all_defs_matches_all_patterns() {
         let defs = all_defs();
-        let all = patterns::all();
+        let all = all();
         assert_eq!(
             defs.len(),
             all.len(),

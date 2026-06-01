@@ -1,5 +1,5 @@
 fn init_patterns_file(path: &std::path::Path) {
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_doppel"))
         .args(["init", "--patterns", path.to_str().unwrap(), "--force"])
         .status()
         .expect("failed to run init");
@@ -7,17 +7,17 @@ fn init_patterns_file(path: &std::path::Path) {
 }
 
 #[test]
-fn test_inv20_cli_no_key_flag_on_unscrub() {
-    // INV-20: "The CLI unscrub command MUST accept the session key only via
-    //          ITS_CLASSIFIED_KEY environment variable; no other mechanism."
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
-        .args(["unscrub", "--help"])
+fn test_inv20_cli_no_key_flag_on_restore() {
+    // INV-20: "The CLI restore command MUST accept the session key only via
+    //          DOPPEL_KEY environment variable; no other mechanism."
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_doppel"))
+        .args(["restore", "--help"])
         .output()
-        .expect("failed to run its-classified");
+        .expect("failed to run doppel");
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(
         !help.contains("--key "),
-        "INV-20: --key flag must not exist on unscrub subcommand"
+        "INV-20: --key flag must not exist on restore subcommand"
     );
     assert!(
         !help.to_lowercase().contains("--key-"),
@@ -26,8 +26,8 @@ fn test_inv20_cli_no_key_flag_on_unscrub() {
 }
 
 #[test]
-fn test_inv21_cli_scrub_key_file_mode_0600() {
-    // INV-21: "The CLI scrub command MUST create the session key output file
+fn test_inv21_cli_swap_key_file_mode_0600() {
+    // INV-21: "The CLI swap command MUST create the session key output file
     //          with permission mode 0600."
     #[cfg(unix)]
     {
@@ -38,9 +38,9 @@ fn test_inv21_cli_scrub_key_file_mode_0600() {
         let key_path = dir.path().join("key.txt");
         init_patterns_file(&patterns_path);
         let payload = b"no secrets here";
-        let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_doppel"))
             .args([
-                "scrub",
+                "swap",
                 "--patterns",
                 patterns_path.to_str().unwrap(),
                 "--entries",
@@ -56,8 +56,8 @@ fn test_inv21_cli_scrub_key_file_mode_0600() {
                 c.stdin.as_mut().unwrap().write_all(payload)?;
                 c.wait()
             })
-            .expect("failed to run scrub");
-        assert!(status.success(), "scrub must exit 0");
+            .expect("failed to run swap");
+        assert!(status.success(), "swap must exit 0");
         let meta = std::fs::metadata(&key_path).expect("key file must exist");
         let mode = meta.mode() & 0o777;
         assert_eq!(
@@ -70,7 +70,7 @@ fn test_inv21_cli_scrub_key_file_mode_0600() {
 
 #[test]
 fn test_inv21_key_file_refuses_pre_existing_path() {
-    // INV-21: create_new (O_EXCL) MUST cause scrub to fail rather than write the
+    // INV-21: create_new (O_EXCL) MUST cause swap to fail rather than write the
     // session key into a pre-existing inode whose permissions the attacker controls.
     #[cfg(unix)]
     {
@@ -89,9 +89,9 @@ fn test_inv21_key_file_refuses_pre_existing_path() {
                 .expect("chmod");
         }
 
-        let status = std::process::Command::new(env!("CARGO_BIN_EXE_its-classified"))
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_doppel"))
             .args([
-                "scrub",
+                "swap",
                 "--patterns",
                 patterns_path.to_str().unwrap(),
                 "--entries",
@@ -108,11 +108,11 @@ fn test_inv21_key_file_refuses_pre_existing_path() {
                 c.stdin.as_mut().unwrap().write_all(b"no secrets")?;
                 c.wait()
             })
-            .expect("failed to run scrub");
+            .expect("failed to run swap");
 
         assert!(
             !status.success(),
-            "INV-21: scrub MUST fail when --key-out path already exists (O_EXCL prevents mode race)"
+            "INV-21: swap MUST fail when --key-out path already exists (O_EXCL prevents mode race)"
         );
     }
 }

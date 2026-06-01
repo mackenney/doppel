@@ -1,4 +1,4 @@
-use its_classified::{register, scrub, tier1::patterns, unscrub};
+use doppel::{patterns, register, restore, swap};
 
 // Synthetic test secrets — NOT real credentials
 const SYNTH_ANTHROPIC: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -10,27 +10,27 @@ const SYNTH_GITHUB_FG: &[u8] =
 // Structure: "github_pat_" (11) + 22 A's + "_" + 59 B's = 93 chars total
 const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-fn round_trip(payload: &[u8], pats: &[its_classified::types::Pattern]) -> Vec<u8> {
-    let scrub_result = scrub(payload, pats).expect("scrub failed");
+fn round_trip(payload: &[u8], pats: &[doppel::types::Pattern]) -> Vec<u8> {
+    let scrub_result = swap(payload, pats).expect("swap failed");
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
         &scrub_result.session_key,
     )
-    .expect("unscrub failed");
+    .expect("restore failed");
     output
 }
 
 fn round_trip_chunked(
     payload: &[u8],
-    pats: &[its_classified::types::Pattern],
+    pats: &[doppel::types::Pattern],
     chunk_size: usize,
 ) -> Vec<u8> {
     use std::io::Read;
-    let scrub_result = scrub(payload, pats).expect("scrub failed");
+    let scrub_result = swap(payload, pats).expect("swap failed");
 
     struct ChunkedReader<'a> {
         data: &'a [u8],
@@ -55,22 +55,22 @@ fn round_trip_chunked(
         chunk: chunk_size,
     };
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut reader,
         &mut output,
         &scrub_result.entries,
         &scrub_result.session_key,
     )
-    .expect("chunked unscrub failed");
+    .expect("chunked restore failed");
     output
 }
 
 // VC-1: Given a Tier 1 secret, scrubbed output contains no byte subsequence equal to original
 #[test]
-fn test_vc1_scrubbed_contains_no_original_secret() {
+fn test_vc1_swapped_contains_no_original_secret() {
     // VC-1 from SPEC.md Verifiable Conditions
     let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     assert!(
         !result
             .payload
@@ -80,9 +80,9 @@ fn test_vc1_scrubbed_contains_no_original_secret() {
     );
 }
 
-// VC-2: Round-trip: scrub → unscrub → original
+// VC-2: Round-trip: swap → restore → original
 #[test]
-fn test_vc2_scrub_unscrub_round_trip_tier1() {
+fn test_vc2_swap_restore_round_trip_tier1() {
     // VC-2 from SPEC.md Verifiable Conditions
     for (key, pats) in [
         (SYNTH_ANTHROPIC, vec![patterns::anthropic()]),
@@ -103,17 +103,17 @@ fn test_vc2_scrub_unscrub_round_trip_tier1() {
     }
 }
 
-// VC-3: Same secret, same Pattern → identical fake across two scrub calls
+// VC-3: Same secret, same Pattern → identical fake across two swap calls
 #[test]
-fn test_vc3_two_scrub_calls_same_fake() {
+fn test_vc3_two_swap_calls_same_fake() {
     // VC-3 from SPEC.md Verifiable Conditions
     let payload = [b"k: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let pat = patterns::anthropic();
-    let r1 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
-    let r2 = scrub(&payload, std::slice::from_ref(&pat)).expect("scrub failed");
+    let r1 = swap(&payload, std::slice::from_ref(&pat)).expect("swap failed");
+    let r2 = swap(&payload, std::slice::from_ref(&pat)).expect("swap failed");
     assert_eq!(
         r1.entries[0].fake, r2.entries[0].fake,
-        "VC-3: two scrub calls must produce identical fakes for same secret+Pattern"
+        "VC-3: two swap calls must produce identical fakes for same secret+Pattern"
     );
 }
 
@@ -133,11 +133,11 @@ fn test_vc4_fake_straddles_chunk_boundary() {
 #[test]
 fn test_vc5_no_fake_in_stream_identical_output() {
     // VC-5 from SPEC.md Verifiable Conditions
-    let scrub_result = scrub(b"no secrets", &[patterns::anthropic()]).expect("scrub failed");
+    let scrub_result = swap(b"no secrets", &[patterns::anthropic()]).expect("swap failed");
     let response = b"response: no fakes here at all, just regular text";
     let mut input = response.as_slice();
     let mut output = Vec::new();
-    let result = unscrub(
+    let result = restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -152,12 +152,12 @@ fn test_vc5_no_fake_in_stream_identical_output() {
 fn test_vc6_tampered_aead_tag_error_no_partial_output() {
     // VC-6 from SPEC.md Verifiable Conditions
     let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let mut scrub_result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let mut scrub_result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     let last = scrub_result.entries[0].ciphertext.len() - 1;
     scrub_result.entries[0].ciphertext[last] ^= 0xFF;
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
-    let result = unscrub(
+    let result = restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -177,8 +177,8 @@ fn test_vc6_tampered_aead_tag_error_no_partial_output() {
 fn test_vc7_entries_contain_no_secret_bytes() {
     // VC-7 from SPEC.md Verifiable Conditions
     let payload = [b"Authorization: ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
-    let json = its_classified::types::Entry::serialize_entries(&result.entries).unwrap();
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
+    let json = doppel::types::Entry::serialize_entries(&result.entries).unwrap();
     assert!(
         !json
             .windows(SYNTH_ANTHROPIC.len())
@@ -192,7 +192,7 @@ fn test_vc7_entries_contain_no_secret_bytes() {
 fn test_vc10_multiple_occurrences_same_fake() {
     // VC-10 from SPEC.md Verifiable Conditions
     let payload = [SYNTH_ANTHROPIC, b" and ".as_slice(), SYNTH_ANTHROPIC].concat();
-    let result = scrub(&payload, &[patterns::anthropic()]).expect("scrub failed");
+    let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
     let fake = &result.entries[0].fake;
     let fake_len = fake.len();
     assert_eq!(
@@ -215,7 +215,7 @@ fn test_vc11_tier2_hmac_mismatch_passthrough() {
     let pat = register(real).unwrap();
     let mut similar = real.to_vec();
     similar[12] ^= 0xFF;
-    let result = scrub(&similar, &[pat]).expect("scrub failed");
+    let result = swap(&similar, &[pat]).expect("swap failed");
     assert_eq!(
         result.payload, similar,
         "VC-11: HMAC mismatch → pass through"
@@ -228,7 +228,7 @@ fn test_vc11_tier2_hmac_mismatch_passthrough() {
 fn test_vc12_empty_patterns_unchanged() {
     // VC-12 from SPEC.md Verifiable Conditions
     let payload = b"any payload at all";
-    let result = scrub(payload, &[]).expect("scrub failed");
+    let result = swap(payload, &[]).expect("swap failed");
     assert_eq!(
         result.payload.as_slice(),
         payload,
@@ -243,14 +243,14 @@ fn test_tier2_full_round_trip() {
     let secret = b"my-custom-api-token-value-here!";
     let pat = register(secret).unwrap();
     let payload = [b"token: ".as_slice(), secret].concat();
-    let scrub_result = scrub(&payload, &[pat]).expect("scrub failed");
+    let scrub_result = swap(&payload, &[pat]).expect("swap failed");
     assert_eq!(scrub_result.entries.len(), 1);
     let fake = &scrub_result.entries[0].fake;
     assert_ne!(fake.as_slice(), secret, "fake must differ from original");
 
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -265,7 +265,7 @@ fn test_tier2_full_round_trip() {
 fn test_two_different_secrets_two_entries() {
     let payload = [SYNTH_ANTHROPIC, b" and ".as_slice(), SYNTH_AWS].concat();
     let result =
-        scrub(&payload, &[patterns::anthropic(), patterns::aws_akia()]).expect("scrub failed");
+        swap(&payload, &[patterns::anthropic(), patterns::aws_akia()]).expect("swap failed");
     assert_eq!(
         result.entries.len(),
         2,
@@ -274,7 +274,7 @@ fn test_two_different_secrets_two_entries() {
 
     let mut input = result.payload.as_slice();
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut input,
         &mut output,
         &result.entries,
@@ -294,11 +294,11 @@ fn test_large_payload_multiple_secrets() {
     payload.extend_from_slice(SYNTH_GCP);
     payload.extend_from_slice(b" end section.");
     let pats = vec![patterns::anthropic(), patterns::gcp()];
-    let scrub_result = scrub(&payload, &pats).expect("scrub failed");
+    let scrub_result = swap(&payload, &pats).expect("swap failed");
     assert_eq!(scrub_result.entries.len(), 2);
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
-    unscrub(
+    restore(
         &mut input,
         &mut output,
         &scrub_result.entries,
@@ -313,12 +313,12 @@ fn test_large_payload_multiple_secrets() {
 fn test_vc13_non_leading_literal_reproduced_in_fake() {
     // VC-13 from SPEC.md Verifiable Conditions:
     // "Given a Tier 1 secret whose pattern contains a Literal segment that is not the
-    //  leading element, the fake produced by scrub reproduces that Literal segment
+    //  leading element, the fake produced by swap reproduces that Literal segment
     //  verbatim at the correct byte position."
 
     // Anthropic: trailing "AA" at positions 106..108
     {
-        let result = scrub(SYNTH_ANTHROPIC, &[patterns::anthropic()]).expect("scrub failed");
+        let result = swap(SYNTH_ANTHROPIC, &[patterns::anthropic()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert_eq!(fake.len(), 108, "VC-13: Anthropic fake must be 108 bytes");
         assert_eq!(
@@ -331,7 +331,7 @@ fn test_vc13_non_leading_literal_reproduced_in_fake() {
     // OpenAI project: "T3BlbkFJ" at positions 8+58=66..74 (for 58-var-length variant)
     {
         let secret: &[u8] = b"sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-        let result = scrub(secret, &[patterns::openai_project()]).expect("scrub failed");
+        let result = swap(secret, &[patterns::openai_project()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert_eq!(
             fake.len(),
@@ -348,7 +348,7 @@ fn test_vc13_non_leading_literal_reproduced_in_fake() {
     // GitHub fine-grained: "_" at position 11+22=33
     {
         let result =
-            scrub(SYNTH_GITHUB_FG, &[patterns::github_fine_grained()]).expect("scrub failed");
+            swap(SYNTH_GITHUB_FG, &[patterns::github_fine_grained()]).expect("swap failed");
         let fake = &result.entries[0].fake;
         assert_eq!(fake.len(), 93, "VC-13: GitHub FG fake must be 93 bytes");
         assert_eq!(&fake[33..34], b"_", "VC-13: '_' separator at position 33");
@@ -356,8 +356,8 @@ fn test_vc13_non_leading_literal_reproduced_in_fake() {
 }
 
 #[test]
-fn test_mixed_tier1_tier2_scrub_unscrub() {
-    // When has_tier2=true, scrub falls back to byte-by-byte scanning.
+fn test_mixed_tier1_tier2_swap_restore() {
+    // When has_tier2=true, swap falls back to byte-by-byte scanning.
     // Verify both a Tier 1 and a Tier 2 secret are detected and restored.
     let tier2_secret = b"my-custom-tier2-token-abcdefghijklmnopqrstuvwxyz0123456789-xyz";
     let tier2_pattern = register(tier2_secret).expect("register failed");
@@ -370,7 +370,7 @@ fn test_mixed_tier1_tier2_scrub_unscrub() {
     ]
     .concat();
 
-    let sr = scrub(&payload, &[patterns::anthropic(), tier2_pattern]).unwrap();
+    let sr = swap(&payload, &[patterns::anthropic(), tier2_pattern]).unwrap();
     assert_eq!(sr.entries.len(), 2, "must detect both T1 and T2 secrets");
     assert!(
         !sr.payload
@@ -387,6 +387,6 @@ fn test_mixed_tier1_tier2_scrub_unscrub() {
 
     let mut restored = Vec::new();
     let mut input = std::io::Cursor::new(sr.payload.clone());
-    unscrub(&mut input, &mut restored, &sr.entries, &sr.session_key).unwrap();
+    restore(&mut input, &mut restored, &sr.entries, &sr.session_key).unwrap();
     assert_eq!(restored, payload, "both secrets must be restored");
 }

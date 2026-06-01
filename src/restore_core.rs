@@ -1,7 +1,7 @@
-//! Shared sliding-window replacement logic for unscrub operations.
+//! Shared sliding-window replacement logic for restore operations.
 //!
-//! This module is internal to the crate. Both sync `unscrub` and async
-//! `UnscrubStream` delegate to `process_safe_region` with appropriate
+//! This module is internal to the crate. Both sync `restore` and async
+//! `RestoreStream` delegate to `process_safe_region` with appropriate
 //! emit and error callbacks.
 
 use crate::crypto::decrypt_entry;
@@ -28,7 +28,7 @@ use aho_corasick::{AhoCorasick, Input};
 ///
 /// # Returns
 /// `Ok(())` on success (all safe bytes emitted), `Err(E)` on AEAD failure.
-// Callers added in steps 06 (unscrub) and 07 (unscrub_stream).
+// Callers: restore and restore_stream modules.
 // All parameters are logically distinct parts of the algorithm's context;
 // grouping them into a struct would add indirection without improving clarity.
 #[allow(clippy::too_many_arguments)]

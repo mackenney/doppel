@@ -1,8 +1,8 @@
-# Agent Guidelines — its-classified
+# Agent Guidelines — doppel
 
 ## Project
 
-`its-classified` is a Rust library and CLI that intercepts secrets in arbitrary
+`doppel` is a Rust library and CLI that intercepts secrets in arbitrary
 byte payloads before they reach an external service, replaces them with
 structurally-equivalent fakes, and transparently restores the originals in
 streaming responses. Implementation is SPEC-driven: every non-trivial module or
@@ -11,8 +11,8 @@ behavior must have a corresponding spec document before code is written.
 ## Workspace layout
 
 ```
-src/               Library source (lib crate: its-classified)
-cli/               CLI crate (its-classified-cli)
+src/               Library source (lib crate: doppel)
+cli/               CLI crate (doppel-cli)
 tests/             Lib spec-invariant and integration tests
   spec/            Spec-invariant test modules (entry: tests/spec.rs)
   integration/     Integration test modules (entry: tests/integration.rs)
@@ -41,7 +41,7 @@ SPEC.md            Behavioral contract for the full system
 ## Master Progress
 
 `MASTER_PROGRESS.md` is the single source of truth for project-wide work status.
-Every human and agent working on its-classified reads it first to understand
+Every human and agent working on doppel reads it first to understand
 current state.
 
 **What it contains:**
@@ -110,7 +110,7 @@ current state.
 |---|---|---|---|
 | **Spec invariants (lib)** | `tests/spec.rs` | `tests/spec/` | Library SPEC.md MUST/MUST NOT invariants |
 | **Spec invariants (CLI)** | `cli/tests/cli_spec.rs` | `cli/tests/cli_spec/` | CLI-specific SPEC.md invariants (INV-20, INV-21) |
-| **Integration** | `tests/integration.rs` | `tests/integration/` | Public-API behavior: full scrub→unscrub cycles, streaming edge cases |
+| **Integration** | `tests/integration.rs` | `tests/integration/` | Public-API behavior: full swap→restore cycles, streaming edge cases |
 | **E2E** | `cli/tests/e2e.rs` | `cli/tests/e2e/` | CLI process boundary tests; gated by `--features test-e2e` |
 
 Inline unit tests (`#[cfg(test)]` in `src/`) test implementation internals and
@@ -124,8 +124,8 @@ carry no stability guarantee — change freely during refactoring.
 // Spec: SPEC.md §Behavioral Invariants
 
 #[test]
-fn test_inv1_scrub_replaces_every_detected_secret() {
-    // INV-1: "scrub MUST replace every secret detected by the supplied Patterns
+fn test_inv1_swap_replaces_every_detected_secret() {
+    // INV-1: "swap MUST replace every secret detected by the supplied Patterns
     //         with a structurally-equivalent fake."
     ...
 }
@@ -137,7 +137,7 @@ The `invN` number matches the invariant number in SPEC.md Behavioral Invariants.
 
 ```rust
 #[test]
-fn test_vc1_scrubbed_output_contains_no_original_secret() {
+fn test_vc1_swapped_output_contains_no_original_secret() {
     // VC-1 from SPEC.md Verifiable Conditions
     ...
 }
@@ -153,7 +153,7 @@ the decision. Inline unit tests carry no such guarantee.
 
 Every implementation MUST pass these specific scenarios:
 
-**Scrub correctness:**
+**Swap correctness:**
 - Tier 1: Anthropic / OpenAI / AWS IAM / GitHub PAT classic / GitHub PAT fine-grained / GCP API key in payload → fake in output, entry produced
 - Tier 2: registered secret in payload → fake in output, entry produced
 - No-op: payload with no secrets → returned unchanged, empty entries
@@ -162,7 +162,7 @@ Every implementation MUST pass these specific scenarios:
 - Overlapping prefix candidates → leftmost-longest match wins
 - Tier 2 structural match + HMAC failure → passed through unchanged
 
-**Unscrub correctness:**
+**Restore correctness:**
 - Fake split across chunk boundary → correctly restored
 - Multiple fakes in stream → all restored
 - No fake in stream → output byte-for-byte identical to input, no error
@@ -175,18 +175,18 @@ Every implementation MUST pass these specific scenarios:
 - Session key not serialized in entries
 
 **CLI:**
-- `scrub` creates session key file with mode 0600
-- `unscrub` reads key from `ITS_CLASSIFIED_KEY` env var only (no `--key` flag)
-- `unscrub` writes to stdout before stdin reaches EOF (streaming)
+- `swap` creates session key file with mode 0600
+- `restore` reads key from `DOPPEL_KEY` env var only (no `--key` flag)
+- `restore` writes to stdout before stdin reaches EOF (streaming)
 
 ### Test commands
 
 ```sh
 cargo nextest run --workspace                                                  # all tests (lib + cli)
-cargo nextest run -p its-classified --test spec                               # lib spec invariants
-cargo nextest run -p its-classified-cli --test cli_spec                       # CLI spec invariants
-cargo nextest run -p its-classified --test integration                        # integration only
-cargo nextest run -p its-classified-cli --features test-e2e --test e2e        # e2e
+cargo nextest run -p doppel --test spec                               # lib spec invariants
+cargo nextest run -p doppel-cli --test cli_spec                       # CLI spec invariants
+cargo nextest run -p doppel --test integration                        # integration only
+cargo nextest run -p doppel-cli --features test-e2e --test e2e        # e2e
 cargo nextest run --lib                                                        # unit tests only
 ```
 
