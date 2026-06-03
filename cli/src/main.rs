@@ -33,7 +33,7 @@ enum Commands {
         entries: PathBuf,
         // NO --key flag — INV-20: key via DOPPEL_KEY env var only
     },
-    /// Create a new patterns file with all built-in Tier 1 definitions and stable salts.
+    /// Create a new patterns file with all built-in structural pattern definitions and stable salts.
     Init {
         /// Path to create the patterns file.
         #[arg(long)]
@@ -42,7 +42,7 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Register a Tier 2 secret (read from stdin) into an existing patterns file.
+    /// Register a secret (read from stdin) into an existing patterns file.
     Register {
         /// Path to the patterns file to update.
         #[arg(long)]
@@ -60,7 +60,7 @@ enum Commands {
         #[arg(long)]
         restrict_charset: bool,
     },
-    /// Define a user Tier 1 pattern (structural pattern with named segments).
+    /// Define a user structural pattern (structural pattern with named segments).
     Define {
         /// Path to the patterns file to update.
         #[arg(long)]
@@ -74,41 +74,41 @@ enum Commands {
         #[arg(long, required = true, num_args = 1)]
         segment: Vec<String>,
     },
-    /// List all Tier 1 patterns and Tier 2 secrets in a patterns file.
+    /// List all Structural patterns and Registered secrets in a patterns file.
     List {
         /// Path to the patterns file.
         #[arg(long)]
         patterns: PathBuf,
     },
-    /// Show details for a single Tier 1 pattern or Tier 2 secret.
+    /// Show details for a single structural pattern or registered secret.
     #[command(group(ArgGroup::new("target").required(true).args(["identifier", "label"])))]
     Inspect {
         /// Path to the patterns file.
         #[arg(long)]
         patterns: PathBuf,
-        /// Identifier of the Tier 1 pattern to inspect.
+        /// Identifier of the structural pattern to inspect.
         #[arg(long, group = "target")]
         identifier: Option<String>,
-        /// Label of the Tier 2 secret to inspect.
+        /// Label of the registered secret to inspect.
         #[arg(long, group = "target")]
         label: Option<String>,
     },
-    /// Remove a Tier 1 pattern or Tier 2 secret from a patterns file.
+    /// Remove a structural pattern or registered secret from a patterns file.
     #[command(group(ArgGroup::new("target").required(true).args(["identifier", "label"])))]
     Remove {
         /// Path to the patterns file.
         #[arg(long)]
         patterns: PathBuf,
-        /// Identifier of the Tier 1 pattern to remove.
+        /// Identifier of the structural pattern to remove.
         #[arg(long, group = "target")]
         identifier: Option<String>,
-        /// Label of the Tier 2 secret to remove.
+        /// Label of the registered secret to remove.
         #[arg(long, group = "target")]
         label: Option<String>,
     },
 }
 
-const INIT_COMMENT_BLOCK: &str = r#"# Tier 2 secrets are registered via the CLI:
+const INIT_COMMENT_BLOCK: &str = r#"# Registered secrets are registered via the CLI:
 #
 #   echo -n 'my-secret-value' | doppel register \
 #     --patterns <this-file> \
@@ -116,7 +116,7 @@ const INIT_COMMENT_BLOCK: &str = r#"# Tier 2 secrets are registered via the CLI:
 #     --preserve-prefix 0 \
 #     --preserve-suffix 0
 #
-# Each [[tier2]] entry contains:
+# Each [[registered]] entry contains:
 #   label             - human-readable identifier (unique, required by CLI)
 #   start_fragment    - first bytes of the secret (hex; detection anchor)
 #   end_fragment      - last bytes of the secret (hex; detection anchor)
@@ -127,7 +127,7 @@ const INIT_COMMENT_BLOCK: &str = r#"# Tier 2 secrets are registered via the CLI:
 #   preserve_suffix   - bytes at end preserved verbatim in fake
 #   charset           - (optional) byte set for fake generation; omit for wide default
 #
-# User-defined Tier 1 patterns can be added via:
+# User-defined Structural patterns can be added via:
 #
 #   doppel define --patterns <this-file> \
 #     --identifier MY_PATTERN \
@@ -191,7 +191,7 @@ fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error:
     use doppel::SecretsFile;
 
     let mut pf = SecretsFile::new();
-    pf.generate_missing_tier1_salts_with_segments();
+    pf.generate_missing_structural_salts_with_segments();
     let serialized = pf.serialize()?;
     let mut data = INIT_COMMENT_BLOCK.as_bytes().to_vec();
     data.extend_from_slice(&serialized);
@@ -210,9 +210,9 @@ fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error:
         },
     )?;
 
-    let count = pf.tier1.len();
+    let count = pf.structural.len();
     eprintln!(
-        "created patterns file: {} ({} Tier 1 patterns, 0 Tier 2 secrets)",
+        "created patterns file: {} ({} Structural patterns, 0 Registered secrets)",
         patterns_path.display(),
         count
     );
@@ -253,7 +253,7 @@ fn run_register(
 
     let variable_len = secret.len() - preserve_prefix - preserve_suffix;
     eprintln!(
-        "registered Tier 2 secret: {} (variable portion: {} bytes)",
+        "registered Registered secret: {} (variable portion: {} bytes)",
         label, variable_len
     );
 
@@ -281,14 +281,14 @@ fn run_define(
     let mut salt = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut salt);
 
-    pf.add_tier1_entry(identifier.to_string(), seg_defs, salt)?;
+    pf.add_structural_entry(identifier.to_string(), seg_defs, salt)?;
 
     let data = pf.serialize()?;
     write_patterns_file(patterns_path, &data, false)?;
 
     let seg_count = segment_specs.len();
     eprintln!(
-        "defined Tier 1 pattern: {} ({} segments)",
+        "defined Structural pattern: {} ({} segments)",
         identifier, seg_count
     );
 
@@ -340,29 +340,29 @@ fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
-    println!("Tier 1 patterns:");
-    if pf.tier1.is_empty() {
+    println!("Structural patterns:");
+    if pf.structural.is_empty() {
         println!("  (none)");
     } else {
         let max_id_len = pf
-            .tier1
+            .structural
             .iter()
             .map(|e| e.identifier.len())
             .max()
             .unwrap_or(0);
         let col_width = max_id_len.clamp(10, 40);
-        for entry in &pf.tier1 {
+        for entry in &pf.structural {
             let desc = format_pattern_segments(entry);
             println!("  {:width$}  {}", entry.identifier, desc, width = col_width);
         }
     }
 
     println!();
-    println!("Tier 2 secrets:");
-    if pf.tier2.is_empty() {
+    println!("Registered secrets:");
+    if pf.registered.is_empty() {
         println!("  (none)");
     } else {
-        for entry in &pf.tier2 {
+        for entry in &pf.registered {
             let label_str = entry.label.as_deref().unwrap_or("(unlabeled)");
             let charset_desc = format_charset_summary(&entry.charset);
             println!(
@@ -417,10 +417,10 @@ fn run_inspect(
 
     if let Some(id) = identifier {
         let entry = pf
-            .tier1
+            .structural
             .iter()
             .find(|e| e.identifier == id)
-            .ok_or_else(|| format!("no Tier 1 pattern with identifier \"{}\"", id))?;
+            .ok_or_else(|| format!("no structural pattern with identifier \"{}\"", id))?;
 
         let is_builtin = doppel::SecretsFile::is_builtin_identifier(id);
         let type_str = if is_builtin {
@@ -430,7 +430,7 @@ fn run_inspect(
         };
         let salt_fingerprint = hex_encode(&entry.salt[..4]);
 
-        println!("Tier 1 pattern: {}", id);
+        println!("Structural pattern: {}", id);
         println!("  Type: {}", type_str);
         println!("  Salt: {}...", &*salt_fingerprint);
         println!("  Segments:");
@@ -460,16 +460,16 @@ fn run_inspect(
         }
     } else if let Some(lbl) = label {
         let entry = pf
-            .tier2
+            .registered
             .iter()
             .find(|e| e.label.as_deref() == Some(lbl))
-            .ok_or_else(|| format!("no Tier 2 secret with label \"{}\"", lbl))?;
+            .ok_or_else(|| format!("no registered secret with label \"{}\"", lbl))?;
 
         let variable = entry.exact_length - entry.preserve_prefix - entry.preserve_suffix;
         let charset_desc = format_charset_summary(&entry.charset);
         let salt_fingerprint = hex_encode(&entry.hmac_salt[..4]);
 
-        println!("Tier 2 secret: {}", lbl);
+        println!("Registered secret: {}", lbl);
         println!("  Length: {} bytes", entry.exact_length);
         println!("  Preserve prefix: {} bytes", entry.preserve_prefix);
         println!("  Preserve suffix: {} bytes", entry.preserve_suffix);
@@ -496,12 +496,12 @@ fn run_remove(
 
     if let Some(id) = identifier {
         let pos = pf
-            .tier1
+            .structural
             .iter()
             .position(|e| e.identifier == id)
             .ok_or_else(|| {
                 format!(
-                    "no Tier 1 pattern with identifier \"{}\" in {}",
+                    "no structural pattern with identifier \"{}\" in {}",
                     id,
                     patterns_path.display()
                 )
@@ -514,31 +514,31 @@ fn run_remove(
             );
         }
 
-        pf.tier1.remove(pos);
+        pf.structural.remove(pos);
 
         let data = pf.serialize()?;
         write_patterns_file(patterns_path, &data, false)?;
 
-        eprintln!("removed Tier 1 pattern: {}", id);
+        eprintln!("removed Structural pattern: {}", id);
     } else if let Some(lbl) = label {
         let pos = pf
-            .tier2
+            .registered
             .iter()
             .position(|e| e.label.as_deref() == Some(lbl))
             .ok_or_else(|| {
                 format!(
-                    "no Tier 2 secret with label \"{}\" in {}",
+                    "no registered secret with label \"{}\" in {}",
                     lbl,
                     patterns_path.display()
                 )
             })?;
 
-        pf.tier2.remove(pos);
+        pf.registered.remove(pos);
 
         let data = pf.serialize()?;
         write_patterns_file(patterns_path, &data, false)?;
 
-        eprintln!("removed Tier 2 secret: {}", lbl);
+        eprintln!("removed Registered secret: {}", lbl);
     } else {
         unreachable!("clap requires --identifier or --label")
     }

@@ -154,13 +154,13 @@ the decision. Inline unit tests carry no such guarantee.
 Every implementation MUST pass these specific scenarios:
 
 **Swap correctness:**
-- Tier 1: Anthropic / OpenAI / AWS IAM / GitHub PAT classic / GitHub PAT fine-grained / GCP API key in payload → fake in output, entry produced
-- Tier 2: registered secret in payload → fake in output, entry produced
+- Structural: Anthropic / OpenAI / AWS IAM / GitHub PAT classic / GitHub PAT fine-grained / GCP API key in payload → fake in output, entry produced
+- Registered: registered secret in payload → fake in output, entry produced
 - No-op: payload with no secrets → returned unchanged, empty entries
 - Multiple occurrences of same secret → same fake in all positions, one entry
 - Two different secrets → two entries, two distinct fakes
 - Overlapping prefix candidates → leftmost-longest match wins
-- Tier 2 structural match + HMAC failure → passed through unchanged
+- Registered structural match + HMAC failure → passed through unchanged
 
 **Restore correctness:**
 - Fake split across chunk boundary → correctly restored

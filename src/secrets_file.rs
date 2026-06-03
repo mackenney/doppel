@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::patterns::{self, Pattern, Tier1Def};
-use crate::secrets::Tier2Pat;
+use crate::patterns::{self, Pattern, StructuralDef};
+use crate::secrets::RegisteredPat;
 use crate::segment::SegmentDef;
 use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
 
@@ -11,11 +11,11 @@ use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretsFile {
     pub version: u64,
-    pub tier1: Vec<PatternEntry>,
-    pub tier2: Vec<SecretEntry>,
+    pub structural: Vec<PatternEntry>,
+    pub registered: Vec<SecretEntry>,
 }
 
-/// A Tier 1 entry: identifier, salt, and optional user-defined segments.
+/// A structural pattern entry: identifier, salt, and optional user-defined segments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatternEntry {
     pub identifier: String,
@@ -25,7 +25,7 @@ pub struct PatternEntry {
     pub segments: Option<Vec<SegmentDef>>,
 }
 
-/// A Tier 2 entry: detection fingerprint + derivation parameters.
+/// A registered secret entry: detection fingerprint + derivation parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,25 +60,25 @@ pub enum SecretsFileError {
     #[error("unsupported patterns file version: {found} (expected 2)")]
     UnsupportedVersion { found: u64 },
 
-    #[error("missing Tier 1 class: {class}")]
-    MissingTier1Class { class: String },
+    #[error("missing structural pattern class: {class}")]
+    MissingStructuralClass { class: String },
 
-    #[error("invalid Tier 2 entry at index {index}: {reason}")]
-    InvalidTier2 { index: usize, reason: String },
+    #[error("invalid registered secret entry at index {index}: {reason}")]
+    InvalidRegistered { index: usize, reason: String },
 
-    #[error("wrong pattern type: expected Tier 2")]
+    #[error("wrong pattern type: expected registered secret")]
     WrongPatternType,
 
-    #[error("duplicate Tier 1 identifier: {identifier}")]
+    #[error("duplicate structural pattern identifier: {identifier}")]
     DuplicateIdentifier { identifier: String },
 
-    #[error("duplicate Tier 2 label: {label}")]
+    #[error("duplicate registered secret label: {label}")]
     DuplicateLabel { label: String },
 
     #[error("invalid segment definition: {0}")]
     InvalidSegment(#[from] crate::segment::SegmentDefError),
 
-    #[error("user-defined Tier 1 entry \"{identifier}\" requires a segments field")]
+    #[error("user-defined structural pattern \"{identifier}\" requires a segments field")]
     MissingSegments { identifier: String },
 }
 
@@ -87,8 +87,8 @@ impl SecretsFile {
     pub fn new() -> Self {
         Self {
             version: 2,
-            tier1: Vec::new(),
-            tier2: Vec::new(),
+            structural: Vec::new(),
+            registered: Vec::new(),
         }
     }
 
@@ -115,7 +115,7 @@ impl SecretsFile {
         }
 
         let mut seen_ids = std::collections::HashSet::new();
-        for entry in &self.tier1 {
+        for entry in &self.structural {
             if !seen_ids.insert(&entry.identifier) {
                 return Err(SecretsFileError::DuplicateIdentifier {
                     identifier: entry.identifier.clone(),
@@ -128,7 +128,7 @@ impl SecretsFile {
         }
 
         let mut seen_labels = std::collections::HashSet::new();
-        for (index, entry) in self.tier2.iter().enumerate() {
+        for (index, entry) in self.registered.iter().enumerate() {
             if let Some(ref label) = entry.label {
                 if !seen_labels.insert(label) {
                     return Err(SecretsFileError::DuplicateLabel {
@@ -138,26 +138,26 @@ impl SecretsFile {
             }
 
             if entry.exact_length == 0 {
-                return Err(SecretsFileError::InvalidTier2 {
+                return Err(SecretsFileError::InvalidRegistered {
                     index,
                     reason: "exact_length must not be zero".into(),
                 });
             }
             if entry.start_fragment.is_empty() {
-                return Err(SecretsFileError::InvalidTier2 {
+                return Err(SecretsFileError::InvalidRegistered {
                     index,
                     reason: "start_fragment must not be empty".into(),
                 });
             }
             if entry.end_fragment.is_empty() {
-                return Err(SecretsFileError::InvalidTier2 {
+                return Err(SecretsFileError::InvalidRegistered {
                     index,
                     reason: "end_fragment must not be empty".into(),
                 });
             }
             if let Some(ref cs) = entry.charset {
                 if cs.is_empty() {
-                    return Err(SecretsFileError::InvalidTier2 {
+                    return Err(SecretsFileError::InvalidRegistered {
                         index,
                         reason: "charset must not be empty when present".into(),
                     });
@@ -170,7 +170,7 @@ impl SecretsFile {
 
     /// Reconstruct `Vec<Pattern>` from this patterns file.
     ///
-    /// For each Tier 1 entry:
+    /// For each structural pattern entry:
     /// - If `segments` is present, use them (overrides any compiled-in definition).
     /// - If `segments` is absent and the identifier matches a built-in, use the compiled-in
     ///   definition.
@@ -184,7 +184,7 @@ impl SecretsFile {
         let builtin_defs = patterns::all_defs();
         let mut patterns = Vec::new();
 
-        for entry in &self.tier1 {
+        for entry in &self.structural {
             let builtin = builtin_defs
                 .iter()
                 .find(|d| d.identifier == entry.identifier);
@@ -203,20 +203,20 @@ impl SecretsFile {
                 }
             };
 
-            patterns.push(Pattern::Tier1(Tier1Def {
+            patterns.push(Pattern::Structural(StructuralDef {
                 identifier: entry.identifier.clone(),
                 segments,
                 salt: entry.salt,
             }));
         }
 
-        for entry in self.tier2 {
+        for entry in self.registered {
             let charset = match entry.charset {
                 Some(cs) => cs,
                 None => crate::fake::charsets::wide(),
             };
 
-            let pat = Tier2Pat {
+            let pat = RegisteredPat {
                 start_fragment: entry.start_fragment,
                 end_fragment: entry.end_fragment,
                 exact_length: entry.exact_length,
@@ -227,23 +227,23 @@ impl SecretsFile {
                 charset,
             };
 
-            patterns.push(Pattern::Tier2(Arc::new(pat)));
+            patterns.push(Pattern::Registered(Arc::new(pat)));
         }
 
         Ok(patterns)
     }
 
-    /// Extract a Tier 2 entry from a Pattern and append it to this file.
-    /// Returns error if the pattern is not Tier 2 or if the label is a duplicate.
+    /// Extract a registered secret entry from a Pattern and append it to this file.
+    /// Returns error if the pattern is not a registered secret or if the label is a duplicate.
     pub fn add_secret_pattern(
         &mut self,
         pattern: &Pattern,
         label: Option<String>,
     ) -> Result<(), SecretsFileError> {
         match pattern {
-            Pattern::Tier2(arc) => {
+            Pattern::Registered(arc) => {
                 if let Some(ref l) = label {
-                    let duplicate = self.tier2.iter().any(|e| e.label.as_deref() == Some(l));
+                    let duplicate = self.registered.iter().any(|e| e.label.as_deref() == Some(l));
                     if duplicate {
                         return Err(SecretsFileError::DuplicateLabel { label: l.clone() });
                     }
@@ -256,7 +256,7 @@ impl SecretsFile {
                     Some(p.charset.clone())
                 };
 
-                self.tier2.push(SecretEntry {
+                self.registered.push(SecretEntry {
                     label,
                     start_fragment: p.start_fragment.clone(),
                     end_fragment: p.end_fragment.clone(),
@@ -274,25 +274,25 @@ impl SecretsFile {
         }
     }
 
-    /// Add a user-defined Tier 1 entry to this patterns file.
+    /// Add a user-defined structural pattern to this patterns file.
     ///
     /// The caller provides a pre-generated salt. Validates:
     /// - Identifier uniqueness (INV-31)
     /// - Segment list validity (INV-30: at least one Variable, valid charsets, min <= max)
-    pub fn add_tier1_entry(
+    pub fn add_structural_entry(
         &mut self,
         identifier: String,
         segments: Vec<SegmentDef>,
         salt: [u8; 32],
     ) -> Result<(), SecretsFileError> {
-        let duplicate = self.tier1.iter().any(|e| e.identifier == identifier);
+        let duplicate = self.structural.iter().any(|e| e.identifier == identifier);
         if duplicate {
             return Err(SecretsFileError::DuplicateIdentifier { identifier });
         }
 
         crate::segment::validate_segment_defs(&segments)?;
 
-        self.tier1.push(PatternEntry {
+        self.structural.push(PatternEntry {
             identifier,
             salt,
             segments: Some(segments),
@@ -301,17 +301,17 @@ impl SecretsFile {
         Ok(())
     }
 
-    /// Fill in salts for any built-in Tier 1 classes not already in the file.
+    /// Fill in salts for any built-in structural pattern classes not already in the file.
     /// Uses OsRng for fresh salt generation.
-    pub fn generate_missing_tier1_salts(&mut self) {
+    pub fn generate_missing_structural_salts(&mut self) {
         use rand::RngCore;
 
         for def in patterns::all_defs() {
-            let already_present = self.tier1.iter().any(|e| e.identifier == def.identifier);
+            let already_present = self.structural.iter().any(|e| e.identifier == def.identifier);
             if !already_present {
                 let mut salt = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut salt);
-                self.tier1.push(PatternEntry {
+                self.structural.push(PatternEntry {
                     identifier: def.identifier.clone(),
                     salt,
                     segments: None,
@@ -320,21 +320,21 @@ impl SecretsFile {
         }
     }
 
-    /// Fill in salts and segment definitions for any built-in Tier 1 classes not in the file.
-    /// Unlike `generate_missing_tier1_salts`, this also embeds the compiled-in segment
+    /// Fill in salts and segment definitions for any built-in structural pattern classes not in the file.
+    /// Unlike `generate_missing_structural_salts`, this also embeds the compiled-in segment
     /// definitions so the output file is self-describing (used by `init`).
-    pub fn generate_missing_tier1_salts_with_segments(&mut self) {
+    pub fn generate_missing_structural_salts_with_segments(&mut self) {
         use rand::RngCore;
 
         for def in patterns::all_defs() {
-            let already_present = self.tier1.iter().any(|e| e.identifier == def.identifier);
+            let already_present = self.structural.iter().any(|e| e.identifier == def.identifier);
             if !already_present {
                 let mut salt = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut salt);
 
                 let seg_defs: Vec<SegmentDef> = def.segments.iter().map(|s| s.to_def()).collect();
 
-                self.tier1.push(PatternEntry {
+                self.structural.push(PatternEntry {
                     identifier: def.identifier.clone(),
                     salt,
                     segments: Some(seg_defs),
@@ -343,7 +343,7 @@ impl SecretsFile {
         }
     }
 
-    /// Check if an identifier matches a compiled-in Tier 1 definition.
+    /// Check if an identifier matches a compiled-in structural pattern definition.
     pub fn is_builtin_identifier(identifier: &str) -> bool {
         patterns::all_defs()
             .iter()
@@ -364,19 +364,19 @@ mod tests {
     #[test]
     fn test_round_trip_serialize_deserialize() {
         let mut pf = SecretsFile::new();
-        pf.generate_missing_tier1_salts();
+        pf.generate_missing_structural_salts();
         let bytes = pf.serialize().unwrap();
         let pf2 = SecretsFile::deserialize(&bytes).unwrap();
         assert_eq!(pf2.version, 2);
-        assert_eq!(pf2.tier1.len(), 15);
+        assert_eq!(pf2.structural.len(), 15);
         let orig_salt = pf
-            .tier1
+            .structural
             .iter()
             .find(|e| e.identifier == "anthropic")
             .unwrap()
             .salt;
         let deser_salt = pf2
-            .tier1
+            .structural
             .iter()
             .find(|e| e.identifier == "anthropic")
             .unwrap()
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_version_rejection() {
-        let data = b"version = 1\ntier1 = []\ntier2 = []\n";
+        let data = b"version = 1\nstructural = []\nregistered = []\n";
         let err = SecretsFile::deserialize(data).unwrap_err();
         assert!(matches!(
             err,
@@ -395,11 +395,11 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_tier1_into_patterns_succeeds() {
+    fn test_empty_structural_into_patterns_succeeds() {
         let pf = SecretsFile {
             version: 2,
-            tier1: vec![],
-            tier2: vec![],
+            structural: vec![],
+            registered: vec![],
         };
         let patterns = pf.into_patterns().unwrap();
         assert_eq!(patterns.len(), 0);
@@ -408,10 +408,10 @@ mod tests {
     #[test]
     fn test_generate_missing_fills_all_fifteen() {
         let mut pf = SecretsFile::new();
-        pf.generate_missing_tier1_salts();
-        assert_eq!(pf.tier1.len(), 15);
+        pf.generate_missing_structural_salts();
+        assert_eq!(pf.structural.len(), 15);
         for def in crate::patterns::all_defs() {
-            assert!(pf.tier1.iter().any(|e| e.identifier == def.identifier));
+            assert!(pf.structural.iter().any(|e| e.identifier == def.identifier));
         }
     }
 
@@ -419,14 +419,14 @@ mod tests {
     fn test_generate_missing_does_not_overwrite() {
         let custom_salt = [0xAB; 32];
         let mut pf = SecretsFile::new();
-        pf.tier1.push(PatternEntry {
+        pf.structural.push(PatternEntry {
             identifier: "anthropic".into(),
             salt: custom_salt,
             segments: None,
         });
-        pf.generate_missing_tier1_salts();
+        pf.generate_missing_structural_salts();
         let entry = pf
-            .tier1
+            .structural
             .iter()
             .find(|e| e.identifier == "anthropic")
             .unwrap();
@@ -434,12 +434,12 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_tier2_exact_length_zero() {
+    fn test_invalid_registered_exact_length_zero() {
         let data = br#"
 version = 2
-tier1 = []
+structural = []
 
-[[tier2]]
+[[registered]]
 start_fragment = "aabb"
 end_fragment = "ccdd"
 exact_length = 0
@@ -453,12 +453,12 @@ preserve_suffix = 0
     }
 
     #[test]
-    fn test_invalid_tier2_empty_start_fragment() {
+    fn test_invalid_registered_empty_start_fragment() {
         let data = br#"
 version = 2
-tier1 = []
+structural = []
 
-[[tier2]]
+[[registered]]
 start_fragment = ""
 end_fragment = "ccdd"
 exact_length = 32
@@ -472,7 +472,7 @@ preserve_suffix = 0
     }
 
     #[test]
-    fn test_tier2_with_charset_round_trips() {
+    fn test_registered_with_charset_round_trips() {
         use crate::{SecretOptions, register_with_options};
         let secret = b"my-custom-api-token-round-trip-test";
         let opts = SecretOptions {
@@ -485,48 +485,48 @@ preserve_suffix = 0
         pf.add_secret_pattern(&pat, None).unwrap();
         let bytes = pf.serialize().unwrap();
         let pf2 = SecretsFile::deserialize(&bytes).unwrap();
-        assert_eq!(pf2.tier2.len(), 1);
+        assert_eq!(pf2.registered.len(), 1);
     }
 
     #[test]
-    fn test_tier2_without_charset_uses_wide() {
+    fn test_registered_without_charset_uses_wide() {
         use crate::{SecretOptions, register_with_options};
         let secret = b"my-custom-api-token-wide-charset-test";
         let opts = SecretOptions::default();
         let pat = register_with_options(secret, &opts).unwrap();
         let mut pf = SecretsFile::new();
         pf.add_secret_pattern(&pat, None).unwrap();
-        assert!(pf.tier2[0].charset.is_none());
+        assert!(pf.registered[0].charset.is_none());
     }
 
     #[test]
     fn test_duplicate_identifier_rejected() {
-        // tier2 must come before [[tier1]] sections in TOML
+        // registered sections must come before [[structural]] sections in TOML
         let pf_data = br#"
 version = 2
-tier2 = []
+registered = []
 
-[[tier1]]
+[[structural]]
 identifier = "my_pattern"
 salt = "0000000000000000000000000000000000000000000000000000000000000001"
 segments = [{ type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
 
-[[tier1]]
+[[structural]]
 identifier = "my_pattern"
 salt = "0000000000000000000000000000000000000000000000000000000000000002"
 segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
 "#;
         let err = SecretsFile::deserialize(pf_data).unwrap_err();
-        assert!(err.to_string().contains("duplicate Tier 1 identifier"));
+        assert!(err.to_string().contains("duplicate structural pattern identifier"));
     }
 
     #[test]
     fn test_duplicate_label_rejected() {
         let pf_data = br#"
 version = 2
-tier1 = []
+structural = []
 
-[[tier2]]
+[[registered]]
 label = "my-secret"
 start_fragment = "aabbccdd"
 end_fragment = "eeff0011"
@@ -536,7 +536,7 @@ hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
 preserve_prefix = 0
 preserve_suffix = 0
 
-[[tier2]]
+[[registered]]
 label = "my-secret"
 start_fragment = "11223344"
 end_fragment = "55667788"
@@ -547,12 +547,12 @@ preserve_prefix = 0
 preserve_suffix = 0
 "#;
         let err = SecretsFile::deserialize(pf_data).unwrap_err();
-        assert!(err.to_string().contains("duplicate Tier 2 label"));
+        assert!(err.to_string().contains("duplicate registered secret label"));
     }
 
     #[test]
     fn test_version_1_error_message() {
-        let data = b"version = 1\ntier1 = []\ntier2 = []\n";
+        let data = b"version = 1\nstructural = []\nregistered = []\n";
         let err = SecretsFile::deserialize(data).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unsupported"), "error: {msg}");
@@ -560,11 +560,11 @@ preserve_suffix = 0
     }
 
     #[test]
-    fn test_user_defined_tier1_into_patterns() {
+    fn test_user_defined_structural_into_patterns() {
         use crate::segment::SegmentDef;
         let pf = SecretsFile {
             version: 2,
-            tier1: vec![PatternEntry {
+            structural: vec![PatternEntry {
                 identifier: "custom".into(),
                 salt: [0xAA; 32],
                 segments: Some(vec![
@@ -578,7 +578,7 @@ preserve_suffix = 0
                     },
                 ]),
             }],
-            tier2: vec![],
+            registered: vec![],
         };
         let patterns = pf.into_patterns().unwrap();
         assert_eq!(patterns.len(), 1);
@@ -588,12 +588,12 @@ preserve_suffix = 0
     fn test_user_defined_without_segments_errors() {
         let pf = SecretsFile {
             version: 2,
-            tier1: vec![PatternEntry {
+            structural: vec![PatternEntry {
                 identifier: "unknown_thing".into(),
                 salt: [0u8; 32],
                 segments: None,
             }],
-            tier2: vec![],
+            registered: vec![],
         };
         let err = pf
             .into_patterns()

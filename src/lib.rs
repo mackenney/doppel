@@ -18,7 +18,7 @@
 //! ```rust
 //! use doppel::{swap, restore, patterns};
 //!
-//! // NOT real credentials — synthetic key matching the Tier 1 Anthropic pattern
+//! // NOT real credentials — synthetic key matching the Anthropic structural pattern
 //! let payload = b"Authorization: sk-ant-api03-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA";
 //!
 //! // 1. Swap: detect and replace the key before sending to an external service

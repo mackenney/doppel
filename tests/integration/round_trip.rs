@@ -65,7 +65,7 @@ fn round_trip_chunked(
     output
 }
 
-// VC-1: Given a Tier 1 secret, scrubbed output contains no byte subsequence equal to original
+// VC-1: Given a structural secret, scrubbed output contains no byte subsequence equal to original
 #[test]
 fn test_vc1_swapped_contains_no_original_secret() {
     // VC-1 from SPEC.md Verifiable Conditions
@@ -82,7 +82,7 @@ fn test_vc1_swapped_contains_no_original_secret() {
 
 // VC-2: Round-trip: swap → restore → original
 #[test]
-fn test_vc2_swap_restore_round_trip_tier1() {
+fn test_vc2_swap_restore_round_trip_structural() {
     // VC-2 from SPEC.md Verifiable Conditions
     for (key, pats) in [
         (SYNTH_ANTHROPIC, vec![patterns::anthropic()]),
@@ -207,9 +207,9 @@ fn test_vc10_multiple_occurrences_same_fake() {
     );
 }
 
-// VC-11: Tier 2 HMAC mismatch → pass through unchanged
+// VC-11: registered HMAC mismatch → pass through unchanged
 #[test]
-fn test_vc11_tier2_hmac_mismatch_passthrough() {
+fn test_vc11_registered_hmac_mismatch_passthrough() {
     // VC-11 from SPEC.md Verifiable Conditions
     let real = b"my-registered-secret-value-12345";
     let pat = register(real).unwrap();
@@ -237,9 +237,9 @@ fn test_vc12_empty_patterns_unchanged() {
     assert!(result.entries.is_empty(), "VC-12: empty entries");
 }
 
-// Additional integration: Tier 2 full round-trip
+// Additional integration: registered full round-trip
 #[test]
-fn test_tier2_full_round_trip() {
+fn test_registered_full_round_trip() {
     let secret = b"my-custom-api-token-value-here!";
     let pat = register(secret).unwrap();
     let payload = [b"token: ".as_slice(), secret].concat();
@@ -257,7 +257,7 @@ fn test_tier2_full_round_trip() {
         &scrub_result.session_key,
     )
     .unwrap();
-    assert_eq!(output, payload, "Tier 2 round-trip failed");
+    assert_eq!(output, payload, "registered round-trip failed");
 }
 
 // Additional integration: Two different secrets → two entries
@@ -312,7 +312,7 @@ fn test_large_payload_multiple_secrets() {
 #[test]
 fn test_vc13_non_leading_literal_reproduced_in_fake() {
     // VC-13 from SPEC.md Verifiable Conditions:
-    // "Given a Tier 1 secret whose pattern contains a Literal segment that is not the
+    // "Given a structural secret whose pattern contains a Literal segment that is not the
     //  leading element, the fake produced by swap reproduces that Literal segment
     //  verbatim at the correct byte position."
 
@@ -356,21 +356,21 @@ fn test_vc13_non_leading_literal_reproduced_in_fake() {
 }
 
 #[test]
-fn test_mixed_tier1_tier2_swap_restore() {
-    // When has_tier2=true, swap falls back to byte-by-byte scanning.
-    // Verify both a Tier 1 and a Tier 2 secret are detected and restored.
-    let tier2_secret = b"my-custom-tier2-token-abcdefghijklmnopqrstuvwxyz0123456789-xyz";
-    let tier2_pattern = register(tier2_secret).expect("register failed");
+fn test_mixed_structural_registered_swap_restore() {
+    // When has_registered=true, swap falls back to byte-by-byte scanning.
+    // Verify both a structural and a registered secret are detected and restored.
+    let registered_secret = b"my-custom-tier2-token-abcdefghijklmnopqrstuvwxyz0123456789-xyz";
+    let registered_pattern = register(registered_secret).expect("register failed");
 
     let payload = [
         b"anthropic: ".as_slice(),
         SYNTH_ANTHROPIC,
         b" token: ",
-        tier2_secret,
+        registered_secret,
     ]
     .concat();
 
-    let sr = swap(&payload, &[patterns::anthropic(), tier2_pattern]).unwrap();
+    let sr = swap(&payload, &[patterns::anthropic(), registered_pattern]).unwrap();
     assert_eq!(sr.entries.len(), 2, "must detect both T1 and T2 secrets");
     assert!(
         !sr.payload
@@ -380,8 +380,8 @@ fn test_mixed_tier1_tier2_swap_restore() {
     );
     assert!(
         !sr.payload
-            .windows(tier2_secret.len())
-            .any(|w| w == tier2_secret),
+            .windows(registered_secret.len())
+            .any(|w| w == registered_secret),
         "T2 secret must be scrubbed"
     );
 

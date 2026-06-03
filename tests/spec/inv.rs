@@ -357,8 +357,8 @@ fn test_inv9_entries_contain_no_plaintext_secret() {
 }
 
 #[test]
-fn test_inv9_tier2_no_secret_bytes_in_entries() {
-    // INV-9 (Tier 2): the variable portion of a registered secret must not appear
+fn test_inv9_registered_no_secret_bytes_in_entries() {
+    // INV-9 (registered): the variable portion of a registered secret must not appear
     // in the serialized entries — not even as a 4-byte sliding-window fragment.
     // With the default SecretOptions (wide charset, no prefix preservation),
     // the fake is drawn from a charset with no overlap with the secret bytes.
@@ -473,8 +473,8 @@ fn test_inv15_fake_not_equal_to_original() {
 }
 
 #[test]
-fn test_inv16_tier2_hmac_failure_passthrough() {
-    // INV-16: "A Tier 2 candidate that matches structurally but fails HMAC verification
+fn test_inv16_registered_hmac_failure_passthrough() {
+    // INV-16: "A registered candidate that matches structurally but fails HMAC verification
     //          MUST be passed through unchanged; no replacement occurs."
     use doppel::register;
     let real_secret = b"my-registered-api-secret-value!";
@@ -493,8 +493,8 @@ fn test_inv16_tier2_hmac_failure_passthrough() {
 }
 
 #[test]
-fn test_inv17_tier2_unique_salt_per_registration() {
-    // INV-17: "Each Tier 2 registration MUST use a unique HMAC salt."
+fn test_inv17_registered_unique_salt_per_registration() {
+    // INV-17: "Each registered registration MUST use a unique HMAC salt."
     use doppel::register;
     let secret = b"my-secret-value-for-registration";
     let pat1 = register(secret).unwrap();
@@ -553,8 +553,8 @@ fn test_inv19_restore_exact_matching_only() {
 }
 
 #[test]
-fn test_inv22_all_tier1_built_in_classes_present() {
-    // INV-22: built-in Tier 1 MUST cover Anthropic, OpenAI (classic + project),
+fn test_inv22_all_structural_built_in_classes_present() {
+    // INV-22: built-in structural MUST cover Anthropic, OpenAI (classic + project),
     //         AWS IAM (AKIA + ASIA), GitHub PAT (classic + fine-grained), and GCP API keys.
     //
     // Validates behaviorally: swap a synthetic key of each class and assert detection.
@@ -682,7 +682,7 @@ fn test_inv_aad_fake_binding() {
 
 #[test]
 fn test_inv28_literal_segments_reproduced_verbatim_in_fake() {
-    // INV-28: "Every Literal segment in a matched Tier 1 Pattern MUST appear verbatim
+    // INV-28: "Every Literal segment in a matched structural Pattern MUST appear verbatim
     //          at the corresponding byte positions of the fake."
     use patterns::{anthropic, github_fine_grained, openai_project, slack_bot};
 
@@ -755,7 +755,7 @@ fn test_inv28_literal_segments_reproduced_verbatim_in_fake() {
 
 #[test]
 fn test_inv29_variable_segment_bytes_in_charset() {
-    // INV-29: "Every Variable segment in a Tier 1 fake MUST contain only bytes drawn
+    // INV-29: "Every Variable segment in a structural fake MUST contain only bytes drawn
     //          from that segment's own character set."
     use patterns::{anthropic, github_fine_grained, slack_bot};
 
@@ -833,7 +833,7 @@ fn test_inv13_cross_serialization_fake_stability() {
     let pat = register_with_options(secret, &SecretOptions::default()).unwrap();
 
     let mut pf = SecretsFile::new();
-    pf.generate_missing_tier1_salts();
+    pf.generate_missing_structural_salts();
     pf.add_secret_pattern(&pat, None).unwrap();
 
     let payload = [b"token: ".as_slice(), secret].concat();
@@ -918,12 +918,12 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
 }
 
 #[test]
-fn test_inv30_user_tier1_requires_variable_segment() {
-    // INV-30: "A user-defined Tier 1 pattern MUST specify at least one Variable segment"
+fn test_inv30_user_structural_requires_variable_segment() {
+    // INV-30: "A user-defined structural pattern MUST specify at least one Variable segment"
     use doppel::{SecretsFile, segment::SegmentDef};
     let mut pf = SecretsFile::new();
-    pf.generate_missing_tier1_salts();
-    let result = pf.add_tier1_entry(
+    pf.generate_missing_structural_salts();
+    let result = pf.add_structural_entry(
         "pure_literal".into(),
         vec![SegmentDef::Literal {
             value: "just-a-prefix".into(),
@@ -942,19 +942,19 @@ fn test_inv30_user_tier1_requires_variable_segment() {
 
 #[test]
 fn test_inv31_duplicate_identifier_rejected() {
-    // INV-31: "A user-defined Tier 1 identifier MUST be unique within the patterns file"
+    // INV-31: "A user-defined structural identifier MUST be unique within the patterns file"
     use doppel::{SecretsFile, segment::SegmentDef};
     let mut pf = SecretsFile::new();
-    pf.generate_missing_tier1_salts();
+    pf.generate_missing_structural_salts();
     let segs = vec![SegmentDef::Variable {
         charset: "alphanumeric".into(),
         min: 10,
         max: 10,
     }];
-    pf.add_tier1_entry("my_custom".into(), segs.clone(), [1u8; 32])
+    pf.add_structural_entry("my_custom".into(), segs.clone(), [1u8; 32])
         .unwrap();
     let err = pf
-        .add_tier1_entry("my_custom".into(), segs, [2u8; 32])
+        .add_structural_entry("my_custom".into(), segs, [2u8; 32])
         .unwrap_err();
     assert!(
         err.to_string().contains("duplicate"),
@@ -964,18 +964,18 @@ fn test_inv31_duplicate_identifier_rejected() {
 
 #[test]
 fn test_inv32_missing_builtin_is_allowed() {
-    // INV-32: "Removing a built-in Tier 1 identifier from the patterns file is permitted"
+    // INV-32: "Removing a built-in structural identifier from the patterns file is permitted"
     use doppel::SecretsFile;
     let pf = SecretsFile {
         version: 2,
-        tier1: vec![],
-        tier2: vec![],
+        structural: vec![],
+        registered: vec![],
     };
     let patterns = pf.into_patterns().unwrap();
     assert_eq!(
         patterns.len(),
         0,
-        "INV-32: empty tier1 must produce zero patterns"
+        "INV-32: empty structural list must produce zero patterns"
     );
 }
 
@@ -983,14 +983,14 @@ fn test_inv32_missing_builtin_is_allowed() {
 fn test_inv33_version_must_be_2() {
     // INV-33: "The patterns file version MUST be 2"
     use doppel::SecretsFile;
-    let data = b"version = 1\ntier1 = []\ntier2 = []\n";
+    let data = b"version = 1\nstructural = []\nregistered = []\n";
     let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),
         "INV-33: version 1 must be rejected"
     );
 
-    let data = b"version = 3\ntier1 = []\ntier2 = []\n";
+    let data = b"version = 3\nstructural = []\nregistered = []\n";
     let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),

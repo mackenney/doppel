@@ -294,10 +294,10 @@ fn test_e2e_init_creates_patterns_file() {
     let content = std::fs::read_to_string(&path).unwrap();
     let val: toml::Value = content.parse().unwrap();
     assert_eq!(val["version"].as_integer(), Some(2));
-    let tier1 = val["tier1"].as_array().unwrap();
-    assert_eq!(tier1.len(), 15);
-    let tier2 = val["tier2"].as_array().unwrap();
-    assert!(tier2.is_empty());
+    let structural = val["structural"].as_array().unwrap();
+    assert_eq!(structural.len(), 15);
+    let registered = val["registered"].as_array().unwrap();
+    assert!(registered.is_empty());
 
     #[cfg(unix)]
     {
@@ -411,7 +411,7 @@ fn test_e2e_swap_corrupt_patterns_file() {
 }
 
 #[test]
-fn test_e2e_register_tier2_round_trip() {
+fn test_e2e_register_round_trip() {
     let patterns_path = create_test_patterns_file("register-rt");
     let entries_path = tmp_path("entries-register-rt.json");
     let key_path = tmp_path("key-register-rt.txt");

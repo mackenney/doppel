@@ -318,18 +318,18 @@ mod tests {
     }
 
     #[test]
-    fn test_restore_tier2_roundtrip() {
-        // Tier 2 registered secret exercises the HMAC-based fake path.
+    fn test_restore_registered_roundtrip() {
+        // Registered secret exercises the HMAC-based fake path.
         let secret = b"my-custom-tier2-api-token-that-is-long-enough-for-registration-abcd1234";
         let pattern = crate::register(secret).expect("register failed");
         let payload = [b"Bearer ".as_slice(), secret, b" end"].concat();
 
         let sr = swap(&payload, &[pattern]).unwrap();
-        assert_eq!(sr.entries.len(), 1, "Tier 2 swap must produce one entry");
+        assert_eq!(sr.entries.len(), 1, "registered swap must produce one entry");
 
         let mut input = sr.payload.as_slice();
         let mut output = Vec::new();
         restore(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
-        assert_eq!(output, payload, "Tier 2 secret must be restored correctly");
+        assert_eq!(output, payload, "registered secret must be restored correctly");
     }
 }

@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
-/// A single structural element of a built-in Tier 1 pattern.
+/// A single structural element of a built-in structural pattern.
 ///
 /// Patterns are sequences of segments matched left-to-right against the payload.
 /// Detection records how many bytes each Variable segment consumed; that per-segment
-/// length drives fake generation (SPEC.md §Tier 1).
+/// length drives fake generation (SPEC.md §Structural Patterns).
 ///
 /// This type uses static lifetime byte slices and function pointers; it is `Copy`
 /// and used in `const` arrays. The owned runtime equivalent is [`Segment`].
@@ -21,11 +21,11 @@ pub(crate) enum BuiltinSegment {
     },
 }
 
-/// Owned segment used at runtime by `Tier1Def`, `match_segments`, and `derive_fake_tier1_segments`.
+/// Owned segment used at runtime by `StructuralDef`, `match_segments`, and fake derivation.
 ///
 /// Unlike `BuiltinSegment`, this type is heap-allocated and serializable. It is the runtime
 /// representation for both built-in (converted from `BuiltinSegment` via `From`) and user-defined
-/// Tier 1 patterns.
+/// structural patterns.
 #[derive(Clone, Debug)]
 pub(crate) enum Segment {
     Literal(Vec<u8>),
@@ -86,7 +86,7 @@ impl Segment {
     }
 }
 
-/// Result of a successful Tier 1 pattern match.
+/// Result of a successful structural pattern match.
 pub(crate) struct MatchCapture {
     /// Exclusive end position of the match in the payload.
     pub(crate) end: usize,

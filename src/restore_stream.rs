@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_async_registered_secret_restoration() {
-        // Tier 2: user-registered secret with deterministic fake derivation.
+        // Registered secret: user-registered secret with deterministic fake derivation.
         // Must be long enough to meet the minimum length requirement of register().
         let secret = b"my-custom-tier2-api-token-that-is-long-enough-for-registration-abcd1234";
         let pattern = crate::register(secret).expect("register failed");
@@ -503,7 +503,7 @@ mod tests {
         let inner = single_chunk_stream(sr.payload);
         let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
-        assert_eq!(result, payload, "Tier 2 fake must restore correctly");
+        assert_eq!(result, payload, "registered secret fake must restore correctly");
     }
 
     #[test]

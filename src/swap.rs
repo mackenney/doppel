@@ -3,22 +3,22 @@ use std::collections::HashMap;
 use crate::crypto::encrypt_secret;
 use crate::crypto::generate_session_key;
 use crate::fake::FakeError;
-use crate::patterns::{Pattern, Tier1Def, prefix_filter};
-use crate::secrets::Tier2Pat;
+use crate::patterns::{Pattern, StructuralDef, prefix_filter};
+use crate::secrets::RegisteredPat;
 use crate::types::{Entry, SwapError, SwapResult};
 
 struct Match<'a> {
     start: usize,
     end: usize,
-    is_tier1: bool,
+    is_structural: bool,
     pattern_ref: PatternRef<'a>,
-    tier1_capture: Option<crate::segment::MatchCapture>,
+    structural_capture: Option<crate::segment::MatchCapture>,
     derived_fake: Option<Vec<u8>>,
 }
 
 enum PatternRef<'a> {
-    Tier1(&'a Tier1Def),
-    Tier2(&'a Tier2Pat),
+    Tier1(&'a StructuralDef),
+    Tier2(&'a RegisteredPat),
 }
 
 fn find_best_match<'a>(
@@ -30,20 +30,20 @@ fn find_best_match<'a>(
 
     for pattern in patterns {
         let candidate = match pattern {
-            Pattern::Tier1(def) => def.try_match(payload, pos).map(|capture| Match {
+            Pattern::Structural(def) => def.try_match(payload, pos).map(|capture| Match {
                 start: pos,
                 end: capture.end,
-                is_tier1: true,
+                is_structural: true,
                 pattern_ref: PatternRef::Tier1(def),
-                tier1_capture: Some(capture),
+                structural_capture: Some(capture),
                 derived_fake: None,
             }),
-            Pattern::Tier2(arc) => arc.try_match(payload, pos)?.map(|(end, fake)| Match {
+            Pattern::Registered(arc) => arc.try_match(payload, pos)?.map(|(end, fake)| Match {
                 start: pos,
                 end,
-                is_tier1: false,
+                is_structural: false,
                 pattern_ref: PatternRef::Tier2(arc.as_ref()),
-                tier1_capture: None,
+                structural_capture: None,
                 derived_fake: Some(fake),
             }),
         };
@@ -53,7 +53,7 @@ fn find_best_match<'a>(
                 None => candidate,
                 Some(b) if candidate.end > b.end => candidate,
                 // Tier1 wins on tie (INV-18)
-                Some(b) if candidate.end == b.end && candidate.is_tier1 && !b.is_tier1 => candidate,
+                Some(b) if candidate.end == b.end && candidate.is_structural && !b.is_structural => candidate,
                 Some(b) => b,
             });
         }
@@ -66,10 +66,10 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
     match &m.pattern_ref {
         PatternRef::Tier1(def) => {
             let capture = m
-                .tier1_capture
+                .structural_capture
                 .as_ref()
                 .expect("Tier1 match always has a capture");
-            crate::fake::derive_fake_tier1_segments(
+            crate::fake::derive_fake_structural_segments(
                 &def.salt,
                 &def.segments,
                 &capture.variable_lengths,
@@ -79,7 +79,7 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
         PatternRef::Tier2(_pat) => Ok(m
             .derived_fake
             .clone()
-            .expect("Tier 2 match must have derived_fake")),
+            .expect("registered match must have derived_fake")),
     }
 }
 
@@ -103,11 +103,11 @@ pub fn swap(payload: &[u8], patterns: &[Pattern]) -> Result<SwapResult, SwapErro
     let mut entries: Vec<Entry> = Vec::new();
     let mut seen: HashMap<&[u8], usize> = HashMap::new();
     let mut pos = 0;
-    let has_tier2 = patterns.iter().any(|p| p.is_tier2());
+    let has_registered = patterns.iter().any(|p| p.is_registered());
 
     while pos < payload.len() {
-        if !has_tier2 {
-            // Jump to next Tier 1 prefix candidate, bulk-copying non-candidate bytes.
+        if !has_registered {
+            // Jump to next structural-pattern prefix candidate, bulk-copying non-candidate bytes.
             let next_candidate = prefix_filter()
                 .find(&payload[pos..])
                 .map(|m| pos + m.start())
@@ -166,7 +166,7 @@ mod tests {
     const TEST_ANTHROPIC_KEY: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     #[test]
-    fn test_swap_tier1_basic() {
+    fn test_swap_structural_basic() {
         // INV-1: secret replaced with fake
         let payload = [b"Authorization: ".as_slice(), TEST_ANTHROPIC_KEY, b" end"].concat();
         let result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
@@ -243,8 +243,8 @@ mod tests {
     }
 
     #[test]
-    fn test_swap_tier2_hmac_failure_passthrough() {
-        // INV-16: Tier 2 structural match + HMAC failure → pass through
+    fn test_swap_registered_hmac_failure_passthrough() {
+        // INV-16: registered structural match + HMAC failure → pass through
         use rand::{SeedableRng, rngs::StdRng};
         let real_secret = b"my-registered-secret-value-here";
         let pat =

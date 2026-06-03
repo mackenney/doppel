@@ -2,10 +2,10 @@ use rand::{RngCore, rngs::OsRng};
 use std::sync::Arc;
 
 use crate::crypto::hmac_sha256;
-use crate::fake::{FakeError, charsets, derive_fake_tier2_deterministic};
+use crate::fake::{FakeError, charsets, derive_fake_registered};
 use crate::patterns::Pattern;
 
-/// Options for Tier 2 secret registration.
+/// Options for registered secret registration.
 ///
 /// All fields default to the secure-by-default configuration: no prefix/suffix
 /// preservation, wide charset for fake generation.
@@ -43,11 +43,11 @@ pub struct SecretOptions {
     pub restrict_charset: bool,
 }
 
-/// Errors returned by Tier 2 registration.
+/// Errors returned by registration.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
     /// Secret is empty; there are no bytes to protect.
-    #[error("secret is empty; Tier 2 registration requires at least 1 byte")]
+    #[error("secret is empty; registration requires at least 1 byte")]
     TooShort,
 
     /// `preserve_prefix + preserve_suffix` covers the entire secret, leaving no
@@ -80,9 +80,9 @@ impl From<FakeError> for SecretError {
 /// Minimum variable-byte count below which a warning is emitted (INV-26).
 const MIN_VARIABLE_BYTES_WARNING: usize = 14;
 
-/// Internal representation of a Tier 2 registered secret pattern.
-/// Opaque to callers — they receive a `Pattern::Tier2(Arc<Tier2Pat>)`.
-pub struct Tier2Pat {
+/// Internal representation of a registered secret pattern.
+/// Opaque to callers — they receive a `Pattern::Registered(Arc<RegisteredPat>)`.
+pub struct RegisteredPat {
     /// First N bytes of the original secret. Used to quickly identify candidates.
     pub(crate) start_fragment: Vec<u8>,
     /// Last M bytes of the original secret. Verified after start fragment matches.
@@ -104,7 +104,7 @@ pub struct Tier2Pat {
 const START_FRAGMENT_LEN: usize = 8;
 const END_FRAGMENT_LEN: usize = 8;
 
-/// Register an arbitrary secret with default options and produce a Tier 2 Pattern.
+/// Register an arbitrary secret with default options and produce a registered-secret Pattern.
 ///
 /// Returns `Err` instead of panicking on invalid input. See [`SecretError`]
 /// for the error conditions. See [`register_with_options`] to customise prefix/suffix
@@ -115,7 +115,7 @@ const END_FRAGMENT_LEN: usize = 8;
 /// ```
 /// use doppel::{register, swap};
 ///
-/// let secret = b"my-custom-api-token-that-is-long-enough-for-tier2";
+/// let secret = b"my-custom-api-token-that-is-long-enough";
 /// let pattern = register(secret).unwrap();
 /// let result = swap(secret, &[pattern]).unwrap();
 /// assert_eq!(result.entries.len(), 1);
@@ -223,7 +223,7 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
         charsets::wide()
     };
 
-    let pat = Tier2Pat {
+    let pat = RegisteredPat {
         start_fragment,
         end_fragment,
         exact_length: secret.len(),
@@ -236,7 +236,7 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
 
     // Trial derivation to detect CollisionLimit at registration time (INV-25).
     // The secret itself is the canonical candidate for this pattern.
-    derive_fake_tier2_deterministic(
+    derive_fake_registered(
         &pat.hmac_salt,
         secret,
         &secret[..pp],
@@ -246,10 +246,10 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
     )
     .map_err(SecretError::from)?;
 
-    Ok(Pattern::Tier2(Arc::new(pat)))
+    Ok(Pattern::Registered(Arc::new(pat)))
 }
 
-impl Tier2Pat {
+impl RegisteredPat {
     /// Attempt to match this pattern at `payload[pos..]`.
     ///
     /// Returns `Some(end_pos)` if:
@@ -262,7 +262,7 @@ impl Tier2Pat {
     #[rustfmt::skip]
     pub(crate) fn try_match(&self, payload: &[u8], pos: usize) -> Result<Option<(usize, Vec<u8>)>, FakeError> {
         use crate::crypto::verify_hmac;
-        use crate::fake::derive_fake_tier2_deterministic;
+        use crate::fake::derive_fake_registered;
 
         // 1. Start fragment
         if !payload[pos..].starts_with(&self.start_fragment) {
@@ -296,7 +296,7 @@ impl Tier2Pat {
         } else {
             &[]
         };
-        let fake = derive_fake_tier2_deterministic(
+        let fake = derive_fake_registered(
             &self.hmac_salt,
             candidate,
             prefix_bytes,
@@ -321,7 +321,7 @@ mod tests {
         let pat1 = register_with_rng(secret, &mut StdRng::seed_from_u64(1)).unwrap();
         let pat2 = register_with_rng(secret, &mut StdRng::seed_from_u64(2)).unwrap();
         match (&pat1, &pat2) {
-            (Pattern::Tier2(a), Pattern::Tier2(b)) => {
+            (Pattern::Registered(a), Pattern::Registered(b)) => {
                 assert_ne!(
                     a.hmac_salt, b.hmac_salt,
                     "salts must differ per registration (INV-17)"
@@ -337,7 +337,7 @@ mod tests {
         let secret = b"my-arbitrary-secret-value-12345";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(99)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let expected = hmac_sha256(&p.hmac_salt, secret);
                 assert_eq!(
                     p.hmac_digest, expected,
@@ -349,12 +349,12 @@ mod tests {
     }
 
     #[test]
-    fn test_tier2_try_match_correct_secret() {
+    fn test_registered_try_match_correct_secret() {
         let secret = b"my-arbitrary-secret-value-12345";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(99)).unwrap();
         let payload = b"token: my-arbitrary-secret-value-12345 end";
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let pos = 7;
                 let result = p
                     .try_match(payload, pos)
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tier2_try_match_hmac_failure_returns_none() {
+    fn test_registered_try_match_hmac_failure_returns_none() {
         // INV-16: structural match + HMAC failure → None (pass through)
         let secret = b"my-arbitrary-secret-value-12345";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(99)).unwrap();
@@ -382,7 +382,7 @@ mod tests {
         fake_payload[8] ^= 0xFF;
         let payload = fake_payload.clone();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let result = p
                     .try_match(&payload, 0)
                     .expect("try_match should not error");
@@ -397,7 +397,7 @@ mod tests {
         let secret = b"super-secret-api-key-value-here!";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(7)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let middle = &secret[8..secret.len() - 8];
                 let all_fields: Vec<u8> = p
                     .start_fragment
@@ -421,7 +421,7 @@ mod tests {
         let secret = b"deadbeef12345678";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(123)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let result = p
                     .try_match(secret, 0)
                     .expect("try_match error")
@@ -449,7 +449,7 @@ mod tests {
         };
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(55)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let result = p
                     .try_match(secret, 0)
                     .expect("try_match error")
@@ -474,7 +474,7 @@ mod tests {
         let secret = b"my-hex-secret-value-abcd1234";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(77)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let result = p
                     .try_match(secret, 0)
                     .expect("try_match error")
@@ -499,7 +499,7 @@ mod tests {
         };
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(88)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 let result = p
                     .try_match(secret, 0)
                     .expect("try_match error")
@@ -529,7 +529,7 @@ mod tests {
         };
         let pattern = register_with_options(secret, &opts).unwrap();
         match &pattern {
-            Pattern::Tier2(_) => {}
+            Pattern::Registered(_) => {}
             _ => panic!("expected Tier2"),
         }
     }
@@ -550,7 +550,7 @@ mod derivation_param_tests {
         };
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(42)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 assert_eq!(p.preserve_prefix, 7);
                 assert_eq!(p.preserve_suffix, 3);
                 let detected = crate::fake::charsets::detect(secret);
@@ -565,7 +565,7 @@ mod derivation_param_tests {
         let secret = b"my-arbitrary-secret-value-12345";
         let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(1)).unwrap();
         match &pat {
-            Pattern::Tier2(p) => {
+            Pattern::Registered(p) => {
                 assert_eq!(p.preserve_prefix, 0);
                 assert_eq!(p.preserve_suffix, 0);
                 assert_eq!(p.charset, crate::fake::charsets::wide());

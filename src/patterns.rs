@@ -1,22 +1,22 @@
-use crate::secrets::Tier2Pat;
+use crate::secrets::RegisteredPat;
 use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use aho_corasick::AhoCorasick;
 use std::sync::{Arc, LazyLock};
 
-/// Structural definition of a Tier 1 built-in secret class.
+/// Structural definition of a structural built-in secret class.
 #[derive(Clone)]
-pub struct Tier1Def {
+pub struct StructuralDef {
     /// Stable string identifier for this class, used as the key in patterns files.
     pub(crate) identifier: String,
     /// Ordered sequence of structural segments for this secret class.
-    /// See SPEC.md §Tier 1.
+    /// See SPEC.md §Structural Patterns.
     pub(crate) segments: Arc<[Segment]>,
     /// Derivation salt for fake generation. Zero in static template definitions;
     /// set to a real (random or loaded) value when constructing a Pattern.
     pub(crate) salt: [u8; 32],
 }
 
-impl Tier1Def {
+impl StructuralDef {
     /// Walk `payload[pos..]` against the segment list. Returns `Some(MatchCapture)`
     /// on a complete match, `None` otherwise.
     ///
@@ -90,7 +90,7 @@ const ANTHROPIC_SEGS: [BuiltinSegment; 3] = [
     },
     BuiltinSegment::Literal(b"AA"),
 ];
-static ANTHROPIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static ANTHROPIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "anthropic".into(),
     // sk-ant-api03-<93 url_safe_base64>AA = 108 chars total
     // Source: gitleaks `sk-ant-api03-[a-zA-Z0-9_\-]{93}AA`
@@ -110,7 +110,7 @@ const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
         max: 48,
     },
 ];
-static OPENAI_CLASSIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static OPENAI_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "openai_classic".into(),
     // sk-<48 alphanumeric> = 51 chars total
     segments: OPENAI_CLASSIC_SEGS
@@ -135,7 +135,7 @@ const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
         max: 74,
     },
 ];
-static OPENAI_PROJECT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static OPENAI_PROJECT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "openai_project".into(),
     // sk-proj-<58|74 url_safe_b64>T3BlbkFJ<58|74 url_safe_b64> = 132 or 164 chars total.
     // The pre-Aug-2024 56-char format (sk-proj-<48 url_safe_b64>, no T3BlbkFJ) is intentionally
@@ -158,7 +158,7 @@ const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
         max: 16,
     },
 ];
-static AWS_AKIA_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static AWS_AKIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "aws_akia".into(),
     // AKIA<16 uppercase_alphanumeric> = 20 chars total
     segments: AWS_AKIA_SEGS
@@ -177,7 +177,7 @@ const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
         max: 16,
     },
 ];
-static AWS_ASIA_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static AWS_ASIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "aws_asia".into(),
     // ASIA<16 uppercase_alphanumeric> = 20 chars total
     segments: AWS_ASIA_SEGS
@@ -196,7 +196,7 @@ const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
         max: 36,
     },
 ];
-static GITHUB_CLASSIC_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static GITHUB_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "github_classic".into(),
     // ghp_<36 alphanumeric> = 40 chars total
     segments: GITHUB_CLASSIC_SEGS
@@ -221,7 +221,7 @@ const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
         max: 59,
     },
 ];
-static GITHUB_FG_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "github_fine_grained".into(),
     // github_pat_<22 alnum>_<59 alnum> = 93 chars total
     // Source: gitleaks `github_pat_\w{82}` (82 = 22 + 1 separator + 59)
@@ -241,7 +241,7 @@ const GCP_SEGS: [BuiltinSegment; 2] = [
         max: 35,
     },
 ];
-static GCP_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static GCP_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "gcp".into(),
     // AIza<35 url_safe_base64> = 39 chars total
     segments: GCP_SEGS
@@ -260,7 +260,7 @@ const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
         max: 64,
     },
 ];
-static OPENROUTER_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static OPENROUTER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "openrouter".into(),
     // sk-or-v1-<64 hex_lower> = 73 chars total
     // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}`
@@ -286,7 +286,7 @@ const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
         max: 74,
     },
 ];
-static OPENAI_SVCACCT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static OPENAI_SVCACCT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "openai_svcacct".into(),
     // sk-svcacct-<58|74>T3BlbkFJ<58|74> = 135 or 167 chars total
     // Source: gitleaks `sk-(?:proj|svcacct|admin)-...T3BlbkFJ...`
@@ -306,7 +306,7 @@ const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
         max: 28,
     },
 ];
-static GOOGLE_OAUTH_SECRET_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static GOOGLE_OAUTH_SECRET_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "google_oauth_secret".into(),
     // GOCSPX-<28 url_safe_base64> = 35 chars total
     // Source: secretgate docs "GOCSPX- + 28 chars"
@@ -338,7 +338,7 @@ const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
         max: 24,
     },
 ];
-static SLACK_BOT_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static SLACK_BOT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "slack_bot".into(),
     // xoxb-<10-13 digits>-<10-13 digits>-<24 alnum> = 51-57 chars total
     // Source: gitleaks `xoxb-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*`
@@ -359,7 +359,7 @@ const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
     },
     BuiltinSegment::Literal(b"AA"),
 ];
-static ANTHROPIC_ADMIN01_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static ANTHROPIC_ADMIN01_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "anthropic_admin01".into(),
     // sk-ant-admin01-<93 url_safe_base64>AA = 110 chars total
     // Source: gitleaks `sk-ant-admin01-[a-zA-Z0-9_\-]{93}AA`
@@ -380,7 +380,7 @@ const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
     },
     BuiltinSegment::Literal(b"AA"),
 ];
-static ANTHROPIC_ADMIN03_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static ANTHROPIC_ADMIN03_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "anthropic_admin03".into(),
     // sk-ant-admin03-<93 url_safe_base64>AA = 110 chars total
     // Source: Anthropic Terraform provider docs
@@ -400,7 +400,7 @@ const LINEAR_SEGS: [BuiltinSegment; 2] = [
         max: 40,
     },
 ];
-static LINEAR_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
+static LINEAR_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "linear".into(),
     // lin_api_<40 alphanumeric> = 48 chars total
     // Source: gitleaks `lin_api_(?i)[a-z0-9]{40}`
@@ -412,7 +412,7 @@ static LINEAR_DEF: LazyLock<Tier1Def> = LazyLock::new(|| Tier1Def {
     salt: [0u8; 32],
 });
 
-static ALL_TIER1_DEFS: LazyLock<Vec<&'static Tier1Def>> = LazyLock::new(|| {
+static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::new(|| {
     vec![
         &*ANTHROPIC_DEF,
         &*ANTHROPIC_ADMIN01_DEF,
@@ -432,13 +432,13 @@ static ALL_TIER1_DEFS: LazyLock<Vec<&'static Tier1Def>> = LazyLock::new(|| {
     ]
 });
 
-/// Returns references to all 15 built-in Tier 1 definitions.
+/// Returns references to all 15 built-in structural pattern definitions.
 /// Used by patterns file loading to iterate and inject salts.
-pub(crate) fn all_defs() -> &'static [&'static Tier1Def] {
-    &ALL_TIER1_DEFS
+pub(crate) fn all_defs() -> &'static [&'static StructuralDef] {
+    &ALL_STRUCTURAL_DEFS
 }
 
-static TIER1_PREFIXES: &[&[u8]] = &[
+static STRUCTURAL_PREFIXES: &[&[u8]] = &[
     b"sk-ant-api03-",
     b"sk-ant-admin01-",
     b"sk-ant-admin03-",
@@ -457,9 +457,9 @@ static TIER1_PREFIXES: &[&[u8]] = &[
 ];
 
 pub(crate) static TIER1_PREFIX_FILTER: LazyLock<AhoCorasick> =
-    LazyLock::new(|| AhoCorasick::new(TIER1_PREFIXES).expect("failed to build Tier 1 prefix AC"));
+    LazyLock::new(|| AhoCorasick::new(STRUCTURAL_PREFIXES).expect("failed to build structural prefix AC"));
 
-/// Returns the pre-built Aho-Corasick automaton for Tier 1 literal prefix detection.
+/// Returns the pre-built Aho-Corasick automaton for structural-pattern literal prefix detection.
 pub(crate) fn prefix_filter() -> &'static AhoCorasick {
     &TIER1_PREFIX_FILTER
 }
@@ -472,17 +472,17 @@ pub(crate) fn prefix_filter() -> &'static AhoCorasick {
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum Pattern {
-    Tier1(Tier1Def),
-    Tier2(Arc<Tier2Pat>),
+    Structural(StructuralDef),
+    Registered(Arc<RegisteredPat>),
 }
 
 impl Pattern {
-    pub(crate) fn is_tier2(&self) -> bool {
-        matches!(self, Pattern::Tier2(_))
+    pub(crate) fn is_registered(&self) -> bool {
+        matches!(self, Pattern::Registered(_))
     }
 }
 
-/// Built-in Tier 1 patterns. Pass these to swap() to detect well-known API key formats.
+/// Built-in structural patterns. Pass these to swap() to detect well-known API key formats (structural patterns).
 use rand::RngCore;
 use rand::rngs::OsRng;
 
@@ -498,111 +498,111 @@ fn random_salt() -> [u8; 32] {
 /// across calls and process restarts. For cross-restart stability, use
 /// `SecretsFile::into_patterns()`.
 pub fn anthropic() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..ANTHROPIC_DEF.clone()
     })
 }
 
 pub fn anthropic_admin01() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..ANTHROPIC_ADMIN01_DEF.clone()
     })
 }
 
 pub fn anthropic_admin03() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..ANTHROPIC_ADMIN03_DEF.clone()
     })
 }
 
 pub fn openai_classic() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..OPENAI_CLASSIC_DEF.clone()
     })
 }
 
 pub fn openai_project() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..OPENAI_PROJECT_DEF.clone()
     })
 }
 
 pub fn openai_svcacct() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..OPENAI_SVCACCT_DEF.clone()
     })
 }
 
 pub fn aws_akia() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..AWS_AKIA_DEF.clone()
     })
 }
 
 pub fn aws_asia() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..AWS_ASIA_DEF.clone()
     })
 }
 
 pub fn github_classic() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..GITHUB_CLASSIC_DEF.clone()
     })
 }
 
 pub fn github_fine_grained() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..GITHUB_FG_DEF.clone()
     })
 }
 
 pub fn gcp() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..GCP_DEF.clone()
     })
 }
 
 pub fn openrouter() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..OPENROUTER_DEF.clone()
     })
 }
 
 pub fn google_oauth_secret() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..GOOGLE_OAUTH_SECRET_DEF.clone()
     })
 }
 
 pub fn slack_bot() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..SLACK_BOT_DEF.clone()
     })
 }
 
 pub fn linear() -> Pattern {
-    Pattern::Tier1(Tier1Def {
+    Pattern::Structural(StructuralDef {
         salt: random_salt(),
         ..LINEAR_DEF.clone()
     })
 }
 
-/// Returns all built-in Tier 1 patterns with ephemeral per-call salts.
+/// Returns all built-in structural patterns with ephemeral per-call salts.
 ///
 /// Fakes produced by these patterns are stable within the returned `Vec<Pattern>`
 /// instance but differ across calls to `all()` and across process restarts.
@@ -639,14 +639,14 @@ mod tests {
     use crate::segment::Segment;
 
     #[test]
-    fn test_tier1_all_classes_present() {
+    fn test_structural_all_classes_present() {
         // INV-22: all built-in classes present in patterns::all()
         let all = all();
         // Verify by probing each pattern's first Literal segment
         let leading_lits: Vec<&[u8]> = all
             .iter()
             .filter_map(|p| match p {
-                Pattern::Tier1(d) => match d.segments.first()? {
+                Pattern::Structural(d) => match d.segments.first()? {
                     Segment::Literal(b) => Some(b.as_slice()),
                     _ => None,
                 },
@@ -770,7 +770,7 @@ mod tests {
     #[test]
     fn test_all_defs_identifiers_unique() {
         let defs = all_defs();
-        assert_eq!(defs.len(), 15, "must have 15 built-in Tier 1 defs");
+        assert_eq!(defs.len(), 15, "must have 15 built-in structural defs");
         let mut ids: Vec<&str> = defs.iter().map(|d| d.identifier.as_str()).collect();
         ids.sort();
         ids.dedup();
@@ -789,7 +789,7 @@ mod tests {
         for def in defs {
             assert!(
                 all.iter()
-                    .any(|p| matches!(p, Pattern::Tier1(d) if d.identifier == def.identifier)),
+                    .any(|p| matches!(p, Pattern::Structural(d) if d.identifier == def.identifier)),
                 "all_defs entry {} must appear in patterns::all()",
                 def.identifier
             );

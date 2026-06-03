@@ -69,13 +69,13 @@ pub(crate) mod charsets {
         (b'0'..=b'9').collect()
     }
 
-    /// Detect charset from observed bytes (for Tier 2 `restrict_charset` mode).
+    /// Detect charset from observed bytes (for registered-secret `restrict_charset` mode).
     pub fn detect(bytes: &[u8]) -> Vec<u8> {
         let present: std::collections::BTreeSet<u8> = bytes.iter().copied().collect();
         present.into_iter().collect()
     }
 
-    /// Standard wide charset used for Tier 2 fakes by default.
+    /// Standard wide charset used for registered-secret fakes by default.
     ///
     /// 72 printable ASCII chars that are safe in JSON strings and most API contexts.
     /// Excludes `"` (0x22) and `\` (0x5C) to avoid breaking JSON payloads.
@@ -244,11 +244,11 @@ fn derive_fake_core(
     })
 }
 
-/// Derive a deterministic fake for a Tier 2 secret at match time.
+/// Derive a deterministic fake for a registered secret at match time.
 ///
-/// Same HMAC→StdRng derivation as Tier 1 but supports both prefix and suffix preservation.
-/// Called from `Tier2Pat::try_match` after HMAC verification confirms the candidate.
-pub(crate) fn derive_fake_tier2_deterministic(
+/// Same HMAC→StdRng derivation as structural fakes but supports both prefix and suffix preservation.
+/// Called from `RegisteredPat::try_match` after HMAC verification confirms the candidate.
+pub(crate) fn derive_fake_registered(
     salt: &[u8; 32],
     original: &[u8],
     preserved_prefix: &[u8],
@@ -266,7 +266,7 @@ pub(crate) fn derive_fake_tier2_deterministic(
     )
 }
 
-/// Derive a structurally-equivalent fake for a Tier 1 secret using the segment model.
+/// Derive a structurally-equivalent fake for a structural-pattern secret using the segment model.
 ///
 /// Walks `segments` in order:
 /// - `Literal` bytes are reproduced verbatim (INV-28).
@@ -275,7 +275,7 @@ pub(crate) fn derive_fake_tier2_deterministic(
 ///
 /// Deterministic: same (salt, segments, variable_lengths, original) always produces the
 /// same fake (INV-13). Resamples if fake == original (INV-15).
-pub(crate) fn derive_fake_tier1_segments(
+pub(crate) fn derive_fake_structural_segments(
     salt: &[u8; 32],
     segments: &[Segment],
     variable_lengths: &[usize],
@@ -403,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_fake_tier1_segments_stability() {
+    fn test_derive_fake_structural_segments_stability() {
         let salt = [42u8; 32];
         let segs = [
             Segment::Literal(b"sk-ant-api03-".to_vec()),
@@ -416,13 +416,13 @@ mod tests {
         ];
         let var_lens = [93usize];
         let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let f1 = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
-        let f2 = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
+        let f1 = derive_fake_structural_segments(&salt, &segs, &var_lens, original).unwrap();
+        let f2 = derive_fake_structural_segments(&salt, &segs, &var_lens, original).unwrap();
         assert_eq!(f1, f2, "INV-13: stability");
     }
 
     #[test]
-    fn test_derive_fake_tier1_segments_literal_reproduced() {
+    fn test_derive_fake_structural_segments_literal_reproduced() {
         let salt = [1u8; 32];
         let segs = [
             Segment::Literal(b"sk-ant-api03-".to_vec()),
@@ -435,7 +435,7 @@ mod tests {
         ];
         let var_lens = [93usize];
         let original = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let fake = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
+        let fake = derive_fake_structural_segments(&salt, &segs, &var_lens, original).unwrap();
         assert_eq!(fake.len(), original.len(), "same length");
         assert!(
             fake.starts_with(b"sk-ant-api03-"),
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_fake_tier1_segments_variable_bytes_in_charset() {
+    fn test_derive_fake_structural_segments_variable_bytes_in_charset() {
         let salt = [2u8; 32];
         let segs = [
             Segment::Literal(b"xoxb-".to_vec()),
@@ -470,7 +470,7 @@ mod tests {
         ];
         let var_lens = [10usize, 10usize, 24usize];
         let original = b"xoxb-1234567890-1234567890-AAAAAAAAAAAAAAAAAAAAAAAA";
-        let fake = derive_fake_tier1_segments(&salt, &segs, &var_lens, original).unwrap();
+        let fake = derive_fake_structural_segments(&salt, &segs, &var_lens, original).unwrap();
         assert_eq!(fake.len(), original.len());
         assert!(fake.starts_with(b"xoxb-"), "INV-28: prefix literal");
         let digits_cs = charsets::digits();
@@ -506,13 +506,13 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_fake_tier2_deterministic_stability() {
+    fn test_derive_fake_registered_stability() {
         let salt = [7u8; 32];
         let original = b"my-custom-api-token-abc123xyz";
         let prefix = b"my-";
         let suffix = b"";
         let charset = charsets::wide();
-        let fake1 = derive_fake_tier2_deterministic(
+        let fake1 = derive_fake_registered(
             &salt,
             original,
             prefix,
@@ -521,7 +521,7 @@ mod tests {
             original.len(),
         )
         .unwrap();
-        let fake2 = derive_fake_tier2_deterministic(
+        let fake2 = derive_fake_registered(
             &salt,
             original,
             prefix,

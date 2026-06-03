@@ -23,7 +23,7 @@ fn init_patterns(dir: &std::path::Path) -> std::path::PathBuf {
 
 #[test]
 fn test_inv30_define_rejects_pure_literal_segments() {
-    // INV-30: user-defined Tier 1 MUST have at least one Variable segment
+    // INV-30: user-defined structural pattern MUST have at least one Variable segment
     let dir = tempfile::tempdir().unwrap();
     let pat = init_patterns(dir.path());
     let output = cli_bin()
@@ -157,9 +157,9 @@ fn test_list_shows_all_entries() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Tier 1 patterns:"), "stdout: {stdout}");
+    assert!(stdout.contains("Structural patterns:"), "stdout: {stdout}");
     assert!(stdout.contains("anthropic"), "stdout: {stdout}");
-    assert!(stdout.contains("Tier 2 secrets:"), "stdout: {stdout}");
+    assert!(stdout.contains("Registered secrets:"), "stdout: {stdout}");
 }
 
 #[test]
