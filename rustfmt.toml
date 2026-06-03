@@ -1,5 +1,4 @@
 edition = "2024"
-msrv = "1.85"
 
 # 100 chars is a widely-used line width for modern projects; default 80 is too narrow
 max_width = 100
