@@ -271,7 +271,7 @@ pub(crate) fn derive_fake_registered(
 /// Walks `segments` in order:
 /// - `Literal` bytes are reproduced verbatim (INV-28).
 /// - `Variable` segments are filled with CSPRNG bytes from the segment's charset,
-///   sampling exactly `variable_lengths[i]` bytes for the i-th Variable segment (INV-29).
+///   using exactly `variable_lengths[i]` bytes for the i-th Variable segment (INV-29).
 ///
 /// Deterministic: same (salt, segments, variable_lengths, original) always produces the
 /// same fake (INV-13). Resamples if fake == original (INV-15).
@@ -512,24 +512,12 @@ mod tests {
         let prefix = b"my-";
         let suffix = b"";
         let charset = charsets::wide();
-        let fake1 = derive_fake_registered(
-            &salt,
-            original,
-            prefix,
-            suffix,
-            &charset,
-            original.len(),
-        )
-        .unwrap();
-        let fake2 = derive_fake_registered(
-            &salt,
-            original,
-            prefix,
-            suffix,
-            &charset,
-            original.len(),
-        )
-        .unwrap();
+        let fake1 =
+            derive_fake_registered(&salt, original, prefix, suffix, &charset, original.len())
+                .unwrap();
+        let fake2 =
+            derive_fake_registered(&salt, original, prefix, suffix, &charset, original.len())
+                .unwrap();
         assert_eq!(fake1, fake2, "same inputs must produce same fake (INV-13)");
     }
 }

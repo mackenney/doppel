@@ -60,7 +60,7 @@ enum Commands {
         #[arg(long)]
         restrict_charset: bool,
     },
-    /// Define a user structural pattern (structural pattern with named segments).
+    /// Define a user-defined structural pattern with named segments.
     Define {
         /// Path to the patterns file to update.
         #[arg(long)]
@@ -253,7 +253,7 @@ fn run_register(
 
     let variable_len = secret.len() - preserve_prefix - preserve_suffix;
     eprintln!(
-        "registered Registered secret: {} (variable portion: {} bytes)",
+        "registered secret: {} (variable portion: {} bytes)",
         label, variable_len
     );
 

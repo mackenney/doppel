@@ -13,7 +13,7 @@ pub(crate) enum BuiltinSegment {
     /// Reproduced verbatim in every fake (INV-28).
     Literal(&'static [u8]),
     /// A run of bytes all belonging to `charset`, with length in `[min, max]`.
-    /// Filled with CSPRNG bytes from `charset` in every fake (INV-29).
+    /// Filled with HMAC-derived PRNG bytes from `charset` in every fake (INV-29).
     Variable {
         charset: CharsetName,
         min: usize,

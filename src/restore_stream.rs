@@ -503,7 +503,10 @@ mod tests {
         let inner = single_chunk_stream(sr.payload);
         let stream = restore_stream(inner, sr.entries, sr.session_key).unwrap();
         let result = futures::executor::block_on(collect_stream(stream)).unwrap();
-        assert_eq!(result, payload, "registered secret fake must restore correctly");
+        assert_eq!(
+            result, payload,
+            "registered secret fake must restore correctly"
+        );
     }
 
     #[test]

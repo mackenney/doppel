@@ -325,11 +325,18 @@ mod tests {
         let payload = [b"Bearer ".as_slice(), secret, b" end"].concat();
 
         let sr = swap(&payload, &[pattern]).unwrap();
-        assert_eq!(sr.entries.len(), 1, "registered swap must produce one entry");
+        assert_eq!(
+            sr.entries.len(),
+            1,
+            "registered swap must produce one entry"
+        );
 
         let mut input = sr.payload.as_slice();
         let mut output = Vec::new();
         restore(&mut input, &mut output, &sr.entries, &sr.session_key).unwrap();
-        assert_eq!(output, payload, "registered secret must be restored correctly");
+        assert_eq!(
+            output, payload,
+            "registered secret must be restored correctly"
+        );
     }
 }

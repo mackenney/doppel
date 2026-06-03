@@ -53,7 +53,11 @@ fn find_best_match<'a>(
                 None => candidate,
                 Some(b) if candidate.end > b.end => candidate,
                 // Tier1 wins on tie (INV-18)
-                Some(b) if candidate.end == b.end && candidate.is_structural && !b.is_structural => candidate,
+                Some(b)
+                    if candidate.end == b.end && candidate.is_structural && !b.is_structural =>
+                {
+                    candidate
+                }
                 Some(b) => b,
             });
         }

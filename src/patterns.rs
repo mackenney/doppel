@@ -456,8 +456,9 @@ static STRUCTURAL_PREFIXES: &[&[u8]] = &[
     b"lin_api_",
 ];
 
-pub(crate) static TIER1_PREFIX_FILTER: LazyLock<AhoCorasick> =
-    LazyLock::new(|| AhoCorasick::new(STRUCTURAL_PREFIXES).expect("failed to build structural prefix AC"));
+pub(crate) static TIER1_PREFIX_FILTER: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new(STRUCTURAL_PREFIXES).expect("failed to build structural prefix AC")
+});
 
 /// Returns the pre-built Aho-Corasick automaton for structural-pattern literal prefix detection.
 pub(crate) fn prefix_filter() -> &'static AhoCorasick {

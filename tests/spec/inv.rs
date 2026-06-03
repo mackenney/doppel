@@ -645,11 +645,11 @@ fn test_inv23_no_detectable_secrets_returns_unchanged() {
     );
 }
 
-// INV-AAD: AEAD tag covers the fake field (AAD binding).
-// Replacing Entry.fake after swap MUST cause decrypt_entry to return
+// INV-24: AEAD tag covers the fake field as AAD.
+
 // AeadTagFailure — restore MUST NOT emit the original secret.
 #[test]
-fn test_inv_aad_fake_binding() {
+fn test_inv24_aad_fake_binding() {
     let secret = SYNTH_ANTHROPIC;
     let payload = [b"token: ".as_slice(), secret].concat();
     let scrub_result = swap(&payload, &[patterns::anthropic()]).unwrap();
@@ -672,11 +672,11 @@ fn test_inv_aad_fake_binding() {
     // AAD mismatch must produce an error — secret must not appear in output.
     assert!(
         result.is_err(),
-        "INV-AAD: tampered fake must cause AeadTagFailure, not silent exfiltration"
+        "INV-24: tampered fake must cause AeadTagFailure, not silent exfiltration"
     );
     assert!(
         !output.windows(secret.len()).any(|w| w == secret),
-        "INV-AAD: original secret must not appear in output after fake tamper"
+        "INV-24: original secret must not appear in output after fake tamper"
     );
 }
 

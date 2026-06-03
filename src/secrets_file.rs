@@ -243,7 +243,10 @@ impl SecretsFile {
         match pattern {
             Pattern::Registered(arc) => {
                 if let Some(ref l) = label {
-                    let duplicate = self.registered.iter().any(|e| e.label.as_deref() == Some(l));
+                    let duplicate = self
+                        .registered
+                        .iter()
+                        .any(|e| e.label.as_deref() == Some(l));
                     if duplicate {
                         return Err(SecretsFileError::DuplicateLabel { label: l.clone() });
                     }
@@ -307,7 +310,10 @@ impl SecretsFile {
         use rand::RngCore;
 
         for def in patterns::all_defs() {
-            let already_present = self.structural.iter().any(|e| e.identifier == def.identifier);
+            let already_present = self
+                .structural
+                .iter()
+                .any(|e| e.identifier == def.identifier);
             if !already_present {
                 let mut salt = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut salt);
@@ -327,7 +333,10 @@ impl SecretsFile {
         use rand::RngCore;
 
         for def in patterns::all_defs() {
-            let already_present = self.structural.iter().any(|e| e.identifier == def.identifier);
+            let already_present = self
+                .structural
+                .iter()
+                .any(|e| e.identifier == def.identifier);
             if !already_present {
                 let mut salt = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut salt);
@@ -517,7 +526,10 @@ salt = "0000000000000000000000000000000000000000000000000000000000000002"
 segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
 "#;
         let err = SecretsFile::deserialize(pf_data).unwrap_err();
-        assert!(err.to_string().contains("duplicate structural pattern identifier"));
+        assert!(
+            err.to_string()
+                .contains("duplicate structural pattern identifier")
+        );
     }
 
     #[test]
@@ -547,7 +559,10 @@ preserve_prefix = 0
 preserve_suffix = 0
 "#;
         let err = SecretsFile::deserialize(pf_data).unwrap_err();
-        assert!(err.to_string().contains("duplicate registered secret label"));
+        assert!(
+            err.to_string()
+                .contains("duplicate registered secret label")
+        );
     }
 
     #[test]
