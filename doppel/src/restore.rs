@@ -5,8 +5,9 @@ use aho_corasick::{AhoCorasick, MatchKind};
 use crate::restore_core::process_safe_region;
 use crate::types::{Entry, SessionKey};
 
-/// Errors returned by [`restore`] and [`restore_stream`].
+/// Errors returned by [`restore`] and `restore_stream` (async feature).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RestoreError {
     /// AEAD tag verification failed for the given entry.
     #[error("AEAD tag verification failed for entry {entry_index}")]

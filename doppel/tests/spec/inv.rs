@@ -101,8 +101,7 @@ fn test_inv5_restore_does_not_emit_before_aead_verified() {
     // Proxy test: tamper with tag → Err → no secret bytes in output
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
     let mut scrub_result = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
-    let last = scrub_result.entries[0].ciphertext.len() - 1;
-    scrub_result.entries[0].ciphertext[last] ^= 0xFF;
+    scrub_result.entries[0].flip_last_ciphertext_byte_for_testing();
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
     let _ = restore(
@@ -168,8 +167,7 @@ fn test_inv6_aead_tag_failure_produces_error() {
     // INV-6: "An AEAD tag failure MUST produce an error; the stream MUST NOT continue."
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
     let mut scrub_result = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
-    let last = scrub_result.entries[0].ciphertext.len() - 1;
-    scrub_result.entries[0].ciphertext[last] ^= 0xFF;
+    scrub_result.entries[0].flip_last_ciphertext_byte_for_testing();
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
     let result = restore(
@@ -841,7 +839,7 @@ fn test_inv13_cross_serialization_fake_stability() {
 
     let bytes = pf.serialize().unwrap();
     let pf2 = SecretsFile::deserialize(&bytes).unwrap();
-    let patterns2 = pf2.into_patterns().unwrap();
+    let patterns2 = pf2.to_patterns().unwrap();
 
     let result2 = swap(&payload, &patterns2).unwrap();
 
@@ -869,8 +867,9 @@ fn test_inv25_register_no_variable_bytes_returns_error() {
     let secret = b"abcdefgh"; // 8 bytes
     let opts = SecretOptions {
         preserve_prefix: 5,
-        preserve_suffix: 3, // 5+3 == 8 == secret.len()
+        preserve_suffix: 3,
         restrict_charset: false,
+        ..Default::default()
     };
     let result = register_with_options(secret, &opts);
     assert!(
@@ -890,6 +889,7 @@ fn test_inv26_register_short_variable_portion_succeeds() {
         preserve_prefix: 7,
         preserve_suffix: 0,
         restrict_charset: false,
+        ..Default::default()
     };
     let result = register_with_options(secret, &opts);
     assert!(
@@ -909,6 +909,7 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
         preserve_prefix: 0,
         preserve_suffix: 0,
         restrict_charset: false,
+        ..Default::default()
     };
     let result = register_with_options(secret, &opts);
     assert!(
@@ -971,7 +972,7 @@ fn test_inv32_missing_builtin_is_allowed() {
         structural: vec![],
         registered: vec![],
     };
-    let patterns = pf.into_patterns().unwrap();
+    let patterns = pf.to_patterns().unwrap();
     assert_eq!(
         patterns.len(),
         0,
@@ -1017,6 +1018,7 @@ fn test_inv25_collision_limit_path_exists() {
         preserve_prefix: 0,
         preserve_suffix: 0,
         restrict_charset: false,
+        ..Default::default()
     };
     // Succeeds because no collision occurs for this secret.
     let _ = register_with_options(secret, &opts).unwrap();
@@ -1035,11 +1037,7 @@ fn test_inv_empty_fake_sync_rejected() {
     use doppel::types::{Entry, SessionKey};
     use doppel::{RestoreError, restore};
 
-    let bad_entry = Entry {
-        fake: vec![],
-        ciphertext: vec![0u8; 32],
-        nonce: vec![0u8; 24],
-    };
+    let bad_entry = Entry::new_for_testing(vec![], vec![0u8; 24], vec![0u8; 32]);
     let key = SessionKey::from_bytes([1u8; 32]);
     let mut input = b"some payload".as_slice();
     let mut output = Vec::new();
@@ -1063,11 +1061,7 @@ fn test_inv_empty_fake_async_rejected() {
     use futures::stream;
     use std::io;
 
-    let bad_entry = Entry {
-        fake: vec![],
-        ciphertext: vec![0u8; 32],
-        nonce: vec![0u8; 24],
-    };
+    let bad_entry = Entry::new_for_testing(vec![], vec![0u8; 24], vec![0u8; 32]);
     let key = SessionKey::from_bytes([1u8; 32]);
     let inner = stream::empty::<Result<Bytes, io::Error>>();
     let result = restore_stream(inner, vec![bad_entry], key);

@@ -10,7 +10,7 @@ const SYNTH_GITHUB_FG: &[u8] =
 // Structure: "github_pat_" (11) + 22 A's + "_" + 59 B's = 93 chars total
 const SYNTH_GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-fn round_trip(payload: &[u8], pats: &[doppel::types::Pattern]) -> Vec<u8> {
+fn round_trip(payload: &[u8], pats: &[doppel::Pattern]) -> Vec<u8> {
     let scrub_result = swap(payload, pats).expect("swap failed");
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
@@ -24,11 +24,7 @@ fn round_trip(payload: &[u8], pats: &[doppel::types::Pattern]) -> Vec<u8> {
     output
 }
 
-fn round_trip_chunked(
-    payload: &[u8],
-    pats: &[doppel::types::Pattern],
-    chunk_size: usize,
-) -> Vec<u8> {
+fn round_trip_chunked(payload: &[u8], pats: &[doppel::Pattern], chunk_size: usize) -> Vec<u8> {
     use std::io::Read;
     let scrub_result = swap(payload, pats).expect("swap failed");
 
@@ -153,8 +149,7 @@ fn test_vc6_tampered_aead_tag_error_no_partial_output() {
     // VC-6 from SPEC.md Verifiable Conditions
     let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
     let mut scrub_result = swap(&payload, &[patterns::anthropic()]).expect("swap failed");
-    let last = scrub_result.entries[0].ciphertext.len() - 1;
-    scrub_result.entries[0].ciphertext[last] ^= 0xFF;
+    scrub_result.entries[0].flip_last_ciphertext_byte_for_testing();
     let mut input = scrub_result.payload.as_slice();
     let mut output = Vec::new();
     let result = restore(

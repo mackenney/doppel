@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
     name = "doppel",
-    about = "Secret swapping and restoration for arbitrary byte payloads"
+    about = "Intercept secrets in payloads, replace with fakes, restore from responses",
+    long_about = "Intercept secrets in payloads, replace with fakes, restore from responses.\n\nWorkflow:\n  1. doppel init             - create a patterns file (one-time setup)\n  2. doppel register/define  - add secrets to detect\n  3. doppel swap             - replace secrets with fakes; emit swapped payload + entries + key file\n  4. forward swapped payload to the external service\n  5. doppel restore          - pipe the response through to recover originals\n\nThe patterns file is stable across requests. Entries and session key are per-request."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -13,41 +14,63 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Swap secrets from stdin. Writes the swapped payload to stdout.
+    /// Replace detected secrets with fakes; write swapped payload to stdout.
+    ///
+    /// Reads the payload from stdin. Writes the swapped payload to stdout.
+    /// Also writes an entries file (not sensitive) and a session key file (sensitive,
+    /// mode 0600). Both are required by `doppel restore` to reverse the substitution.
     Swap {
-        /// Path to the patterns file (created by `init`).
+        /// Patterns file (created by `init`).
         #[arg(long)]
         patterns: PathBuf,
-        /// Path to write the entries file (ciphertext; not sensitive).
+        /// Output: entries file (ciphertext; pass to `restore` via --entries).
+        ///
+        /// Not sensitive; safe to store alongside the swapped payload.
+        /// Pass to `doppel restore --entries` to reverse the substitution.
         #[arg(long)]
         entries: PathBuf,
-        /// Path to write the session key file (sensitive; created with mode 0600).
+        /// Output: session key file (sensitive, mode 0600; export as DOPPEL_KEY for restore).
+        ///
+        /// Sensitive - created with mode 0600. Export its hex contents as DOPPEL_KEY
+        /// before running `doppel restore`.
         #[arg(long = "key-out")]
         key_out: PathBuf,
     },
-    /// Restore secrets in a response stream from stdin to stdout.
-    /// Session key must be provided via the DOPPEL_KEY environment variable.
+    /// Restore fakes in a response stream back to their original secrets.
+    ///
+    /// Reads from stdin; writes restored output to stdout. Streams output -
+    /// does not wait for stdin EOF before writing.
+    /// Session key: export DOPPEL_KEY with the hex string from swap's key file.
     Restore {
-        /// Path to the entries file written by swap.
+        /// Entries file produced by `doppel swap`.
         #[arg(long)]
         entries: PathBuf,
-        // NO --key flag — INV-20: key via DOPPEL_KEY env var only
+        // NO --key flag - INV-20: key via DOPPEL_KEY env var only
     },
-    /// Create a new patterns file with all built-in structural pattern definitions and stable salts.
+    /// Create a patterns file with all built-in structural pattern definitions.
+    ///
+    /// The patterns file configures secret detection and fake generation for `swap`.
+    /// Built-in patterns cover common API key formats (Anthropic, OpenAI, AWS, GitHub, GCP).
+    /// Use `register` or `define` to add more.
     Init {
         /// Path to create the patterns file.
         #[arg(long)]
         patterns: PathBuf,
-        /// Overwrite if file exists (WARNING: regenerates all salts; existing fakes become invalid).
+        /// Overwrite if file exists.
+        ///
+        /// WARNING: regenerates all salts - previously produced fakes become invalid.
         #[arg(long)]
         force: bool,
     },
     /// Register a secret (read from stdin) into an existing patterns file.
+    ///
+    /// Matched by exact value (HMAC-verified). Use when the secret has no structural
+    /// pattern, or for guaranteed detection of a specific known value.
     Register {
         /// Path to the patterns file to update.
         #[arg(long)]
         patterns: PathBuf,
-        /// Human-readable label for this secret (unique within the patterns file).
+        /// Unique label for this secret within the patterns file.
         #[arg(long)]
         label: String,
         /// Bytes at start of secret to preserve verbatim in the fake.
@@ -56,11 +79,20 @@ enum Commands {
         /// Bytes at end of secret to preserve verbatim in the fake.
         #[arg(long, default_value_t = 0)]
         preserve_suffix: usize,
-        /// Draw fake bytes from the secret's own charset only.
+        /// Generate fake bytes from the secret's own charset only.
         #[arg(long)]
         restrict_charset: bool,
+        /// Number of bytes at start of secret used as detection anchor. Default: 2.
+        #[arg(long, default_value_t = 2)]
+        start_fragment: usize,
+        /// Number of bytes at end of secret used as detection anchor. Default: 2.
+        #[arg(long, default_value_t = 2)]
+        end_fragment: usize,
     },
-    /// Define a user-defined structural pattern with named segments.
+    /// Add a user-defined structural pattern to the patterns file.
+    #[command(
+        long_about = "Add a user-defined structural pattern to the patterns file.\n\nStructural patterns match secrets by format, not exact value. Supply --segment for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
+    )]
     Define {
         /// Path to the patterns file to update.
         #[arg(long)]
@@ -68,19 +100,22 @@ enum Commands {
         /// Unique identifier for this pattern (e.g. MY_API_KEY).
         #[arg(long)]
         identifier: String,
-        /// Segment spec: "literal:<value>" or "variable:<charset>:<min>:<max>".
-        /// Valid charsets: alphanumeric, url_safe_base64, uppercase_alphanumeric, digits, hex_lower.
-        /// Repeat --segment for each segment in order.
-        #[arg(long, required = true, num_args = 1)]
+        /// Segment: "literal:<value>" or "variable:<charset>:<min>:<max>"; repeat in order.
+        #[arg(
+            long,
+            required = true,
+            num_args = 1,
+            long_help = "Repeat for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
+        )]
         segment: Vec<String>,
     },
-    /// List all Structural patterns and Registered secrets in a patterns file.
+    /// List all structural patterns and registered secrets in a patterns file.
     List {
         /// Path to the patterns file.
         #[arg(long)]
         patterns: PathBuf,
     },
-    /// Show details for a single structural pattern or registered secret.
+    /// Show details for a structural pattern or registered secret.
     #[command(group(ArgGroup::new("target").required(true).args(["identifier", "label"])))]
     Inspect {
         /// Path to the patterns file.
@@ -114,7 +149,9 @@ const INIT_COMMENT_BLOCK: &str = r#"# Registered secrets are registered via the 
 #     --patterns <this-file> \
 #     --label my-secret \
 #     --preserve-prefix 0 \
-#     --preserve-suffix 0
+#     --preserve-suffix 0 \
+#     --start-fragment 2 \
+#     --end-fragment 2
 #
 # Each [[registered]] entry contains:
 #   label             - human-readable identifier (unique, required by CLI)
@@ -164,7 +201,7 @@ fn run_swap(
     let pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
-    let patterns = pf.into_patterns().map_err(|e| {
+    let patterns = pf.to_patterns().map_err(|e| {
         format!(
             "failed to load patterns from {}: {}",
             patterns_path.display(),
@@ -177,12 +214,12 @@ fn run_swap(
 
     let result = swap(&payload, &patterns)?;
 
-    io::stdout().write_all(&result.payload)?;
-
+    // Serialize in memory first; fail before any output if key file already exists
     let entries_json = Entry::serialize_entries(&result.entries)?;
-    std::fs::write(entries_path, &entries_json)?;
-
     write_key_file(key_out_path, result.session_key.as_bytes())?;
+
+    io::stdout().write_all(&result.payload)?;
+    std::fs::write(entries_path, &entries_json)?;
 
     Ok(())
 }
@@ -226,6 +263,8 @@ fn run_register(
     preserve_prefix: usize,
     preserve_suffix: usize,
     restrict_charset: bool,
+    start_fragment_len: usize,
+    end_fragment_len: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::{SecretOptions, SecretsFile, register_with_options};
     use std::io::Read;
@@ -237,19 +276,57 @@ fn run_register(
         return Err("no secret provided on stdin".into());
     }
 
-    let file_data = read_patterns_file(patterns_path)?;
-    let mut pf = SecretsFile::deserialize(&file_data)?;
+    let file_content = std::fs::read_to_string(patterns_path).map_err(|_| {
+        format!(
+            "patterns file not found: {}\n  tip: create it with: doppel init --patterns {}",
+            patterns_path.display(),
+            patterns_path.display()
+        )
+    })?;
+
+    let mut doc: toml_edit::DocumentMut = file_content
+        .parse()
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    let mut pf = SecretsFile::deserialize(file_content.as_bytes())
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     let opts = SecretOptions {
         preserve_prefix,
         preserve_suffix,
         restrict_charset,
+        start_fragment_len,
+        end_fragment_len,
     };
     let pattern = register_with_options(&secret, &opts)?;
     pf.add_secret_pattern(&pattern, Some(label.to_string()))?;
 
-    let data = pf.serialize()?;
-    write_patterns_file(patterns_path, &data, false)?;
+    let new_entry = pf.registered.last().expect("entry just added");
+    let item = toml_edit::ser::to_document(new_entry)
+        .map_err(|e| format!("failed to serialize entry: {}", e))?
+        .into_item();
+    let table = item
+        .into_table()
+        .map_err(|_| "serialized entry was not a TOML table")?;
+
+    if doc
+        .get("registered")
+        .map(|i| i.is_array_of_tables())
+        .unwrap_or(false)
+    {
+        doc["registered"]
+            .as_array_of_tables_mut()
+            .unwrap()
+            .push(table);
+    } else {
+        doc.remove("registered");
+        let mut aot = toml_edit::ArrayOfTables::new();
+        aot.push(table);
+        doc.insert("registered", toml_edit::Item::ArrayOfTables(aot));
+    }
+
+    let new_content = doc.to_string();
+    write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
 
     let variable_len = secret.len() - preserve_prefix - preserve_suffix;
     eprintln!(
@@ -274,8 +351,19 @@ fn run_define(
         .map(|(i, spec)| parse_segment_spec(spec, i))
         .collect::<Result<_, _>>()?;
 
-    let file_data = read_patterns_file(patterns_path)?;
-    let mut pf = SecretsFile::deserialize(&file_data)
+    let file_content = std::fs::read_to_string(patterns_path).map_err(|_| {
+        format!(
+            "patterns file not found: {}\n  tip: create it with: doppel init --patterns {}",
+            patterns_path.display(),
+            patterns_path.display()
+        )
+    })?;
+
+    let mut doc: toml_edit::DocumentMut = file_content
+        .parse()
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    let mut pf = SecretsFile::deserialize(file_content.as_bytes())
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     let mut salt = [0u8; 32];
@@ -283,8 +371,21 @@ fn run_define(
 
     pf.add_structural_entry(identifier.to_string(), seg_defs, salt)?;
 
-    let data = pf.serialize()?;
-    write_patterns_file(patterns_path, &data, false)?;
+    let new_entry = pf.structural.last().expect("entry just added");
+    let item = toml_edit::ser::to_document(new_entry)
+        .map_err(|e| format!("failed to serialize entry: {}", e))?
+        .into_item();
+    let table = item
+        .into_table()
+        .map_err(|_| "serialized entry was not a TOML table")?;
+
+    doc["structural"]
+        .as_array_of_tables_mut()
+        .ok_or("structural is not an array of tables")?
+        .push(table);
+
+    let new_content = doc.to_string();
+    write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
 
     let seg_count = segment_specs.len();
     eprintln!(
@@ -490,13 +591,23 @@ fn run_remove(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::SecretsFile;
 
-    let file_data = read_patterns_file(patterns_path)?;
-    let mut pf = SecretsFile::deserialize(&file_data)
+    let file_content = std::fs::read_to_string(patterns_path).map_err(|_| {
+        format!(
+            "patterns file not found: {}\n  tip: create it with: doppel init --patterns {}",
+            patterns_path.display(),
+            patterns_path.display()
+        )
+    })?;
+
+    let mut doc: toml_edit::DocumentMut = file_content
+        .parse()
+        .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
+
+    let pf = SecretsFile::deserialize(file_content.as_bytes())
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
     if let Some(id) = identifier {
-        let pos = pf
-            .structural
+        pf.structural
             .iter()
             .position(|e| e.identifier == id)
             .ok_or_else(|| {
@@ -514,15 +625,21 @@ fn run_remove(
             );
         }
 
-        pf.structural.remove(pos);
+        if let Some(aot) = doc["structural"].as_array_of_tables_mut() {
+            let idx = aot
+                .iter()
+                .position(|t| t["identifier"].as_str() == Some(id));
+            if let Some(i) = idx {
+                aot.remove(i);
+            }
+        }
 
-        let data = pf.serialize()?;
-        write_patterns_file(patterns_path, &data, false)?;
+        let new_content = doc.to_string();
+        write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
 
         eprintln!("removed Structural pattern: {}", id);
     } else if let Some(lbl) = label {
-        let pos = pf
-            .registered
+        pf.registered
             .iter()
             .position(|e| e.label.as_deref() == Some(lbl))
             .ok_or_else(|| {
@@ -533,10 +650,15 @@ fn run_remove(
                 )
             })?;
 
-        pf.registered.remove(pos);
+        if let Some(aot) = doc["registered"].as_array_of_tables_mut() {
+            let idx = aot.iter().position(|t| t["label"].as_str() == Some(lbl));
+            if let Some(i) = idx {
+                aot.remove(i);
+            }
+        }
 
-        let data = pf.serialize()?;
-        write_patterns_file(patterns_path, &data, false)?;
+        let new_content = doc.to_string();
+        write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
 
         eprintln!("removed Registered secret: {}", lbl);
     } else {
@@ -705,12 +827,16 @@ fn main() {
             preserve_prefix,
             preserve_suffix,
             restrict_charset,
+            start_fragment,
+            end_fragment,
         } => run_register(
             &patterns,
             &label,
             preserve_prefix,
             preserve_suffix,
             restrict_charset,
+            start_fragment,
+            end_fragment,
         ),
         Commands::Define {
             patterns,

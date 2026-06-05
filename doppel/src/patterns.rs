@@ -1,7 +1,7 @@
 //! Built-in structural patterns and per-call constructor functions.
 //!
 //! Each `pub fn` in this module returns a [`Pattern`] with an ephemeral salt.
-//! For persistent cross-restart fake stability, use [`crate::SecretsFile::into_patterns`].
+//! For persistent cross-restart fake stability, use [`crate::SecretsFile::to_patterns`].
 
 use crate::secrets::RegisteredPat;
 use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
@@ -472,7 +472,7 @@ pub(crate) fn prefix_filter() -> &'static AhoCorasick {
 
 /// A detection descriptor for [`crate::swap`].
 ///
-/// Obtain via [`patterns`] functions or [`crate::register`]/[`crate::register_with_options`].
+/// Obtain via [`crate::patterns`] functions or [`crate::register`]/[`crate::register_with_options`].
 /// Pass to [`crate::swap`] — do not match on variants in stable code; the variant
 /// set may change in future versions.
 #[derive(Clone)]
@@ -503,7 +503,7 @@ fn random_salt() -> [u8; 32] {
 ///
 /// Fakes are stable for the lifetime of the returned `Pattern` value but differ
 /// across calls and process restarts. For cross-restart stability, use
-/// `SecretsFile::into_patterns()`.
+/// `SecretsFile::to_patterns()`.
 pub fn anthropic() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -655,7 +655,7 @@ pub fn linear() -> Pattern {
 ///
 /// Fakes produced by these patterns are stable within the returned `Vec<Pattern>`
 /// instance but differ across calls to `all()` and across process restarts.
-/// For persistent cross-restart stability, use `SecretsFile::into_patterns()`.
+/// For persistent cross-restart stability, use `SecretsFile::to_patterns()`.
 ///
 /// Covers: Anthropic API (`sk-ant-api03-`), Anthropic Admin (`sk-ant-admin01-`,
 /// `sk-ant-admin03-`), OpenAI classic (`sk-`), OpenAI project (`sk-proj-`),

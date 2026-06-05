@@ -24,7 +24,7 @@
 //!
 //! // 1. Swap: detect and replace the key before sending to an external service
 //! // Note: `patterns::all()` uses ephemeral salts — fakes differ across process restarts.
-//! // For persistent fake stability, use `SecretsFile::into_patterns()`.
+//! // For persistent fake stability, use `SecretsFile::to_patterns()`.
 //! let result = swap(payload, &patterns::all()).unwrap();
 //! assert_eq!(result.entries.len(), 1); // one secret detected
 //! assert_ne!(result.payload.as_slice(), payload as &[u8]); // key replaced with a fake

@@ -25,20 +25,45 @@ impl SessionKey {
 /// One substitution record produced by a single swap call.
 /// Contains the fake bytes (not secret) and the AEAD-encrypted original secret.
 /// See SPEC.md §Entries.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     /// The fake bytes that replaced the original secret in the swapped payload.
     #[serde(with = "base64_serde")]
     pub fake: Vec<u8>,
     /// Random 24-byte nonce used for this entry's AEAD encryption.
+    /// Implementation detail of the AEAD scheme; do not rely on its structure.
     #[serde(with = "base64_serde")]
-    pub nonce: Vec<u8>,
+    pub(crate) nonce: Vec<u8>,
     /// AEAD ciphertext: encrypted original secret + 16-byte tag.
+    /// Implementation detail of the AEAD scheme; do not rely on its structure.
     #[serde(with = "base64_serde")]
-    pub ciphertext: Vec<u8>,
+    pub(crate) ciphertext: Vec<u8>,
 }
 
 impl Entry {
+    /// Construct an entry from raw components. Intended only for testing scenarios
+    /// that need to supply crafted or tampered entries (e.g., empty fake, corrupted
+    /// ciphertext). Entries produced by [`crate::swap`] are the only valid entries
+    /// for use with [`crate::restore`].
+    #[doc(hidden)]
+    pub fn new_for_testing(fake: Vec<u8>, nonce: Vec<u8>, ciphertext: Vec<u8>) -> Self {
+        Self {
+            fake,
+            nonce,
+            ciphertext,
+        }
+    }
+
+    /// XOR the last byte of the ciphertext with 0xFF to simulate AEAD tag corruption.
+    /// Only for use in tests that verify tag-failure behavior.
+    #[doc(hidden)]
+    pub fn flip_last_ciphertext_byte_for_testing(&mut self) {
+        if let Some(b) = self.ciphertext.last_mut() {
+            *b ^= 0xFF;
+        }
+    }
+
     /// Serialize a slice of entries to JSON bytes.
     pub fn serialize_entries(entries: &[Entry]) -> Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec_pretty(entries)
@@ -51,6 +76,7 @@ impl Entry {
 }
 
 /// Result of a swap() call.
+#[non_exhaustive]
 pub struct SwapResult {
     /// The input payload with every detected secret replaced by a structurally-equivalent fake.
     pub payload: Vec<u8>,
@@ -60,7 +86,7 @@ pub struct SwapResult {
     pub session_key: SessionKey,
 }
 
-/// Errors returned by [`swap`].
+/// Errors returned by [`crate::swap`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SwapError {
@@ -89,8 +115,5 @@ impl From<crate::fake::FakeError> for SwapError {
         SwapError::Fake { msg: e.to_string() }
     }
 }
-
-/// Re-export Pattern from patterns module so callers can reach it via doppel::types::Pattern.
-pub use crate::patterns::Pattern;
 
 use crate::serde_helpers::base64_vec as base64_serde;

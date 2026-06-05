@@ -80,7 +80,7 @@ let pat = register_with_options(b"MY_ORG_secretpart_END", &SecretOptions {
 verbatim in the fake) and restrict the fake's character set to match the
 original's. `register` is shorthand for `register_with_options` with all defaults.
 
-Source: [`src/secrets.rs`](src/secrets.rs).
+Source: [`doppel/src/secrets.rs`](doppel/src/secrets.rs).
 
 ### Salt — stable fakes across runs
 
@@ -97,11 +97,22 @@ inconsistent across runs. For the CLI patterns file the salt is written into the
 file on first use and stays fixed forever; you own it along with the rest of the
 pattern definition.
 
-### Patterns file (CLI)
+### Patterns file
 
 The CLI reads patterns from a TOML file (version 2). You create it with `init`
 and extend it with `register` and `define`. Each entry embeds its salt, so fakes
 are stable across process restarts.
+
+Library users can load a patterns file programmatically:
+
+```rust
+use doppel::{SecretsFile, swap};
+
+let data = std::fs::read("secrets.toml")?;
+let sf = SecretsFile::deserialize(&data)?;
+let patterns = sf.to_patterns()?;
+let result = swap(&payload, &patterns)?;
+```
 
 **Create a new patterns file:**
 
@@ -210,7 +221,7 @@ Reads the secret from stdin (raw bytes, no trimming), appends a new registered-s
 entry to the patterns file, and writes it back atomically. The secret never appears
 in command-line arguments. `--label` is required and must be unique within the file.
 
-Source: [`src/secrets.rs`](src/secrets.rs) (registration logic) · [`cli/src/main.rs`](cli/src/main.rs) (`run_register`).
+Source: [`doppel/src/secrets.rs`](doppel/src/secrets.rs) (registration logic) · [`doppel-cli/src/main.rs`](doppel-cli/src/main.rs) (`run_register`).
 
 ### `define` — add a user-defined structural pattern
 
@@ -269,16 +280,28 @@ detect that secret class.
 
 ## Streaming
 
-`restore` works over a stream of `Bytes` chunks. It uses suspicion-driven
-buffering: chunks are held only while a potential match is in flight, bounded by
-the longest secret length across active patterns (typically 100–200 bytes).
+`restore` processes a stream incrementally. It uses suspicion-driven buffering:
+chunks are held only while a potential match is in flight, bounded by the longest
+secret length across active patterns (typically 100–200 bytes).
+
+### Async streaming (`async` feature)
+
+```toml
+[dependencies]
+doppel = { version = "0.0.1", features = ["async"] }
+```
+
+With the `async` feature, `RestoreStream` wraps entries and session key into a
+`futures_core::Stream` adapter. Pass it any `Stream<Item = Result<Bytes, E>>` and
+it yields restored `Bytes` chunks as they arrive — no runtime dependency beyond
+`futures-core` and `bytes`.
 
 ## For the paranoid
 
 Registered secrets are stored as a detection fingerprint — `start_fragment`,
 `end_fragment`, `exact_length`, and `hmac_digest` (HMAC-SHA256 of the secret
 against a per-registration salt) — never as the plaintext value. The source of
-truth is [`src/secrets.rs`](src/secrets.rs).
+truth is [`doppel/src/secrets.rs`](doppel/src/secrets.rs).
 
 You can verify any registered entry against its original secret using only
 `openssl` and standard POSIX utilities, and independently reproduce the fake

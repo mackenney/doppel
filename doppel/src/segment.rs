@@ -1,7 +1,7 @@
 //! Segment types for structural pattern definitions.
 //!
-//! [`Segment`] is the runtime representation; [`SegmentDef`] is the serializable
-//! TOML form. [`BuiltinSegment`] is the `const`-friendly form used in static arrays.
+//! `Segment` is the runtime representation; [`SegmentDef`] is the serializable
+//! TOML form. `BuiltinSegment` is the `const`-friendly form used in static arrays.
 
 use serde::{Deserialize, Serialize};
 /// A single structural element of a built-in structural pattern.
@@ -210,8 +210,9 @@ pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDe
     Ok(())
 }
 
-/// Errors returned by [`validate_segment_defs`] and [`Segment::from_def`].
+/// Errors returned by `validate_segment_defs` and `Segment::from_def`.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SegmentDefError {
     /// The segment list contains no `Variable` segments.
     #[error("segment list must contain at least one variable segment")]

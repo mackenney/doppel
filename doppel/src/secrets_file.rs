@@ -2,7 +2,7 @@
 //!
 //! The [`SecretsFile`] type is the on-disk representation of structural patterns
 //! and registered secrets. Use [`SecretsFile::deserialize`] to load and
-//! [`SecretsFile::into_patterns`] to obtain [`Pattern`] values for [`crate::swap`].
+//! [`SecretsFile::to_patterns`] to obtain [`Pattern`] values for [`crate::swap`].
 
 use std::sync::Arc;
 
@@ -72,6 +72,7 @@ pub struct SecretEntry {
 
 /// Errors returned by [`SecretsFile`] operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SecretsFileError {
     /// TOML serialization or deserialization error.
     #[error("{0}")]
@@ -247,9 +248,12 @@ impl SecretsFile {
     ///
     /// # Errors
     ///
+    /// - [`SecretsFileError::UnsupportedVersion`] if the version field is not `2`.
+    /// - [`SecretsFileError::DuplicateIdentifier`] if any identifier appears more than once.
     /// - [`SecretsFileError::MissingSegments`] if a non-built-in identifier has no `segments` field.
     /// - [`SecretsFileError::InvalidSegment`] if a segment definition is malformed.
-    pub fn into_patterns(self) -> Result<Vec<Pattern>, SecretsFileError> {
+    pub fn to_patterns(&self) -> Result<Vec<Pattern>, SecretsFileError> {
+        self.validate()?;
         use crate::segment::Segment;
 
         let builtin_defs = patterns::all_defs();
@@ -281,15 +285,15 @@ impl SecretsFile {
             }));
         }
 
-        for entry in self.registered {
-            let charset = match entry.charset {
-                Some(cs) => cs,
+        for entry in &self.registered {
+            let charset = match &entry.charset {
+                Some(cs) => cs.clone(),
                 None => crate::fake::charsets::wide(),
             };
 
             let pat = RegisteredPat {
-                start_fragment: entry.start_fragment,
-                end_fragment: entry.end_fragment,
+                start_fragment: entry.start_fragment.clone(),
+                end_fragment: entry.end_fragment.clone(),
                 exact_length: entry.exact_length,
                 hmac_salt: entry.hmac_salt,
                 hmac_digest: entry.hmac_digest,
@@ -491,7 +495,7 @@ mod tests {
             structural: vec![],
             registered: vec![],
         };
-        let patterns = pf.into_patterns().unwrap();
+        let patterns = pf.to_patterns().unwrap();
         assert_eq!(patterns.len(), 0);
     }
 
@@ -569,6 +573,7 @@ preserve_suffix = 0
             preserve_prefix: 3,
             preserve_suffix: 0,
             restrict_charset: false,
+            ..Default::default()
         };
         let pat = register_with_options(secret, &opts).unwrap();
         let mut pf = SecretsFile::new();
@@ -676,7 +681,7 @@ preserve_suffix = 0
             }],
             registered: vec![],
         };
-        let patterns = pf.into_patterns().unwrap();
+        let patterns = pf.to_patterns().unwrap();
         assert_eq!(patterns.len(), 1);
     }
 
@@ -692,7 +697,7 @@ preserve_suffix = 0
             registered: vec![],
         };
         let err = pf
-            .into_patterns()
+            .to_patterns()
             .err()
             .expect("expected MissingSegments error");
         assert!(err.to_string().contains("requires a segments field"));

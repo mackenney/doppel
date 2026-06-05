@@ -33,7 +33,7 @@ fn test_inv21_cli_swap_key_file_mode_0600() {
     {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().expect("tempdir");
-        let patterns_path = dir.path().join("patterns.json");
+        let patterns_path = dir.path().join("secrets.toml");
         let entries_path = dir.path().join("entries.json");
         let key_path = dir.path().join("key.txt");
         init_patterns_file(&patterns_path);
@@ -75,7 +75,7 @@ fn test_inv21_key_file_refuses_pre_existing_path() {
     #[cfg(unix)]
     {
         let dir = tempfile::tempdir().expect("tempdir");
-        let patterns_path = dir.path().join("patterns.json");
+        let patterns_path = dir.path().join("secrets.toml");
         let entries_path = dir.path().join("entries.json");
         let key_path = dir.path().join("key.txt");
         init_patterns_file(&patterns_path);

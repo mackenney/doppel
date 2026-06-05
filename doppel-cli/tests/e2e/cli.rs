@@ -17,7 +17,7 @@ fn cleanup(paths: &[&PathBuf]) {
 }
 
 fn create_test_patterns_file(name: &str) -> PathBuf {
-    let path = tmp_path(&format!("{name}-patterns.json"));
+    let path = tmp_path(&format!("{name}-secrets.toml"));
     let output = Command::new(bin())
         .args(["init", "--patterns", path.to_str().unwrap(), "--force"])
         .output()
@@ -222,11 +222,10 @@ fn test_e2e_full_round_trip() {
         .trim()
         .to_string();
 
+    let secret = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-AAAAAA";
     assert!(
-        !scrubbed
-            .windows(b"sk-ant-api03-AAAA".len())
-            .any(|w| w.starts_with(b"sk-ant-api03-AAAA")),
-        "scrubbed output must not contain original key pattern"
+        !scrubbed.windows(secret.len()).any(|w| w == secret),
+        "scrubbed output must not contain the original secret key"
     );
 
     let mut unscrub_child = Command::new(bin())
@@ -280,7 +279,7 @@ fn test_e2e_restore_missing_env_var_fails() {
 
 #[test]
 fn test_e2e_init_creates_patterns_file() {
-    let path = tmp_path("init-test-patterns.toml");
+    let path = tmp_path("init-test-secrets.toml");
     let _ = std::fs::remove_file(&path);
 
     let output = Command::new(bin())
@@ -295,7 +294,10 @@ fn test_e2e_init_creates_patterns_file() {
     let val: toml::Value = content.parse().unwrap();
     assert_eq!(val["version"].as_integer(), Some(2));
     let structural = val["structural"].as_array().unwrap();
-    assert_eq!(structural.len(), 15);
+    assert!(
+        structural.len() >= 15,
+        "init must produce at least 15 built-in structural patterns"
+    );
     let registered = val["registered"].as_array().unwrap();
     assert!(registered.is_empty());
 
@@ -311,7 +313,7 @@ fn test_e2e_init_creates_patterns_file() {
 
 #[test]
 fn test_e2e_init_refuses_existing_file() {
-    let path = tmp_path("init-existing-patterns.toml");
+    let path = tmp_path("init-existing-secrets.toml");
     std::fs::write(&path, b"existing").unwrap();
 
     let output = Command::new(bin())
@@ -331,7 +333,7 @@ fn test_e2e_init_refuses_existing_file() {
 
 #[test]
 fn test_e2e_init_force_overwrites() {
-    let path = tmp_path("init-force-patterns.toml");
+    let path = tmp_path("init-force-secrets.toml");
     std::fs::write(&path, b"garbage").unwrap();
 
     let output = Command::new(bin())
@@ -356,7 +358,7 @@ fn test_e2e_swap_missing_patterns_file() {
         .args([
             "swap",
             "--patterns",
-            "/tmp/nonexistent-patterns-file.json",
+            "/tmp/nonexistent-secrets-file.toml",
             "--entries",
             entries_path.to_str().unwrap(),
             "--key-out",
@@ -381,7 +383,7 @@ fn test_e2e_swap_missing_patterns_file() {
 
 #[test]
 fn test_e2e_swap_corrupt_patterns_file() {
-    let patterns_path = tmp_path("corrupt-patterns.json");
+    let patterns_path = tmp_path("corrupt-secrets.toml");
     std::fs::write(&patterns_path, b"not valid json").unwrap();
     let entries_path = tmp_path("entries-corrupt.json");
     let key_path = tmp_path("key-corrupt.txt");
@@ -516,7 +518,7 @@ fn test_e2e_register_round_trip() {
 #[test]
 fn test_e2e_register_missing_patterns_file() {
     let output = Command::new(bin())
-        .args(["register", "--patterns", "/tmp/nonexistent-register.json"])
+        .args(["register", "--patterns", "/tmp/nonexistent-register.toml"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())

@@ -7,7 +7,7 @@ fn cli_bin() -> Command {
 }
 
 fn init_patterns(dir: &std::path::Path) -> std::path::PathBuf {
-    let path = dir.join("patterns.toml");
+    let path = dir.join("secrets.toml");
     let output = cli_bin()
         .args(["init", "--patterns"])
         .arg(&path)

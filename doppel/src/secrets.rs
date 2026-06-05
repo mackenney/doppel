@@ -9,7 +9,7 @@ use crate::patterns::Pattern;
 ///
 /// All fields default to the secure-by-default configuration: no prefix/suffix
 /// preservation, wide charset for fake generation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SecretOptions {
     /// Number of bytes at the start of the secret that are declared **non-secret**
     /// by the caller and will appear verbatim in the fake.
@@ -41,10 +41,32 @@ pub struct SecretOptions {
     ///
     /// Default: false.
     pub restrict_charset: bool,
+
+    /// Number of bytes taken from the start of the secret as the detection anchor.
+    /// Shorter values reduce false-positive eliminations before HMAC verification;
+    /// longer values allow faster pre-filtering. Default: 2.
+    pub start_fragment_len: usize,
+
+    /// Number of bytes taken from the end of the secret as the detection anchor.
+    /// Default: 2.
+    pub end_fragment_len: usize,
+}
+
+impl Default for SecretOptions {
+    fn default() -> Self {
+        Self {
+            preserve_prefix: 0,
+            preserve_suffix: 0,
+            restrict_charset: false,
+            start_fragment_len: 2,
+            end_fragment_len: 2,
+        }
+    }
 }
 
 /// Errors returned by registration.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SecretError {
     /// Secret is empty; there are no bytes to protect.
     #[error("secret is empty; registration requires at least 1 byte")]
@@ -107,8 +129,6 @@ pub struct RegisteredPat {
     /// detected charset otherwise.
     pub(crate) charset: Vec<u8>,
 }
-const START_FRAGMENT_LEN: usize = 8;
-const END_FRAGMENT_LEN: usize = 8;
 
 /// Register an arbitrary secret with default options and produce a registered-secret Pattern.
 ///
@@ -213,9 +233,9 @@ pub(crate) fn register_with_options_rng<R: RngCore>(
 
     let hmac_digest = hmac_sha256(&hmac_salt, secret);
 
-    let start_len = START_FRAGMENT_LEN.min(secret.len());
+    let start_len = opts.start_fragment_len.min(secret.len());
     let end_len = if secret.len() > start_len {
-        END_FRAGMENT_LEN.min(secret.len() - start_len)
+        opts.end_fragment_len.min(secret.len() - start_len)
     } else {
         0
     };
@@ -462,6 +482,7 @@ mod tests {
             preserve_prefix: 7,
             preserve_suffix: 3,
             restrict_charset: false,
+            ..Default::default()
         };
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(55)).unwrap();
         match &pat {
@@ -512,6 +533,7 @@ mod tests {
             preserve_prefix: 0,
             preserve_suffix: 0,
             restrict_charset: true,
+            ..Default::default()
         };
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(88)).unwrap();
         match &pat {
@@ -542,6 +564,7 @@ mod tests {
             preserve_prefix: 0,
             preserve_suffix: 0,
             restrict_charset: false,
+            ..Default::default()
         };
         let pattern = register_with_options(secret, &opts).unwrap();
         match &pattern {
@@ -563,6 +586,7 @@ mod derivation_param_tests {
             preserve_prefix: 7,
             preserve_suffix: 3,
             restrict_charset: true,
+            ..Default::default()
         };
         let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(42)).unwrap();
         match &pat {
