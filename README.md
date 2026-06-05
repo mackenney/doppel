@@ -3,7 +3,8 @@
 Swaps secrets from arbitrary payloads with structurally-equivalent fakes, then
 restores the originals transparently in the response.
 
-The name comes from *doppelgänger*: each fake replacing a secret is its structural twin — same format, different value.
+The name comes from *doppelgänger*: each fake replacing a secret is its structural
+twin — same format, different value.
 
 See [SPEC.md](SPEC.md) for the behavioral contract.
 
@@ -11,10 +12,10 @@ See [SPEC.md](SPEC.md) for the behavioral contract.
 
 ```
               secrets.toml
-       ┌──────────────────────────┐
-       │ [[structural]] anthropic, …   │
-       │ [[registered]]  db-password    │
-       └────────────┬─────────────┘
+     ┌─────────────────────────────┐
+     │ [[structural]] anthropic, … │
+     │ [[registered]]  db-password │
+     └──────────────┬──────────────┘
                  patterns
                     │
                ┌────▼────┐
@@ -26,7 +27,7 @@ See [SPEC.md](SPEC.md) for the behavioral contract.
                     │                        (may contain fakes)
  restored      ┌────▼────┐                            │
   payload ◀─── │ restore │◀───────────────────────────┘
-  sk-ant-REAL  └─────────┘  sk-ant-FAKE
+  sk-ant-REAL  └─────────┘     sk-ant-FAKE
 
 ```
 
@@ -59,8 +60,8 @@ them; they are not applied automatically.
 ### Registered secrets
 
 A registered pattern covers a secret that does not conform to any known structural
-class: you know the actual value and want it swapped wherever it appears. You register the full
-secret bytes; the library derives a detection fingerprint and generates a fake
+class: you know the actual value and want it swapped wherever it appears. You register
+the full secret bytes; the library derives a detection fingerprint and generates a fake
 deterministically from a salt. The original value is never stored.
 
 ```rust
@@ -78,6 +79,8 @@ let pat = register_with_options(b"MY_ORG_secretpart_END", &SecretOptions {
 `SecretOptions` lets you declare a non-secret prefix/suffix (preserved
 verbatim in the fake) and restrict the fake's character set to match the
 original's. `register` is shorthand for `register_with_options` with all defaults.
+
+Source: [`src/secrets.rs`](src/secrets.rs).
 
 ### Salt — stable fakes across runs
 
@@ -106,8 +109,8 @@ are stable across process restarts.
 doppel init --patterns secrets.toml
 ```
 
-This writes a self-describing TOML file with all built-in structural pattern definitions and
-freshly generated salts. The registered secrets list starts empty.
+This writes a self-describing TOML file with all built-in structural pattern
+definitions and freshly generated salts. The registered secrets list starts empty.
 
 **Patterns file structure:**
 
@@ -162,9 +165,9 @@ contains detection fragments. On Unix systems, all write operations (`init`,
 doppel init --patterns secrets.toml [--force]
 ```
 
-Creates a new TOML patterns file with all built-in structural pattern definitions and freshly
-generated salts. Fails if the file already exists; use `--force` to overwrite
-(warning: regenerates all salts — existing fakes become invalid).
+Creates a new TOML patterns file with all built-in structural pattern definitions
+and freshly generated salts. Fails if the file already exists; use `--force` to
+overwrite (warning: regenerates all salts — existing fakes become invalid).
 
 ### `swap` — swap a payload
 
@@ -203,9 +206,11 @@ echo -n 'my-secret-value' | doppel register \
   [--restrict-charset]
 ```
 
-Reads the secret from stdin (raw bytes, no trimming), appends a new registered-secret entry
-to the patterns file, and writes it back atomically. The secret never appears in
-command-line arguments. `--label` is required and must be unique within the file.
+Reads the secret from stdin (raw bytes, no trimming), appends a new registered-secret
+entry to the patterns file, and writes it back atomically. The secret never appears
+in command-line arguments. `--label` is required and must be unique within the file.
+
+Source: [`src/secrets.rs`](src/secrets.rs) (registration logic) · [`cli/src/main.rs`](cli/src/main.rs) (`run_register`).
 
 ### `define` — add a user-defined structural pattern
 
@@ -247,8 +252,8 @@ doppel inspect --patterns secrets.toml --label my-api-key
 
 Exactly one of `--identifier` (structural) or `--label` (registered) is required.
 Prints full detail for the matched entry: all segments and salt fingerprint (first
-8 hex chars) for structural patterns; length, charset, and derivation parameters for registered secrets.
-Does not modify the file.
+8 hex chars) for structural patterns; length, charset, and derivation parameters
+for registered secrets. Does not modify the file.
 
 ### `remove` — remove a pattern
 
@@ -267,3 +272,15 @@ detect that secret class.
 `restore` works over a stream of `Bytes` chunks. It uses suspicion-driven
 buffering: chunks are held only while a potential match is in flight, bounded by
 the longest secret length across active patterns (typically 100–200 bytes).
+
+## For the paranoid
+
+Registered secrets are stored as a detection fingerprint — `start_fragment`,
+`end_fragment`, `exact_length`, and `hmac_digest` (HMAC-SHA256 of the secret
+against a per-registration salt) — never as the plaintext value. The source of
+truth is [`src/secrets.rs`](src/secrets.rs).
+
+You can verify any registered entry against its original secret using only
+`openssl` and standard POSIX utilities, and independently reproduce the fake
+doppel will generate. See [docs/for-the-paranoid.md](docs/for-the-paranoid.md)
+for the full audit script and fake-derivation walkthrough.
