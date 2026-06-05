@@ -1,0 +1,39 @@
+[package]
+name = "doppel"
+version = "0.0.1"
+edition = "2024"
+description = "Intercept secrets in byte payloads, replace them with structurally-equivalent fakes, and transparently restore originals in streaming responses."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mackenney/doppel"
+keywords = ["secrets", "redaction", "proxy", "anonymization", "llm"]
+categories = ["cryptography", "network-programming"]
+
+[lib]
+name = "doppel"
+
+[features]
+async = ["dep:futures-core", "dep:bytes"]
+
+[dependencies]
+chacha20poly1305 = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+rand = { version = "0.8", features = ["std", "std_rng"] }
+zeroize = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+subtle = "2"
+aho-corasick = "1"
+log = "0.4"
+thiserror = "1"
+hex = "0.4"
+toml = "0.8"
+futures-core = { version = "0.3", optional = true }
+bytes = { version = "1", optional = true }
+
+[dev-dependencies]
+zeroize = { version = "1", features = ["derive"] }
+rand = { version = "0.8", features = ["std", "std_rng"] }
+tempfile = "3"
+futures = "0.3"

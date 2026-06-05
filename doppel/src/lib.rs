@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Secret swapping and streaming restoration for arbitrary byte payloads.
 //!
 //! `doppel` intercepts secrets in outbound payloads, replaces them with

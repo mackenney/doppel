@@ -1,0 +1,28 @@
+[package]
+name = "doppel-cli"
+version = "0.0.1"
+edition = "2024"
+description = "CLI for doppel: swap secrets in payloads with fakes and restore them in streaming responses."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mackenney/doppel"
+keywords = ["secrets", "redaction", "proxy", "anonymization", "llm"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "doppel"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+doppel = { path = "../doppel", version = "0.0.1" }
+clap = { version = "4", features = ["derive"] }
+zeroize = "1"
+rand = { version = "0.8", features = ["std", "std_rng"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+toml = "0.8"
+
+[features]
+test-e2e = []

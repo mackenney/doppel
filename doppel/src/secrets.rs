@@ -58,15 +58,21 @@ pub enum SecretError {
          >= secret length ({secret_len}); no variable bytes remain"
     )]
     NoVariableBytes {
+        /// The `preserve_prefix` value passed to registration.
         preserve_prefix: usize,
+        /// The `preserve_suffix` value passed to registration.
         preserve_suffix: usize,
+        /// Total byte length of the secret.
         secret_len: usize,
     },
 
     /// Fake generation failed because the charset is too small relative to the
     /// variable portion length (all candidates collided with the original).
     #[error("fake generation exhausted {attempts} attempts; charset too small for variable length")]
-    CollisionLimit { attempts: u32 },
+    CollisionLimit {
+        /// Number of derivation attempts made before giving up.
+        attempts: u32,
+    },
 }
 
 impl From<FakeError> for SecretError {
@@ -120,6 +126,10 @@ const END_FRAGMENT_LEN: usize = 8;
 /// let result = swap(secret, &[pattern]).unwrap();
 /// assert_eq!(result.entries.len(), 1);
 /// ```
+///
+/// # Errors
+///
+/// See [`register_with_options`] for the full error set.
 pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, SecretError> {
     register_with_options(secret, &SecretOptions::default())
 }
@@ -127,6 +137,12 @@ pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, SecretError> {
 /// Register an arbitrary secret with explicit options.
 ///
 /// See [`SecretOptions`] for the available knobs.
+///
+/// # Errors
+///
+/// - [`SecretError::TooShort`] if `secret` is empty.
+/// - [`SecretError::NoVariableBytes`] if `preserve_prefix + preserve_suffix >= secret.len()`.
+/// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts (charset too small).
 pub fn register_with_options(
     secret: impl AsRef<[u8]>,
     opts: &SecretOptions,

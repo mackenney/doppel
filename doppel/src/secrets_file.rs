@@ -1,3 +1,9 @@
+//! Patterns file serialization and deserialization (TOML, version 2).
+//!
+//! The [`SecretsFile`] type is the on-disk representation of structural patterns
+//! and registered secrets. Use [`SecretsFile::deserialize`] to load and
+//! [`SecretsFile::into_patterns`] to obtain [`Pattern`] values for [`crate::swap`].
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -10,17 +16,23 @@ use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
 /// Top-level patterns file structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretsFile {
+    /// File format version. Must be `2`; other values are rejected by [`SecretsFile::deserialize`].
     pub version: u64,
+    /// Structural pattern entries, one per detected secret class.
     pub structural: Vec<PatternEntry>,
+    /// Registered secret entries, one per registered secret.
     pub registered: Vec<SecretEntry>,
 }
 
 /// A structural pattern entry: identifier, salt, and optional user-defined segments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatternEntry {
+    /// Unique string identifier for this pattern class (e.g. `"anthropic"`).
     pub identifier: String,
+    /// 32-byte salt used for fake derivation; must be unique per pattern.
     #[serde(with = "hex_32")]
     pub salt: [u8; 32],
+    /// Optional segment definitions; overrides built-in segments when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segments: Option<Vec<SegmentDef>>,
 }
@@ -28,19 +40,28 @@ pub struct PatternEntry {
 /// A registered secret entry: detection fingerprint + derivation parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretEntry {
+    /// Optional human-readable label, unique within the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// First bytes of the original secret used as a detection anchor.
     #[serde(with = "hex_vec")]
     pub start_fragment: Vec<u8>,
+    /// Last bytes of the original secret used as a detection anchor.
     #[serde(with = "hex_vec")]
     pub end_fragment: Vec<u8>,
+    /// Exact byte length of the original secret.
     pub exact_length: usize,
+    /// Unique random salt used for HMAC-SHA256 verification.
     #[serde(with = "hex_32")]
     pub hmac_salt: [u8; 32],
+    /// HMAC-SHA256 digest of the original secret under `hmac_salt`.
     #[serde(with = "hex_32")]
     pub hmac_digest: [u8; 32],
+    /// Number of leading bytes preserved verbatim in the fake.
     pub preserve_prefix: usize,
+    /// Number of trailing bytes preserved verbatim in the fake.
     pub preserve_suffix: usize,
+    /// Optional byte set for fake variable bytes; `None` means the wide default.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -49,37 +70,68 @@ pub struct SecretEntry {
     pub charset: Option<Vec<u8>>,
 }
 
+/// Errors returned by [`SecretsFile`] operations.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretsFileError {
+    /// TOML serialization or deserialization error.
     #[error("{0}")]
     Toml(String),
 
+    /// The patterns file bytes are not valid UTF-8.
     #[error("invalid UTF-8 in patterns file")]
     InvalidUtf8,
 
+    /// The `version` field is not `2`.
     #[error("unsupported patterns file version: {found} (expected 2)")]
-    UnsupportedVersion { found: u64 },
+    UnsupportedVersion {
+        /// The version value that was found.
+        found: u64,
+    },
 
+    /// A structural pattern class referenced in the file is missing.
     #[error("missing structural pattern class: {class}")]
-    MissingStructuralClass { class: String },
+    MissingStructuralClass {
+        /// The identifier that was not found.
+        class: String,
+    },
 
+    /// A registered secret entry contains an invalid field value.
     #[error("invalid registered secret entry at index {index}: {reason}")]
-    InvalidRegistered { index: usize, reason: String },
+    InvalidRegistered {
+        /// Zero-based index of the invalid entry.
+        index: usize,
+        /// Description of the invalid field.
+        reason: String,
+    },
 
+    /// The supplied `Pattern` was not a registered secret.
     #[error("wrong pattern type: expected registered secret")]
     WrongPatternType,
 
+    /// Two structural pattern entries share the same identifier.
     #[error("duplicate structural pattern identifier: {identifier}")]
-    DuplicateIdentifier { identifier: String },
+    DuplicateIdentifier {
+        /// The duplicated identifier.
+        identifier: String,
+    },
 
+    /// Two registered secret entries share the same label.
     #[error("duplicate registered secret label: {label}")]
-    DuplicateLabel { label: String },
+    DuplicateLabel {
+        /// The duplicated label.
+        label: String,
+    },
 
+    /// A segment definition in a structural pattern is malformed.
     #[error("invalid segment definition: {0}")]
     InvalidSegment(#[from] crate::segment::SegmentDefError),
 
+    /// A user-defined structural pattern entry is missing its `segments` field.
     #[error("user-defined structural pattern \"{identifier}\" requires a segments field")]
-    MissingSegments { identifier: String },
+    MissingSegments {
+        /// The identifier of the entry missing segments.
+        identifier: String,
+    },
 }
 
 impl SecretsFile {
@@ -93,12 +145,26 @@ impl SecretsFile {
     }
 
     /// Serialize to TOML bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretsFileError::Toml`] if serialization fails.
     pub fn serialize(&self) -> Result<Vec<u8>, SecretsFileError> {
         let s = toml::to_string_pretty(self).map_err(|e| SecretsFileError::Toml(e.to_string()))?;
         Ok(s.into_bytes())
     }
 
     /// Deserialize from TOML bytes with validation.
+    ///
+    /// # Errors
+    ///
+    /// - [`SecretsFileError::InvalidUtf8`] if `data` is not valid UTF-8.
+    /// - [`SecretsFileError::Toml`] if TOML parsing fails.
+    /// - [`SecretsFileError::UnsupportedVersion`] if `version` is not `2`.
+    /// - [`SecretsFileError::DuplicateIdentifier`] if two structural entries share an identifier.
+    /// - [`SecretsFileError::DuplicateLabel`] if two registered entries share a label.
+    /// - [`SecretsFileError::InvalidRegistered`] if a registered entry has an invalid field.
+    /// - [`SecretsFileError::InvalidSegment`] if a segment definition is malformed.
     pub fn deserialize(data: &[u8]) -> Result<Self, SecretsFileError> {
         let s = std::str::from_utf8(data).map_err(|_| SecretsFileError::InvalidUtf8)?;
         let file: SecretsFile =
@@ -178,6 +244,11 @@ impl SecretsFile {
     ///   `MissingSegments`.
     ///
     /// Built-in identifiers absent from the file are silently skipped (INV-32).
+    ///
+    /// # Errors
+    ///
+    /// - [`SecretsFileError::MissingSegments`] if a non-built-in identifier has no `segments` field.
+    /// - [`SecretsFileError::InvalidSegment`] if a segment definition is malformed.
     pub fn into_patterns(self) -> Result<Vec<Pattern>, SecretsFileError> {
         use crate::segment::Segment;
 
@@ -235,6 +306,11 @@ impl SecretsFile {
 
     /// Extract a registered secret entry from a Pattern and append it to this file.
     /// Returns error if the pattern is not a registered secret or if the label is a duplicate.
+    ///
+    /// # Errors
+    ///
+    /// - [`SecretsFileError::WrongPatternType`] if `pattern` is not a registered secret.
+    /// - [`SecretsFileError::DuplicateLabel`] if `label` is already present in the file.
     pub fn add_secret_pattern(
         &mut self,
         pattern: &Pattern,
@@ -282,6 +358,11 @@ impl SecretsFile {
     /// The caller provides a pre-generated salt. Validates:
     /// - Identifier uniqueness (INV-31)
     /// - Segment list validity (INV-30: at least one Variable, valid charsets, min <= max)
+    ///
+    /// # Errors
+    ///
+    /// - [`SecretsFileError::DuplicateIdentifier`] if `identifier` already exists.
+    /// - [`SecretsFileError::InvalidSegment`] if the segment list fails validation.
     pub fn add_structural_entry(
         &mut self,
         identifier: String,

@@ -1,3 +1,5 @@
+//! Core types: [`SessionKey`], [`Entry`], [`SwapResult`], and error enums.
+
 use serde::{Deserialize, Serialize};
 use zeroize::ZeroizeOnDrop;
 
@@ -12,6 +14,7 @@ impl SessionKey {
         Self(Box::new(bytes))
     }
 
+    /// Return the raw 32-byte key. For use in crypto operations only; do not log or serialize.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -49,18 +52,30 @@ impl Entry {
 
 /// Result of a swap() call.
 pub struct SwapResult {
+    /// The input payload with every detected secret replaced by a structurally-equivalent fake.
     pub payload: Vec<u8>,
+    /// One entry per distinct secret detected; each entry holds the encrypted original and the fake bytes used.
     pub entries: Vec<Entry>,
+    /// Session key needed to decrypt entries during restore. Keep locally; never transmit.
     pub session_key: SessionKey,
 }
 
+/// Errors returned by [`swap`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SwapError {
+    /// AEAD encryption of a detected secret failed.
     #[error("encryption failed: {msg}")]
-    Crypto { msg: String },
+    Crypto {
+        /// Description of the encryption failure.
+        msg: String,
+    },
+    /// Fake generation for a detected secret failed.
     #[error("fake generation failed: {msg}")]
-    Fake { msg: String },
+    Fake {
+        /// Description of the generation failure.
+        msg: String,
+    },
 }
 
 impl From<crate::crypto::Error> for SwapError {

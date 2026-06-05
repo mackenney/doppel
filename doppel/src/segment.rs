@@ -1,3 +1,8 @@
+//! Segment types for structural pattern definitions.
+//!
+//! [`Segment`] is the runtime representation; [`SegmentDef`] is the serializable
+//! TOML form. [`BuiltinSegment`] is the `const`-friendly form used in static arrays.
+
 use serde::{Deserialize, Serialize};
 /// A single structural element of a built-in structural pattern.
 ///
@@ -153,12 +158,18 @@ impl CharsetName {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SegmentDef {
+    /// A fixed byte string that must appear verbatim in this position.
     Literal {
+        /// The literal byte string as a UTF-8 string.
         value: String,
     },
+    /// A variable-length run of bytes from a named charset.
     Variable {
+        /// Name of the charset (e.g. `"alphanumeric"`, `"url_safe_base64"`).
         charset: String,
+        /// Minimum number of bytes in this segment (inclusive).
         min: usize,
+        /// Maximum number of bytes in this segment (inclusive).
         max: usize,
     },
 }
@@ -199,25 +210,41 @@ pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDe
     Ok(())
 }
 
+/// Errors returned by [`validate_segment_defs`] and [`Segment::from_def`].
 #[derive(Debug, thiserror::Error)]
 pub enum SegmentDefError {
+    /// The segment list contains no `Variable` segments.
     #[error("segment list must contain at least one variable segment")]
     NoVariableSegment,
 
+    /// A `Variable` segment references an unrecognised charset name.
     #[error(
         "unknown charset \"{name}\" in segment {index}; valid: alphanumeric, url_safe_base64, uppercase_alphanumeric, digits, hex_lower"
     )]
-    UnknownCharset { index: usize, name: String },
+    UnknownCharset {
+        /// Zero-based index of the offending segment.
+        index: usize,
+        /// The unrecognised charset name.
+        name: String,
+    },
 
+    /// A `Variable` segment has `min > max`.
     #[error("segment {index}: min ({min}) must not exceed max ({max})")]
     MinExceedsMax {
+        /// Zero-based index of the offending segment.
         index: usize,
+        /// The `min` value that was given.
         min: usize,
+        /// The `max` value that was given.
         max: usize,
     },
 
+    /// A `Variable` segment has `min < 1`.
     #[error("segment {index}: min must be at least 1")]
-    MinTooSmall { index: usize },
+    MinTooSmall {
+        /// Zero-based index of the offending segment.
+        index: usize,
+    },
 }
 
 #[cfg(test)]

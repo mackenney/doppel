@@ -1,3 +1,8 @@
+//! Built-in structural patterns and per-call constructor functions.
+//!
+//! Each `pub fn` in this module returns a [`Pattern`] with an ephemeral salt.
+//! For persistent cross-restart fake stability, use [`crate::SecretsFile::into_patterns`].
+
 use crate::secrets::RegisteredPat;
 use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use aho_corasick::AhoCorasick;
@@ -473,7 +478,9 @@ pub(crate) fn prefix_filter() -> &'static AhoCorasick {
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum Pattern {
+    /// Structural pattern: matched by walking payload bytes against a segment list.
     Structural(StructuralDef),
+    /// Registered pattern: matched by start/end fragment + HMAC verification.
     Registered(Arc<RegisteredPat>),
 }
 
@@ -483,7 +490,6 @@ impl Pattern {
     }
 }
 
-/// Built-in structural patterns. Pass these to swap() to detect well-known API key formats (structural patterns).
 use rand::RngCore;
 use rand::rngs::OsRng;
 
@@ -505,6 +511,9 @@ pub fn anthropic() -> Pattern {
     })
 }
 
+/// Returns an Anthropic Admin v1 key pattern (`sk-ant-admin01-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn anthropic_admin01() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -512,6 +521,9 @@ pub fn anthropic_admin01() -> Pattern {
     })
 }
 
+/// Returns an Anthropic Admin v3 key pattern (`sk-ant-admin03-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn anthropic_admin03() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -519,6 +531,9 @@ pub fn anthropic_admin03() -> Pattern {
     })
 }
 
+/// Returns an OpenAI classic secret key pattern (`sk-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn openai_classic() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -526,6 +541,9 @@ pub fn openai_classic() -> Pattern {
     })
 }
 
+/// Returns an OpenAI project key pattern (`sk-proj-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn openai_project() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -533,6 +551,9 @@ pub fn openai_project() -> Pattern {
     })
 }
 
+/// Returns an OpenAI service account key pattern (`sk-svcacct-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn openai_svcacct() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -540,6 +561,9 @@ pub fn openai_svcacct() -> Pattern {
     })
 }
 
+/// Returns an AWS IAM access key ID pattern (`AKIA`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn aws_akia() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -547,6 +571,9 @@ pub fn aws_akia() -> Pattern {
     })
 }
 
+/// Returns an AWS STS temporary credential pattern (`ASIA`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn aws_asia() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -554,6 +581,9 @@ pub fn aws_asia() -> Pattern {
     })
 }
 
+/// Returns a GitHub classic personal access token pattern (`ghp_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn github_classic() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -561,6 +591,9 @@ pub fn github_classic() -> Pattern {
     })
 }
 
+/// Returns a GitHub fine-grained personal access token pattern (`github_pat_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn github_fine_grained() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -568,6 +601,9 @@ pub fn github_fine_grained() -> Pattern {
     })
 }
 
+/// Returns a GCP/Gemini API key pattern (`AIza`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn gcp() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -575,6 +611,9 @@ pub fn gcp() -> Pattern {
     })
 }
 
+/// Returns an OpenRouter API key pattern (`sk-or-v1-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn openrouter() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -582,6 +621,9 @@ pub fn openrouter() -> Pattern {
     })
 }
 
+/// Returns a Google OAuth client secret pattern (`GOCSPX-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn google_oauth_secret() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -589,6 +631,9 @@ pub fn google_oauth_secret() -> Pattern {
     })
 }
 
+/// Returns a Slack bot token pattern (`xoxb-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn slack_bot() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),
@@ -596,6 +641,9 @@ pub fn slack_bot() -> Pattern {
     })
 }
 
+/// Returns a Linear API key pattern (`lin_api_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
 pub fn linear() -> Pattern {
     Pattern::Structural(StructuralDef {
         salt: random_salt(),

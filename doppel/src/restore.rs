@@ -5,14 +5,24 @@ use aho_corasick::{AhoCorasick, MatchKind};
 use crate::restore_core::process_safe_region;
 use crate::types::{Entry, SessionKey};
 
+/// Errors returned by [`restore`] and [`restore_stream`].
 #[derive(Debug, thiserror::Error)]
 pub enum RestoreError {
+    /// AEAD tag verification failed for the given entry.
     #[error("AEAD tag verification failed for entry {entry_index}")]
-    AeadTagFailure { entry_index: usize },
+    AeadTagFailure {
+        /// Zero-based index of the entry whose tag did not verify.
+        entry_index: usize,
+    },
+    /// An I/O error occurred reading input or writing output.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// The Aho-Corasick automaton could not be built from the provided entries.
     #[error("failed to build Aho-Corasick automaton: {msg}")]
-    Build { msg: String },
+    Build {
+        /// Description of the build failure.
+        msg: String,
+    },
 }
 
 impl From<aho_corasick::BuildError> for RestoreError {
