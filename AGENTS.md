@@ -11,14 +11,17 @@ behavior must have a corresponding spec document before code is written.
 ## Workspace layout
 
 ```
-src/               Library source (lib crate: doppel)
-cli/               CLI crate (doppel-cli)
-tests/             Lib spec-invariant and integration tests
-  spec/            Spec-invariant test modules (entry: tests/spec.rs)
-  integration/     Integration test modules (entry: tests/integration.rs)
-cli/tests/         CLI spec and e2e tests
-  cli_spec/        CLI spec-invariant modules (entry: cli/tests/cli_spec.rs)
-  e2e/             E2e test modules (entry: cli/tests/e2e.rs)
+doppel/            Library crate (doppel)
+  src/             Library source
+  tests/           Lib spec-invariant and integration tests
+    spec/          Spec-invariant test modules (entry: doppel/tests/spec.rs)
+    integration/   Integration test modules (entry: doppel/tests/integration.rs)
+doppel-cli/        CLI crate (doppel-cli)
+  src/             CLI source
+  tests/           CLI spec and e2e tests
+    cli_spec/      CLI spec-invariant modules (entry: doppel-cli/tests/cli_spec.rs)
+    e2e/           E2e test modules (entry: doppel-cli/tests/e2e.rs)
+docs/              Supplementary documentation (e.g. for-the-paranoid.md)
 plans/             Active development plans — each plan directory holds step
                    files and PROGRESS.md while work is in progress; the entire
                    directory is deleted when the plan completes
@@ -26,6 +29,13 @@ artifacts/         Transient working files — git-ignored, never committed
   investigations/  Scanner / librarian output
   fact-checks/     Fact-check sub-artifacts and reports
   progress/        Orchestrator progress files
+.wt/               Git worktrees (convention for this repo)
+.config/           Tool configuration (nextest.toml)
+Cargo.toml         Workspace manifest
+Cargo.lock         Locked dependency versions
+clippy.toml        Clippy configuration
+rustfmt.toml       Rustfmt configuration
+secrets-example.toml  Example patterns file
 MASTER_PROGRESS.md Single source of truth for project-wide work status
 SPEC.md            Behavioral contract for the full system
 ```
@@ -92,7 +102,7 @@ current state.
    Never fix a discovered defect without a test that would have caught it.
 
 3. **Security invariants are non-negotiable.** Any test that verifies a security
-   property from SPEC.md Behavioral Invariants §1–23 is a spec-invariant test.
+   property from SPEC.md §Behavioral Invariants is a spec-invariant test.
    These MUST pass on every commit. Weakening them requires an explicit spec
    change rationale.
 
@@ -108,10 +118,10 @@ current state.
 
 | Tier | Entry point | Subdirectory | What it covers |
 |---|---|---|---|
-| **Spec invariants (lib)** | `tests/spec.rs` | `tests/spec/` | Library SPEC.md MUST/MUST NOT invariants |
-| **Spec invariants (CLI)** | `cli/tests/cli_spec.rs` | `cli/tests/cli_spec/` | CLI-specific SPEC.md invariants (INV-20, INV-21) |
-| **Integration** | `tests/integration.rs` | `tests/integration/` | Public-API behavior: full swap→restore cycles, streaming edge cases |
-| **E2E** | `cli/tests/e2e.rs` | `cli/tests/e2e/` | CLI process boundary tests; gated by `--features test-e2e` |
+| **Spec invariants (lib)** | `doppel/tests/spec.rs` | `doppel/tests/spec/` | Library SPEC.md MUST/MUST NOT invariants |
+| **Spec invariants (CLI)** | `doppel-cli/tests/cli_spec.rs` | `doppel-cli/tests/cli_spec/` | CLI-specific SPEC.md invariants |
+| **Integration** | `doppel/tests/integration.rs` | `doppel/tests/integration/` | Public-API behavior: full swap→restore cycles, streaming edge cases |
+| **E2E** | `doppel-cli/tests/e2e.rs` | `doppel-cli/tests/e2e/` | CLI process boundary tests; gated by `--features test-e2e` |
 
 Inline unit tests (`#[cfg(test)]` in `src/`) test implementation internals and
 carry no stability guarantee — change freely during refactoring.
@@ -124,14 +134,14 @@ carry no stability guarantee — change freely during refactoring.
 // Spec: SPEC.md §Behavioral Invariants
 
 #[test]
-fn test_inv1_swap_replaces_every_detected_secret() {
-    // INV-1: "swap MUST replace every secret detected by the supplied Patterns
-    //         with a structurally-equivalent fake."
+fn test_swap_replaces_every_detected_secret() {
+    // "swap MUST replace every secret detected by the supplied Patterns
+    //  with a structurally-equivalent fake." — SPEC.md §Behavioral Invariants
     ...
 }
 ```
 
-The `invN` number matches the invariant number in SPEC.md Behavioral Invariants.
+Function names describe the invariant in plain English; no sequential numbering.
 
 **Verifiable Condition tests** — map directly to integration tests:
 
