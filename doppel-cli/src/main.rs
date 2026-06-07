@@ -491,6 +491,10 @@ fn format_pattern_segments(entry: &doppel::PatternEntry) -> String {
                         format!("<{}-{} {}>", min, max, charset)
                     }
                 }
+                doppel::segment::SegmentDef::Opaque { value, charset } => {
+                    let cs = charset.as_deref().unwrap_or("alphanumeric");
+                    format!("[opaque:{} {}]", cs, value)
+                }
             })
             .collect::<Vec<_>>()
             .join(" "),
@@ -550,6 +554,14 @@ fn run_inspect(
                                 charset,
                                 min,
                                 max
+                            );
+                        }
+                        doppel::segment::SegmentDef::Opaque { value, charset } => {
+                            println!(
+                                "    {}. opaque value={} charset={}",
+                                i + 1,
+                                value,
+                                charset.as_deref().unwrap_or("alphanumeric")
                             );
                         }
                     }

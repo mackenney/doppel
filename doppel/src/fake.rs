@@ -191,6 +191,18 @@ pub(crate) fn hex_lower_ref() -> &'static Charset {
     &HEX_LOWER
 }
 
+pub(crate) static WIDE: LazyLock<Charset> = LazyLock::new(|| {
+    let bytes: &'static [u8] = Box::leak(charsets::wide().into_boxed_slice());
+    Charset {
+        bitmap: build_bitmap(bytes),
+        bytes,
+    }
+});
+
+pub(crate) fn wide_ref() -> &'static Charset {
+    &WIDE
+}
+
 fn derive_fake_core(
     salt: &[u8; 32],
     original: &[u8],
@@ -305,6 +317,7 @@ pub(crate) fn derive_fake_structural_segments(
                     len += variable_lengths[var_idx];
                     var_idx += 1;
                 }
+                Segment::Opaque { value, .. } => len += value.len(),
             }
         }
         len
@@ -342,6 +355,7 @@ pub(crate) fn derive_fake_structural_segments(
                         fake.push(cs.bytes()[idx]);
                     }
                 }
+                Segment::Opaque { value, .. } => fake.extend_from_slice(value),
             }
         }
 

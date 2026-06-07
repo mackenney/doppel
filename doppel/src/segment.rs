@@ -24,6 +24,12 @@ pub(crate) enum BuiltinSegment {
         min: usize,
         max: usize,
     },
+    /// Fixed bytes for detection, but derived (not verbatim) in fake generation.
+    /// Charset defaults to detected from value bytes; can be overridden.
+    Opaque {
+        value: &'static [u8],
+        charset: CharsetName,
+    },
 }
 
 /// Owned segment used at runtime by `StructuralDef`, `match_segments`, and fake derivation.
@@ -39,6 +45,12 @@ pub(crate) enum Segment {
         min: usize,
         max: usize,
     },
+    /// Fixed bytes for detection, derived bytes for fake generation.
+    /// See SPEC.md §Segment Types: opaque segment.
+    Opaque {
+        value: Vec<u8>,
+        charset: CharsetName,
+    },
 }
 
 impl From<&BuiltinSegment> for Segment {
@@ -49,6 +61,10 @@ impl From<&BuiltinSegment> for Segment {
                 charset: *charset,
                 min: *min,
                 max: *max,
+            },
+            BuiltinSegment::Opaque { value, charset } => Segment::Opaque {
+                value: value.to_vec(),
+                charset: *charset,
             },
         }
     }
@@ -73,6 +89,22 @@ impl Segment {
                     max: *max,
                 })
             }
+            SegmentDef::Opaque { value, charset } => {
+                let value_bytes = value.as_bytes().to_vec();
+                let charset_name = match charset {
+                    Some(name) => CharsetName::from_name(name).ok_or_else(|| {
+                        SegmentDefError::UnknownCharset {
+                            index: 0,
+                            name: name.clone(),
+                        }
+                    })?,
+                    None => CharsetName::Alphanumeric,
+                };
+                Ok(Segment::Opaque {
+                    value: value_bytes,
+                    charset: charset_name,
+                })
+            }
         }
     }
 
@@ -86,6 +118,10 @@ impl Segment {
                 charset: charset.as_str().to_string(),
                 min: *min,
                 max: *max,
+            },
+            Segment::Opaque { value, charset } => SegmentDef::Opaque {
+                value: String::from_utf8_lossy(value).into_owned(),
+                charset: Some(charset.as_str().to_owned()),
             },
         }
     }
@@ -112,6 +148,7 @@ pub(crate) enum CharsetName {
     UppercaseAlphanumeric,
     Digits,
     HexLower,
+    Wide,
 }
 
 impl CharsetName {
@@ -123,6 +160,7 @@ impl CharsetName {
             CharsetName::UppercaseAlphanumeric => crate::fake::uppercase_alphanumeric_ref(),
             CharsetName::Digits => crate::fake::digits_ref(),
             CharsetName::HexLower => crate::fake::hex_lower_ref(),
+            CharsetName::Wide => crate::fake::wide_ref(),
         }
     }
 
@@ -134,6 +172,7 @@ impl CharsetName {
             "uppercase_alphanumeric" => Some(CharsetName::UppercaseAlphanumeric),
             "digits" => Some(CharsetName::Digits),
             "hex_lower" => Some(CharsetName::HexLower),
+            "wide" => Some(CharsetName::Wide),
             _ => None,
         }
     }
@@ -146,6 +185,7 @@ impl CharsetName {
             CharsetName::UppercaseAlphanumeric => "uppercase_alphanumeric",
             CharsetName::Digits => "digits",
             CharsetName::HexLower => "hex_lower",
+            CharsetName::Wide => "wide",
         }
     }
 }
@@ -172,6 +212,15 @@ pub enum SegmentDef {
         /// Maximum number of bytes in this segment (inclusive).
         max: usize,
     },
+    /// Opaque segment: exact detection, charset-derived in fake.
+    /// charset is optional; default is detected from value bytes.
+    Opaque {
+        /// The opaque byte string as a UTF-8 string (used for exact detection).
+        value: String,
+        /// Charset for fake generation. `None` defaults to `Alphanumeric`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        charset: Option<String>,
+    },
 }
 
 /// Validate a list of segment definitions per SPEC.md §Behavioral Invariants.
@@ -183,6 +232,15 @@ pub enum SegmentDef {
 /// - All Variable segments have min >= 1
 pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDefError> {
     let mut has_variable = false;
+    match defs.first() {
+        Some(SegmentDef::Literal { .. }) | Some(SegmentDef::Opaque { .. }) => {}
+        Some(SegmentDef::Variable { .. }) => {
+            return Err(SegmentDefError::FirstSegmentVariable);
+        }
+        None => {
+            return Err(SegmentDefError::EmptySegmentList);
+        }
+    }
     for (i, def) in defs.iter().enumerate() {
         if let SegmentDef::Variable { charset, min, max } = def {
             has_variable = true;
@@ -246,6 +304,14 @@ pub enum SegmentDefError {
         /// Zero-based index of the offending segment.
         index: usize,
     },
+
+    /// The first segment is a Variable segment (must be Literal or Opaque; INV-30).
+    #[error("first segment must be literal or opaque, not variable")]
+    FirstSegmentVariable,
+
+    /// The segment list is empty.
+    #[error("segment list must not be empty")]
+    EmptySegmentList,
 }
 
 #[cfg(test)]

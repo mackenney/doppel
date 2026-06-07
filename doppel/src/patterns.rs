@@ -79,6 +79,14 @@ fn match_segments(
             }
             None
         }
+        Segment::Opaque { value, .. } => {
+            let end = cur + value.len();
+            if payload.get(cur..end)? == value.as_slice() {
+                match_segments(payload, end, &segs[1..], var_lens)
+            } else {
+                None
+            }
+        }
     }
 }
 
