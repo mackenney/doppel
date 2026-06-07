@@ -52,6 +52,8 @@ fn test_inv31_define_rejects_duplicate_identifier() {
             "--identifier",
             "MY_PAT",
             "--segment",
+            "literal:prefix_",
+            "--segment",
             "variable:alphanumeric:10:10",
         ])
         .output()
@@ -61,7 +63,14 @@ fn test_inv31_define_rejects_duplicate_identifier() {
     let output = cli_bin()
         .args(["define", "--patterns"])
         .arg(&pat)
-        .args(["--identifier", "MY_PAT", "--segment", "variable:digits:5:5"])
+        .args([
+            "--identifier",
+            "MY_PAT",
+            "--segment",
+            "literal:other_",
+            "--segment",
+            "variable:digits:5:5",
+        ])
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -116,7 +125,7 @@ fn test_register_requires_label() {
     let output = cli_bin()
         .args(["register", "--patterns"])
         .arg(&pat)
-        .args(["--preserve-prefix", "0", "--preserve-suffix", "0"])
+        .args(["--anchor-len", "3"])
         .stdin(std::process::Stdio::null())
         .output()
         .unwrap();
@@ -136,6 +145,8 @@ fn test_define_rejects_unknown_charset() {
         .args([
             "--identifier",
             "BAD",
+            "--segment",
+            "literal:prefix_",
             "--segment",
             "variable:bogus_charset:5:5",
         ])
@@ -157,9 +168,9 @@ fn test_list_shows_all_entries() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Structural patterns:"), "stdout: {stdout}");
+    assert!(stdout.contains("Patterns:"), "stdout: {stdout}");
     assert!(stdout.contains("anthropic"), "stdout: {stdout}");
-    assert!(stdout.contains("Registered secrets:"), "stdout: {stdout}");
+    assert!(stdout.contains("[family]"), "stdout: {stdout}");
 }
 
 #[test]

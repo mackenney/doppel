@@ -47,8 +47,12 @@ fn generate_fake_for_match(
             secret,
         )
     } else {
-        // Instance pattern fake generation is reworked in step-04.
-        todo!("instance pattern fake generation — step-04")
+        crate::fake::derive_fake_structural_segments(
+            &pattern.salt,
+            &pattern.segments,
+            &capture.variable_lengths,
+            secret,
+        )
     }
 }
 

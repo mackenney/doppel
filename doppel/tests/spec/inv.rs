@@ -862,39 +862,40 @@ fn test_inv25_register_empty_secret_returns_tooshort() {
 
 #[test]
 fn test_inv25_register_no_variable_bytes_returns_error() {
-    // INV-25: preserve_prefix + preserve_suffix >= secret.len() → NoVariableBytes.
+    // INV-25: anchor_len + tail_anchor_len >= secret.len() → NoVariableBytes.
     use doppel::{SecretError, SecretOptions, register_with_options};
     let secret = b"abcdefgh"; // 8 bytes
     let opts = SecretOptions {
-        preserve_prefix: 5,
-        preserve_suffix: 3,
+        anchor_len: 5,
+        tail_anchor_len: 3,
         restrict_charset: false,
         ..Default::default()
     };
     let result = register_with_options(secret, &opts);
     assert!(
         matches!(result, Err(SecretError::NoVariableBytes { .. })),
-        "INV-25: fully-preserved secret must yield NoVariableBytes"
+        "INV-25: fully-anchored secret must yield NoVariableBytes"
     );
 }
 
 #[test]
-fn test_inv26_register_short_variable_portion_succeeds() {
-    // INV-26: variable portion < 14 bytes → MUST emit log::warn diagnostic.
+fn test_inv26_register_low_entropy_warns_but_succeeds() {
+    // INV-26: 83 <= entropy < 131 bits → MUST emit log::warn diagnostic.
     // This test verifies the function succeeds; log capture not yet wired.
     // TODO: add log-capture assertion when a test logger harness is available.
     use doppel::{SecretOptions, register_with_options};
-    let secret = b"PREFIX_secret"; // 13 bytes, preserve_prefix=7 → variable=6 < 14
+    // 17-byte secret, anchor_len=3 → 14 middle bytes
+    // entropy = 14 * log2(72) ≈ 86.4 bits (83 <= 86.4 < 131) → warns but succeeds.
+    let secret = b"abc01234567890123"; // 17 bytes
     let opts = SecretOptions {
-        preserve_prefix: 7,
-        preserve_suffix: 0,
+        anchor_len: 3,
         restrict_charset: false,
         ..Default::default()
     };
     let result = register_with_options(secret, &opts);
     assert!(
         result.is_ok(),
-        "INV-26: registration with short variable portion must succeed (got warning)"
+        "INV-26: registration with entropy in [83, 131) must succeed (got warning)"
     );
 }
 
@@ -906,8 +907,6 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
     use doppel::{SecretOptions, register_with_options};
     let secret = b"myAlphaNumericSecret123";
     let opts = SecretOptions {
-        preserve_prefix: 0,
-        preserve_suffix: 0,
         restrict_charset: false,
         ..Default::default()
     };
@@ -947,11 +946,16 @@ fn test_inv31_duplicate_identifier_rejected() {
     use doppel::{SecretsFile, segment::SegmentDef};
     let mut pf = SecretsFile::new();
     pf.generate_missing_structural_salts();
-    let segs = vec![SegmentDef::Variable {
-        charset: "alphanumeric".into(),
-        min: 10,
-        max: 10,
-    }];
+    let segs = vec![
+        SegmentDef::Literal {
+            value: "prefix_".into(),
+        },
+        SegmentDef::Variable {
+            charset: "alphanumeric".into(),
+            min: 10,
+            max: 10,
+        },
+    ];
     pf.add_structural_entry("my_custom".into(), segs.clone(), [1u8; 32])
         .unwrap();
     let err = pf
@@ -968,34 +972,33 @@ fn test_inv32_missing_builtin_is_allowed() {
     // INV-32: "Removing a built-in structural identifier from the patterns file is permitted"
     use doppel::SecretsFile;
     let pf = SecretsFile {
-        version: 2,
-        structural: vec![],
-        registered: vec![],
+        version: 3,
+        pattern: vec![],
     };
     let patterns = pf.to_patterns().unwrap();
     assert_eq!(
         patterns.len(),
         0,
-        "INV-32: empty structural list must produce zero patterns"
+        "INV-32: empty pattern list must produce zero patterns"
     );
 }
 
 #[test]
-fn test_inv33_version_must_be_2() {
-    // INV-33: "The patterns file version MUST be 2"
+fn test_inv33_version_must_be_3() {
+    // INV-33: "The patterns file version MUST be 3"
     use doppel::SecretsFile;
-    let data = b"version = 1\nstructural = []\nregistered = []\n";
+    let data = b"version = 1\npattern = []\n";
     let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),
         "INV-33: version 1 must be rejected"
     );
 
-    let data = b"version = 3\nstructural = []\nregistered = []\n";
+    let data = b"version = 2\npattern = []\n";
     let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),
-        "INV-33: version 3 must be rejected"
+        "INV-33: version 2 must be rejected"
     );
 }
 
@@ -1012,16 +1015,10 @@ fn test_inv25_collision_limit_path_exists() {
     //
     // A synthetic collision test would require reverse-engineering the HMAC-based
     // derivation to find a secret that maps to itself — not feasible.
-    use doppel::{SecretError, SecretOptions, register_with_options};
+    use doppel::{SecretError, register_with_options};
     let secret = b"short-but-valid-secret-value";
-    let opts = SecretOptions {
-        preserve_prefix: 0,
-        preserve_suffix: 0,
-        restrict_charset: false,
-        ..Default::default()
-    };
     // Succeeds because no collision occurs for this secret.
-    let _ = register_with_options(secret, &opts).unwrap();
+    let _ = register_with_options(secret, &Default::default()).unwrap();
     // Verify the CollisionLimit variant is discriminable (not dead code).
     let err: SecretError = SecretError::CollisionLimit { attempts: 1 };
     assert!(

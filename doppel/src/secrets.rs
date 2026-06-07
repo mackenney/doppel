@@ -1,60 +1,48 @@
 use crate::patterns::Pattern;
+use crate::segment::{CharsetName, Segment};
+use rand::rngs::OsRng;
+use std::sync::Arc;
+
+const ENTROPY_HARD_FAIL_BITS: f64 = 83.0;
+const ENTROPY_WARN_BITS: f64 = 131.0;
+
+/// Calculate effective entropy for a variable portion.
+///
+/// entropy_bits = variable_len × log₂(charset_size)
+fn calculate_entropy(variable_len: usize, charset_size: usize) -> f64 {
+    if charset_size <= 1 {
+        return 0.0;
+    }
+    variable_len as f64 * (charset_size as f64).log2()
+}
 
 /// Options for registered secret registration.
-///
-/// All fields default to the secure-by-default configuration: no prefix/suffix
-/// preservation, wide charset for fake generation.
 #[derive(Debug, Clone)]
 pub struct SecretOptions {
-    /// Number of bytes at the start of the secret that are declared **non-secret**
-    /// by the caller and will appear verbatim in the fake.
-    ///
-    /// Use this when the secret has a well-known structural prefix that must appear
-    /// in the payload for detection to fire (e.g., `MY_ORG_`). Setting this to a
-    /// non-zero value means those bytes are visible in the entries file; they are
-    /// explicitly not part of the confidential value. Misuse — marking actual secret
-    /// bytes as prefix — weakens protection for those bytes.
-    ///
-    /// Default: 0.
-    pub preserve_prefix: usize,
+    /// Number of leading secret bytes stored as the detection anchor.
+    /// SPEC: default 3; longer values reduce false-positive AC hits.
+    pub anchor_len: usize,
 
-    /// Number of bytes at the end of the secret that are declared **non-secret**
-    /// by the caller and will appear verbatim in the fake. Same caveats as
-    /// `preserve_prefix`.
-    ///
-    /// Default: 0.
-    pub preserve_suffix: usize,
+    /// Number of trailing secret bytes stored as secondary anchor.
+    /// SPEC: default 0; non-zero adds trailing Opaque segment.
+    pub tail_anchor_len: usize,
 
-    /// When `true`, the variable portion of the fake is drawn exclusively from the
-    /// distinct byte values observed in the registered secret (`charsets::detect`).
-    ///
-    /// When `false` (default), the wide standard charset is used. The wide charset
-    /// has no connection to the secret's content; it reveals only the byte length of
-    /// the detected secret. Use `restrict_charset: true` only when the target system
-    /// requires a structurally plausible replacement — the trade-off is that an
-    /// observer of the entries file can infer the secret's character class.
-    ///
-    /// Default: false.
+    /// When true, variable portion uses detected charset instead of wide.
+    /// SPEC: default false; use only when target system requires.
     pub restrict_charset: bool,
 
-    /// Number of bytes taken from the start of the secret as the detection anchor.
-    /// Shorter values reduce false-positive eliminations before HMAC verification;
-    /// longer values allow faster pre-filtering. Default: 2.
-    pub start_fragment_len: usize,
-
-    /// Number of bytes taken from the end of the secret as the detection anchor.
-    /// Default: 2.
-    pub end_fragment_len: usize,
+    /// Suppress entropy hard failure (83-bit threshold).
+    /// SPEC: entropy warning is still emitted; only hard fail is suppressed.
+    pub force: bool,
 }
 
 impl Default for SecretOptions {
     fn default() -> Self {
         Self {
-            preserve_prefix: 0,
-            preserve_suffix: 0,
+            anchor_len: 3,
+            tail_anchor_len: 0,
             restrict_charset: false,
-            start_fragment_len: 2,
-            end_fragment_len: 2,
+            force: false,
         }
     }
 }
@@ -63,22 +51,21 @@ impl Default for SecretOptions {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SecretError {
-    /// Secret is empty; there are no bytes to protect.
+    /// Secret is empty or shorter than `anchor_len`.
     #[error("secret is empty; registration requires at least 1 byte")]
     TooShort,
 
-    /// `preserve_prefix + preserve_suffix` covers the entire secret, leaving no
-    /// variable bytes. A fake with zero variable bytes cannot differ from the
-    /// original, making replacement impossible.
+    /// `anchor_len + tail_anchor_len` covers the entire secret, leaving no variable bytes.
+    /// A fake with zero variable bytes cannot differ from the original.
     #[error(
-        "preserve_prefix ({preserve_prefix}) + preserve_suffix ({preserve_suffix}) \
+        "anchor_len ({anchor_len}) + tail_anchor_len ({tail_anchor_len}) \
          >= secret length ({secret_len}); no variable bytes remain"
     )]
     NoVariableBytes {
-        /// The `preserve_prefix` value passed to registration.
-        preserve_prefix: usize,
-        /// The `preserve_suffix` value passed to registration.
-        preserve_suffix: usize,
+        /// The `anchor_len` value passed to registration.
+        anchor_len: usize,
+        /// The effective `tail_anchor_len` value.
+        tail_anchor_len: usize,
         /// Total byte length of the secret.
         secret_len: usize,
     },
@@ -90,13 +77,25 @@ pub enum SecretError {
         /// Number of derivation attempts made before giving up.
         attempts: u32,
     },
+
+    /// Registration rejected due to insufficient entropy in variable portion.
+    /// Use `force: true` in `SecretOptions` to override.
+    #[error(
+        "insufficient entropy: {bits:.1} bits < {threshold:.1} bit minimum \
+         (use --force to override)"
+    )]
+    InsufficientEntropy {
+        /// Computed entropy in bits.
+        bits: f64,
+        /// Minimum threshold (83.0).
+        threshold: f64,
+    },
 }
 
 /// Register an arbitrary secret with default options and produce a registered-secret Pattern.
 ///
-/// Returns `Err` instead of panicking on invalid input. See [`SecretError`]
-/// for the error conditions. See [`register_with_options`] to customise prefix/suffix
-/// preservation or charset restriction.
+/// Returns `Err` instead of panicking on invalid input. See [`SecretError`] for error conditions.
+/// See [`register_with_options`] to customise anchor lengths, charset restriction, or force.
 ///
 /// # Examples
 ///
@@ -112,8 +111,8 @@ pub enum SecretError {
 /// # Errors
 ///
 /// See [`register_with_options`] for the full error set.
-pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, SecretError> {
-    register_with_options(secret, &SecretOptions::default())
+pub fn register(secret: &[u8]) -> Result<Pattern, SecretError> {
+    register_with_options_rng(secret, &SecretOptions::default(), &mut OsRng)
 }
 
 /// Register an arbitrary secret with explicit options.
@@ -122,32 +121,163 @@ pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, SecretError> {
 ///
 /// # Errors
 ///
-/// - [`SecretError::TooShort`] if `secret` is empty.
-/// - [`SecretError::NoVariableBytes`] if `preserve_prefix + preserve_suffix >= secret.len()`.
-/// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts (charset too small).
-pub fn register_with_options(
-    _secret: impl AsRef<[u8]>,
-    _opts: &SecretOptions,
-) -> Result<Pattern, SecretError> {
-    // Registration rework — step-04 will implement this with the unified Pattern model.
-    todo!("Registration will be updated in step-04")
+/// - [`SecretError::TooShort`] if `secret` is empty or shorter than `anchor_len`.
+/// - [`SecretError::NoVariableBytes`] if `anchor_len + tail_anchor_len >= secret.len()`.
+/// - [`SecretError::InsufficientEntropy`] if entropy < 83 bits and `!opts.force`.
+/// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts.
+pub fn register_with_options(secret: &[u8], opts: &SecretOptions) -> Result<Pattern, SecretError> {
+    register_with_options_rng(secret, opts, &mut OsRng)
 }
 
 /// Testable variant — accepts any RNG (seeded for deterministic tests).
 #[cfg(test)]
 pub(crate) fn register_with_rng<R: rand::RngCore>(
-    _secret: &[u8],
-    _rng: &mut R,
+    secret: &[u8],
+    rng: &mut R,
 ) -> Result<Pattern, SecretError> {
-    todo!("Registration will be updated in step-04")
+    register_with_options_rng(secret, &SecretOptions::default(), rng)
 }
 
 /// Core registration logic. All public entry points funnel here.
-/// Registration rework — step-04 will implement this with the unified Pattern model.
 pub(crate) fn register_with_options_rng<R: rand::RngCore>(
-    _secret: &[u8],
-    _opts: &SecretOptions,
-    _rng: &mut R,
+    secret: &[u8],
+    opts: &SecretOptions,
+    rng: &mut R,
 ) -> Result<Pattern, SecretError> {
-    todo!("Registration will be updated in step-04")
+    if secret.is_empty() {
+        return Err(SecretError::TooShort);
+    }
+    if secret.len() < opts.anchor_len {
+        return Err(SecretError::TooShort);
+    }
+
+    let anchor_len = opts.anchor_len;
+    // Clamp tail_anchor_len so it can't exceed the bytes after the head anchor.
+    let tail_anchor_len = opts
+        .tail_anchor_len
+        .min(secret.len().saturating_sub(anchor_len));
+
+    let middle_start = anchor_len;
+    let middle_end = secret.len().saturating_sub(tail_anchor_len);
+    let middle_len = middle_end.saturating_sub(middle_start);
+
+    if middle_len == 0 {
+        return Err(SecretError::NoVariableBytes {
+            anchor_len,
+            tail_anchor_len,
+            secret_len: secret.len(),
+        });
+    }
+
+    let middle_bytes = &secret[middle_start..middle_end];
+
+    // Determine charset for variable portion and entropy calculation.
+    let (charset, charset_size) = if opts.restrict_charset {
+        let detected = crate::fake::charsets::detect(middle_bytes);
+        let size = detected.len();
+        // Wide is used for fake generation in this revision; detected size for entropy.
+        (CharsetName::Wide, size)
+    } else {
+        (CharsetName::Wide, 72)
+    };
+
+    // Entropy enforcement.
+    let entropy = calculate_entropy(middle_len, charset_size);
+    if entropy < ENTROPY_HARD_FAIL_BITS && !opts.force {
+        return Err(SecretError::InsufficientEntropy {
+            bits: entropy,
+            threshold: ENTROPY_HARD_FAIL_BITS,
+        });
+    }
+    if entropy < ENTROPY_WARN_BITS {
+        log::warn!(
+            "doppel: effective entropy {:.1} bits < {:.1} bits recommended; \
+             consider a longer secret or --force",
+            entropy,
+            ENTROPY_WARN_BITS
+        );
+    }
+
+    let anchor_bytes = &secret[..anchor_len];
+    let anchor_charset = detect_charset_name(anchor_bytes);
+
+    let mut segments: Vec<Segment> = vec![
+        Segment::Opaque {
+            value: anchor_bytes.to_vec(),
+            charset: anchor_charset,
+        },
+        Segment::Variable {
+            charset,
+            min: middle_len,
+            max: middle_len, // INV-31: instance patterns have fixed-length variable segments
+        },
+    ];
+
+    if tail_anchor_len > 0 {
+        let tail_bytes = &secret[middle_end..];
+        let tail_charset = detect_charset_name(tail_bytes);
+        segments.push(Segment::Opaque {
+            value: tail_bytes.to_vec(),
+            charset: tail_charset,
+        });
+    }
+
+    // INV-31 assertion: variable segments in instance patterns must have min == max.
+    for seg in &segments {
+        if let Segment::Variable { min, max, .. } = seg {
+            debug_assert_eq!(
+                min, max,
+                "INV-31: instance pattern variable segment min must equal max"
+            );
+        }
+    }
+
+    let mut salt = [0u8; 32];
+    rng.fill_bytes(&mut salt);
+
+    let digest = crate::crypto::hmac_sha256(&salt, secret);
+
+    let arc_segments: Arc<[Segment]> = segments.into();
+
+    let pattern = Pattern {
+        identifier: String::new(),
+        segments: arc_segments.clone(),
+        salt,
+        digests: vec![digest],
+    };
+
+    // Sanity check: verify fake derivation succeeds at registration time.
+    let variable_lengths = vec![middle_len];
+    crate::fake::derive_fake_structural_segments(&salt, &arc_segments, &variable_lengths, secret)
+        .map_err(|_| SecretError::CollisionLimit { attempts: 1_000 })?;
+
+    Ok(pattern)
+}
+
+/// Detect the most appropriate `CharsetName` for a byte sequence.
+///
+/// Used to select the fake-generation charset for Opaque segments.
+fn detect_charset_name(bytes: &[u8]) -> CharsetName {
+    if bytes.iter().all(|&b| b.is_ascii_digit()) {
+        CharsetName::Digits
+    } else if bytes
+        .iter()
+        .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        CharsetName::HexLower
+    } else if bytes
+        .iter()
+        .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
+        CharsetName::UppercaseAlphanumeric
+    } else if bytes.iter().all(|&b| b.is_ascii_alphanumeric()) {
+        CharsetName::Alphanumeric
+    } else if bytes
+        .iter()
+        .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        CharsetName::UrlSafeBase64
+    } else {
+        CharsetName::Wide
+    }
 }

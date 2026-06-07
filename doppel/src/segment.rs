@@ -372,11 +372,16 @@ mod tests {
 
     #[test]
     fn validate_segment_defs_rejects_unknown_charset() {
-        let defs = vec![SegmentDef::Variable {
-            charset: "bogus".into(),
-            min: 1,
-            max: 10,
-        }];
+        let defs = vec![
+            SegmentDef::Literal {
+                value: "prefix_".into(),
+            },
+            SegmentDef::Variable {
+                charset: "bogus".into(),
+                min: 1,
+                max: 10,
+            },
+        ];
         let err = validate_segment_defs(&defs).unwrap_err();
         assert!(err.to_string().contains("unknown charset \"bogus\""));
     }
