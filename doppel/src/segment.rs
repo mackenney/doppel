@@ -99,7 +99,7 @@ impl Segment {
                             name: name.clone(),
                         }
                     })?,
-                    None => CharsetName::Alphanumeric,
+                    None => detect_charset_name(value_bytes.as_slice()),
                 };
                 Ok(Segment::Opaque {
                     value: value_bytes,
@@ -218,7 +218,7 @@ pub enum SegmentDef {
     Opaque {
         /// The opaque byte string as a UTF-8 string (used for exact detection).
         value: String,
-        /// Charset for fake generation. `None` defaults to `Alphanumeric`.
+        /// Charset for fake generation. `None` defaults to the minimal charset detected from the value bytes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         charset: Option<String>,
     },
@@ -243,30 +243,71 @@ pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDe
         }
     }
     for (i, def) in defs.iter().enumerate() {
-        if let SegmentDef::Variable { charset, min, max } = def {
-            has_variable = true;
-            if CharsetName::from_name(charset).is_none() {
+        match def {
+            SegmentDef::Variable { charset, min, max } => {
+                has_variable = true;
+                if CharsetName::from_name(charset).is_none() {
+                    return Err(SegmentDefError::UnknownCharset {
+                        index: i,
+                        name: charset.clone(),
+                    });
+                }
+                if min > max {
+                    return Err(SegmentDefError::MinExceedsMax {
+                        index: i,
+                        min: *min,
+                        max: *max,
+                    });
+                }
+                if *min < 1 {
+                    return Err(SegmentDefError::MinTooSmall { index: i });
+                }
+            }
+            SegmentDef::Opaque {
+                charset: Some(name),
+                ..
+            } if CharsetName::from_name(name).is_none() => {
                 return Err(SegmentDefError::UnknownCharset {
                     index: i,
-                    name: charset.clone(),
+                    name: name.clone(),
                 });
             }
-            if min > max {
-                return Err(SegmentDefError::MinExceedsMax {
-                    index: i,
-                    min: *min,
-                    max: *max,
-                });
-            }
-            if *min < 1 {
-                return Err(SegmentDefError::MinTooSmall { index: i });
-            }
+            _ => {}
         }
     }
     if !has_variable {
         return Err(SegmentDefError::NoVariableSegment);
     }
     Ok(())
+}
+
+/// Detect the most appropriate `CharsetName` for a byte sequence.
+///
+/// Returns the minimal named charset that covers all bytes: Digits, HexLower,
+/// UppercaseAlphanumeric, Alphanumeric, UrlSafeBase64, or Wide.
+pub(crate) fn detect_charset_name(bytes: &[u8]) -> CharsetName {
+    if bytes.iter().all(|&b| b.is_ascii_digit()) {
+        CharsetName::Digits
+    } else if bytes
+        .iter()
+        .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        CharsetName::HexLower
+    } else if bytes
+        .iter()
+        .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
+        CharsetName::UppercaseAlphanumeric
+    } else if bytes.iter().all(|&b| b.is_ascii_alphanumeric()) {
+        CharsetName::Alphanumeric
+    } else if bytes
+        .iter()
+        .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        CharsetName::UrlSafeBase64
+    } else {
+        CharsetName::Wide
+    }
 }
 
 /// Errors returned by `validate_segment_defs` and `Segment::from_def`.
@@ -279,7 +320,7 @@ pub enum SegmentDefError {
 
     /// A `Variable` segment references an unrecognised charset name.
     #[error(
-        "unknown charset \"{name}\" in segment {index}; valid: alphanumeric, url_safe_base64, uppercase_alphanumeric, digits, hex_lower"
+        "unknown charset \"{name}\" in segment {index}; valid: alphanumeric, url_safe_base64, uppercase_alphanumeric, digits, hex_lower, wide (variable and opaque segments)"
     )]
     UnknownCharset {
         /// Zero-based index of the offending segment.

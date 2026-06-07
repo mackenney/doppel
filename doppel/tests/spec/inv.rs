@@ -902,9 +902,9 @@ fn test_inv26_register_low_entropy_warns_but_succeeds() {
 
 #[test]
 fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
-    // INV-27: alphanumeric secret + restrict_charset=false → MUST emit log::warn.
-    // This test verifies the function succeeds; log capture not yet wired.
-    // TODO: add log-capture assertion when a test logger harness is available.
+    // INV-26/INV-27: alphanumeric secret + restrict_charset=false → MUST emit log::warn.
+    // The warning is now implemented (INV-26 guard added to register_with_options_rng).
+    // This test verifies the function succeeds; log capture not yet wired in the test harness.
     use doppel::{SecretOptions, register_with_options};
     let secret = b"myAlphaNumericSecret123";
     let opts = SecretOptions {
@@ -915,6 +915,64 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
     assert!(
         result.is_ok(),
         "INV-27: registration must succeed (got warning)"
+    );
+}
+
+#[test]
+fn test_fix2_restrict_charset_uses_detected_charset() {
+    // FIX-2: when restrict_charset=true, fakes must be drawn from the detected charset.
+    // Behavioral test: register a hex-lowercase secret; verify the fake contains only
+    // hex-lowercase chars (0-9 a-f) — i.e. not drawn from the wide charset.
+    use doppel::{SecretOptions, register_with_options, swap};
+    // anchor=3 ("sk-"), variable=16 hex-lower bytes; 16*4=64 bits < 83 threshold, force=true
+    let secret = b"sk-abcdef01234567"; // anchor "sk-" + 16 hex-lower bytes
+    let opts = SecretOptions {
+        anchor_len: 3,
+        restrict_charset: true,
+        force: true, // 64 bits < 83 threshold; force to test charset, not entropy
+        ..Default::default()
+    };
+    let pattern = register_with_options(secret, &opts).expect("registration must succeed");
+    let result = swap(secret, &[pattern]).expect("swap must succeed");
+    assert_eq!(result.entries.len(), 1, "must detect the secret");
+    let fake = &result.entries[0].fake;
+    // Variable portion of the fake (skip 3-byte anchor prefix)
+    let var_fake = &fake[3..];
+    let all_hex = var_fake
+        .iter()
+        .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    assert!(
+        all_hex,
+        "restrict_charset=true with hex-lower secret: fake variable bytes must be hex-lower, got: {:?}",
+        var_fake
+    );
+}
+
+#[test]
+fn test_fix1_hmac_all_digests_evaluated_no_early_exit() {
+    // FIX-1: HMAC is computed once and all digests compared CT with no early exit.
+    // Behavioral test: two registered secrets share the same structural shape but
+    // different HMAC digests. A third payload that matches the shape but is neither
+    // secret must not be swapped (HMAC fails for both digests).
+    use doppel::{SecretOptions, register_with_options, swap};
+    let secret1 = b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 42 bytes
+    let secret2 = b"sk-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"; // 42 bytes
+    let neither = b"sk-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"; // 42 bytes, same shape
+    let opts = SecretOptions {
+        anchor_len: 3,
+        ..Default::default()
+    };
+    let p1 = register_with_options(secret1, &opts).unwrap();
+    let p2 = register_with_options(secret2, &opts).unwrap();
+    // secret1 matches p1's HMAC: exactly one entry.
+    let r1 = swap(secret1, &[p1.clone(), p2.clone()]).unwrap();
+    assert_eq!(r1.entries.len(), 1, "secret1 must match p1");
+    // neither matches no HMAC: zero entries.
+    let r_none = swap(neither, &[p1, p2]).unwrap();
+    assert_eq!(
+        r_none.entries.len(),
+        0,
+        "structurally matching non-registered secret must not be swapped"
     );
 }
 

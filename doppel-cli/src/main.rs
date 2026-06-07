@@ -820,6 +820,9 @@ fn hex_nibble(b: u8) -> Result<u8, ()> {
 }
 
 fn main() {
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Warn)
+        .init();
     let cli = Cli::parse();
     let result = match cli.command {
         Commands::Swap {

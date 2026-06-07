@@ -173,10 +173,9 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
 
     // Determine charset for variable portion and entropy calculation.
     let (charset, charset_size) = if opts.restrict_charset {
-        let detected = crate::fake::charsets::detect(middle_bytes);
-        let size = detected.len();
-        // Wide is used for fake generation in this revision; detected size for entropy.
-        (CharsetName::Wide, size)
+        let detected_name = crate::segment::detect_charset_name(middle_bytes);
+        let size = detected_name.resolve().bytes.len();
+        (detected_name, size)
     } else {
         (CharsetName::Wide, 72)
     };
@@ -198,8 +197,16 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         );
     }
 
+    // INV-26: warn when alphanumeric secret uses wide charset (unexpected wide fakes).
+    if !opts.restrict_charset && middle_bytes.iter().all(|b| b.is_ascii_alphanumeric()) {
+        log::warn!(
+            "doppel: secret variable bytes are all alphanumeric but restrict-charset is false; \
+             fake bytes will be drawn from the wide charset (72 chars) which may be structurally \
+             implausible for the target system. Use --restrict-charset to match the secret's charset."
+        );
+    }
     let anchor_bytes = &secret[..anchor_len];
-    let anchor_charset = detect_charset_name(anchor_bytes);
+    let anchor_charset = crate::segment::detect_charset_name(anchor_bytes);
 
     let mut segments: Vec<Segment> = vec![
         Segment::Opaque {
@@ -215,7 +222,7 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
 
     if tail_anchor_len > 0 {
         let tail_bytes = &secret[middle_end..];
-        let tail_charset = detect_charset_name(tail_bytes);
+        let tail_charset = crate::segment::detect_charset_name(tail_bytes);
         segments.push(Segment::Opaque {
             value: tail_bytes.to_vec(),
             charset: tail_charset,
@@ -252,32 +259,4 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         .map_err(|_| SecretError::CollisionLimit { attempts: 1_000 })?;
 
     Ok(pattern)
-}
-
-/// Detect the most appropriate `CharsetName` for a byte sequence.
-///
-/// Used to select the fake-generation charset for Opaque segments.
-fn detect_charset_name(bytes: &[u8]) -> CharsetName {
-    if bytes.iter().all(|&b| b.is_ascii_digit()) {
-        CharsetName::Digits
-    } else if bytes
-        .iter()
-        .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        CharsetName::HexLower
-    } else if bytes
-        .iter()
-        .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit())
-    {
-        CharsetName::UppercaseAlphanumeric
-    } else if bytes.iter().all(|&b| b.is_ascii_alphanumeric()) {
-        CharsetName::Alphanumeric
-    } else if bytes
-        .iter()
-        .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
-        CharsetName::UrlSafeBase64
-    } else {
-        CharsetName::Wide
-    }
 }

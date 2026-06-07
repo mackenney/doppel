@@ -70,12 +70,6 @@ pub(crate) mod charsets {
         (b'0'..=b'9').collect()
     }
 
-    /// Detect charset from observed bytes (for registered-secret `restrict_charset` mode).
-    pub fn detect(bytes: &[u8]) -> Vec<u8> {
-        let present: std::collections::BTreeSet<u8> = bytes.iter().copied().collect();
-        present.into_iter().collect()
-    }
-
     /// Standard wide charset used for registered-secret fakes by default.
     ///
     /// 72 printable ASCII chars that are safe in JSON strings and most API contexts.
