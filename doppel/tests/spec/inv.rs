@@ -832,7 +832,8 @@ fn test_inv13_cross_serialization_fake_stability() {
 
     let mut pf = SecretsFile::new();
     pf.generate_missing_structural_salts();
-    pf.add_secret_pattern(&pat, None).unwrap();
+    pf.add_secret_pattern("my-custom-secret".to_string(), &pat)
+        .unwrap();
 
     let payload = [b"token: ".as_slice(), secret].concat();
     let result1 = swap(&payload, std::slice::from_ref(&pat)).unwrap();
@@ -1068,4 +1069,141 @@ fn test_inv_empty_fake_async_rejected() {
     );
     // No output check: constructor failure prevents stream creation,
     // so zero bytes can ever be emitted (no stream object → no I/O).
+}
+
+#[test]
+fn test_inv28_opaque_fake_bytes_differ_from_anchor() {
+    // INV-28: Every Opaque segment MUST produce derived (not verbatim) bytes in the fake.
+    // For registered patterns the anchor is an Opaque segment; its fake bytes must
+    // differ from the original anchor bytes.
+    use doppel::{SecretOptions, register_with_options, swap};
+
+    let secret = b"ABC_secret_value_here_12345678";
+    let opts = SecretOptions {
+        anchor_len: 4,
+        ..Default::default()
+    };
+    let pattern = register_with_options(secret, &opts).unwrap();
+    let result = swap(secret, &[pattern]).unwrap();
+    assert_eq!(result.entries.len(), 1);
+    assert_ne!(
+        &result.payload[0..4],
+        b"ABC_",
+        "INV-28: opaque anchor segment must not appear verbatim in the fake"
+    );
+    assert_eq!(result.payload.len(), secret.len());
+}
+
+#[test]
+fn test_inv31_instance_pattern_variable_must_be_fixed_len() {
+    // INV-31: When a Pattern's digests list is non-empty, all variable segments
+    // in that Pattern MUST have min == max.
+    use doppel::SecretsFile;
+
+    let toml_bad = concat!(
+        "version = 3\n",
+        "[[pattern]]\n",
+        "identifier = \"test-instance\"\n",
+        "salt = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n",
+        "digests = [\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"]\n",
+        "[[pattern.segments]]\n",
+        "type = \"opaque\"\n",
+        "value = \"prefix_\"\n",
+        "[[pattern.segments]]\n",
+        "type = \"variable\"\n",
+        "charset = \"alphanumeric\"\n",
+        "min = 10\n",
+        "max = 20\n",
+    );
+
+    let result = SecretsFile::deserialize(toml_bad.as_bytes());
+    assert!(
+        result.is_err(),
+        "INV-31: instance pattern with variable-range segment must be rejected"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("min") || err_msg.contains("max") || err_msg.contains("instance"),
+        "INV-31: error must describe the min/max constraint: {err_msg}"
+    );
+}
+
+#[test]
+fn test_inv25_register_insufficient_entropy_hard_fail() {
+    // INV-25: entropy < 83 bits and force=false -> InsufficientEntropy.
+    // anchor_len=3, secret=11 bytes -> variable=8 bytes,
+    // 8 * log2(72) approx 49.4 bits < 83.
+    use doppel::{SecretError, SecretOptions, register_with_options};
+
+    let short_secret = b"ABC12345678";
+    let opts = SecretOptions {
+        anchor_len: 3,
+        force: false,
+        ..Default::default()
+    };
+    let result = register_with_options(short_secret, &opts);
+    assert!(
+        matches!(result, Err(SecretError::InsufficientEntropy { .. })),
+        "INV-25: low-entropy secret with force=false must yield InsufficientEntropy"
+    );
+}
+
+#[test]
+fn test_inv18_literal_first_beats_opaque_first() {
+    // INV-18: A structural pattern with a leading literal segment fires correctly
+    // even when a registered pattern's opaque anchor shares the same prefix.
+    // The registered pattern's HMAC gate rejects the mismatch and the structural
+    // literal match takes precedence.
+    use doppel::patterns;
+    use doppel::{SecretOptions, register_with_options, swap};
+
+    // Register a secret whose anchor prefix overlaps with the Anthropic literal prefix.
+    let registered_secret = b"sk-ant-test-fake-secret-123456789";
+    let opts = SecretOptions {
+        anchor_len: 7,
+        ..Default::default()
+    };
+    let reg_pattern = register_with_options(registered_secret, &opts).unwrap();
+
+    // Payload contains the real synthetic Anthropic key (matches structural literal).
+    let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
+    let result = swap(&payload, &[patterns::anthropic(), reg_pattern]).unwrap();
+
+    // Only the structural (literal-leading) match should fire.
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "INV-18: only the structural literal match should fire"
+    );
+    assert!(
+        !result
+            .payload
+            .windows(SYNTH_ANTHROPIC.len())
+            .any(|w| w == SYNTH_ANTHROPIC),
+        "INV-18: structural match must replace the original secret"
+    );
+}
+
+#[test]
+fn test_vc11_registered_hmac_mismatch_passthrough() {
+    // VC-11: A candidate that shares an opaque segment's bytes and exact length
+    // with a registered secret but does not match any HMAC digest passes through
+    // the swapped payload unchanged.
+    use doppel::{register, swap};
+
+    let real = b"my-registered-secret-value-12345";
+    let pat = register(real).unwrap();
+    let mut similar = real.to_vec();
+    similar[12] ^= 0xFF;
+
+    let result = swap(&similar, &[pat]).unwrap();
+    assert_eq!(
+        result.payload.as_slice(),
+        similar.as_slice(),
+        "VC-11: HMAC mismatch must pass through unchanged"
+    );
+    assert!(
+        result.entries.is_empty(),
+        "VC-11: no entry produced for HMAC mismatch"
+    );
 }

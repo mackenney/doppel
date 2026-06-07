@@ -292,14 +292,12 @@ fn test_e2e_init_creates_patterns_file() {
 
     let content = std::fs::read_to_string(&path).unwrap();
     let val: toml::Value = content.parse().unwrap();
-    assert_eq!(val["version"].as_integer(), Some(2));
-    let structural = val["structural"].as_array().unwrap();
+    assert_eq!(val["version"].as_integer(), Some(3));
+    let pattern = val["pattern"].as_array().unwrap();
     assert!(
-        structural.len() >= 15,
-        "init must produce at least 15 built-in structural patterns"
+        pattern.len() >= 28,
+        "init must produce at least 28 built-in patterns"
     );
-    let registered = val["registered"].as_array().unwrap();
-    assert!(registered.is_empty());
 
     #[cfg(unix)]
     {
@@ -344,7 +342,7 @@ fn test_e2e_init_force_overwrites() {
     assert!(output.status.success(), "init --force must succeed");
     let content = std::fs::read_to_string(&path).unwrap();
     let val: toml::Value = content.parse().unwrap();
-    assert_eq!(val["version"].as_integer(), Some(2));
+    assert_eq!(val["version"].as_integer(), Some(3));
 
     cleanup(&[&path]);
 }
@@ -424,7 +422,7 @@ fn test_e2e_register_round_trip() {
             "register",
             "--patterns",
             patterns_path.to_str().unwrap(),
-            "--label",
+            "--identifier",
             "my-token-label",
         ])
         .stdin(std::process::Stdio::piped())
@@ -542,7 +540,7 @@ fn test_e2e_register_empty_stdin() {
             "register",
             "--patterns",
             patterns_path.to_str().unwrap(),
-            "--label",
+            "--identifier",
             "test-label",
         ])
         .stdin(std::process::Stdio::null())
