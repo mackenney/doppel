@@ -65,6 +65,6 @@ pub use restore::{RestoreError, restore};
 #[cfg(feature = "async")]
 pub use restore_stream::{RestoreStream, restore_stream};
 pub use secrets::{SecretError, SecretOptions, register, register_with_options};
-pub use secrets_file::{PatternEntry, SecretEntry, SecretsFile, SecretsFileError};
+pub use secrets_file::{PatternEntry, SecretsFile, SecretsFileError};
 pub use swap::swap;
 pub use types::{Entry, SessionKey, SwapError, SwapResult};

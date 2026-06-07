@@ -66,6 +66,34 @@ pub mod hex_vec_option {
     }
 }
 
+pub mod hex_vec_32 {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(data: &Vec<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
+        let hex_strings: Vec<String> = data.iter().map(|d| hex::encode(d)).collect();
+        hex_strings.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<[u8; 32]>, D::Error> {
+        let hex_strings: Vec<String> = Vec::deserialize(d)?;
+        hex_strings
+            .into_iter()
+            .map(|s| {
+                let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+                if bytes.len() != 32 {
+                    return Err(serde::de::Error::custom(format!(
+                        "digest must be 32 bytes (64 hex chars), got {}",
+                        bytes.len()
+                    )));
+                }
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                Ok(arr)
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
