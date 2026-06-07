@@ -757,7 +757,7 @@ impl Pattern {
             let computed_hmac = crate::crypto::hmac_sha256(&self.salt, candidate);
             let matches_any = self.digests.iter().fold(false, |acc, digest| {
                 use subtle::ConstantTimeEq;
-                acc | bool::from(computed_hmac.ct_eq(digest.as_slice()))
+                acc | bool::from(computed_hmac.ct_eq(digest))
             });
             if !matches_any {
                 return None;

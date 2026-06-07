@@ -886,7 +886,7 @@ fn test_inv26_register_low_entropy_warns_but_succeeds() {
     // TODO: add log-capture assertion when a test logger harness is available.
     use doppel::{SecretOptions, register_with_options};
     // 17-byte secret, anchor_len=3 → 14 middle bytes
-    // entropy = 14 * log2(72) ≈ 86.4 bits (83 <= 86.4 < 131) → warns but succeeds.
+    // entropy = 14 * log2(92) ≈ 91.3 bits (83 <= 91.3 < 131) → warns but succeeds.
     let secret = b"abc01234567890123"; // 17 bytes
     let opts = SecretOptions {
         anchor_len: 3,
@@ -1190,7 +1190,7 @@ fn test_inv31_instance_pattern_variable_must_be_fixed_len() {
 fn test_inv25_register_insufficient_entropy_hard_fail() {
     // INV-25: entropy < 83 bits and force=false -> InsufficientEntropy.
     // anchor_len=3, secret=11 bytes -> variable=8 bytes,
-    // 8 * log2(72) approx 49.4 bits < 83.
+    // 8 * log2(92) ≈ 52.2 bits < 83.
     use doppel::{SecretError, SecretOptions, register_with_options};
 
     let short_secret = b"ABC12345678";
@@ -1264,4 +1264,78 @@ fn test_vc11_registered_hmac_mismatch_passthrough() {
         result.entries.is_empty(),
         "VC-11: no entry produced for HMAC mismatch"
     );
+}
+
+#[test]
+fn test_wide_charset_entropy_uses_92_not_72() {
+    // Regression: wide charset size was hardcoded as 72 (should be 92).
+    // With 72: 13 * log2(72) ≈ 80.2 bits < 83 → InsufficientEntropy (wrong).
+    // With 92: 13 * log2(92) ≈ 84.8 bits > 83 → succeeds (correct).
+    use doppel::{SecretOptions, register_with_options};
+    // 16-byte secret: anchor=3 bytes, variable=13 bytes, Wide charset, force=false
+    let secret = b"abc!@#$%^&*()-+=";
+    let opts = SecretOptions {
+        anchor_len: 3,
+        restrict_charset: false,
+        ..Default::default()
+    };
+    let result = register_with_options(secret, &opts);
+    assert!(
+        result.is_ok(),
+        "13-byte wide-charset variable portion (84.8 bits) must pass entropy gate"
+    );
+}
+
+#[test]
+fn test_vc17_group_pattern_detects_both_members() {
+    // VC-17: a group pattern (single Pattern, 2 digests) detects both A and B,
+    // producing distinct fakes, leaving non-member C unchanged.
+    use doppel::{SecretOptions, SecretsFile, register_with_options, swap};
+
+    let secret_a = b"my-secret-alpha-value-for-vc17-test";
+    let secret_b = b"my-secret-beta-values-for-vc17-test";
+    let secret_c = b"my-secret-gamma-value-for-vc17-test";
+
+    let opts = SecretOptions::default();
+    let pat_a = register_with_options(secret_a, &opts).unwrap();
+
+    let mut pf = SecretsFile::new();
+    pf.add_secret_pattern("group-key".to_string(), &pat_a)
+        .unwrap();
+    pf.add_secret_to_group("group-key", secret_b).unwrap();
+
+    let patterns = pf.to_patterns().unwrap();
+    assert_eq!(patterns.len(), 1, "group produces one Pattern");
+    // Verify two digests via the SecretsFile API (Pattern::digests is pub(crate)).
+    assert_eq!(
+        pf.pattern[0].digests.len(),
+        2,
+        "group entry has two digests"
+    );
+
+    let payload_a = [b"header: ".as_slice(), secret_a].concat();
+    let r_a = swap(&payload_a, &patterns).unwrap();
+    assert_eq!(r_a.entries.len(), 1, "secret_a detected");
+    assert!(
+        !r_a.payload.windows(secret_a.len()).any(|w| w == secret_a),
+        "VC-17: secret_a must be replaced in output"
+    );
+
+    let payload_b = [b"header: ".as_slice(), secret_b].concat();
+    let r_b = swap(&payload_b, &patterns).unwrap();
+    assert_eq!(r_b.entries.len(), 1, "secret_b detected");
+    assert!(
+        !r_b.payload.windows(secret_b.len()).any(|w| w == secret_b),
+        "VC-17: secret_b must be replaced in output"
+    );
+
+    assert_ne!(
+        r_a.entries[0].fake, r_b.entries[0].fake,
+        "VC-17: distinct fakes for A and B"
+    );
+
+    let payload_c = [b"header: ".as_slice(), secret_c].concat();
+    let r_c = swap(&payload_c, &patterns).unwrap();
+    assert_eq!(r_c.entries.len(), 0, "VC-17: non-member C not detected");
+    assert_eq!(r_c.payload, payload_c, "VC-17: C passes through unchanged");
 }

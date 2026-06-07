@@ -261,3 +261,42 @@ fn test_list_shows_digest_count() {
         "list must show digest count per entry; stdout: {stdout}"
     );
 }
+
+#[test]
+fn test_inv37_register_preserves_comments() {
+    // INV-37: register MUST preserve existing comments in the patterns file
+    use std::fs;
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = dir.path().join("secrets.toml");
+
+    // A minimal valid patterns file with a recognisable sentinel comment.
+    let initial = "# sentinel-comment-for-inv37\nversion = 3\npattern = []\n";
+    fs::write(&pat, initial).unwrap();
+
+    // Secret must be long enough to clear the 83-bit entropy threshold.
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "inv37-entry"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+
+    let status = child.wait_with_output().unwrap().status;
+    assert!(status.success(), "register failed");
+
+    let after = fs::read_to_string(&pat).unwrap();
+    assert!(
+        after.contains("# sentinel-comment-for-inv37"),
+        "INV-37: register must preserve existing comments; got:\n{after}"
+    );
+}

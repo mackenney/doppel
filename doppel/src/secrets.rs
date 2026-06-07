@@ -177,7 +177,7 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         let size = detected_name.resolve().bytes.len();
         (detected_name, size)
     } else {
-        (CharsetName::Wide, 72)
+        (CharsetName::Wide, 92)
     };
 
     // Entropy enforcement.
@@ -201,7 +201,7 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
     if !opts.restrict_charset && middle_bytes.iter().all(|b| b.is_ascii_alphanumeric()) {
         log::warn!(
             "doppel: secret variable bytes are all alphanumeric but restrict-charset is false; \
-             fake bytes will be drawn from the wide charset (72 chars) which may be structurally \
+             fake bytes will be drawn from the wide charset (92 chars) which may be structurally \
              implausible for the target system. Use --restrict-charset to match the secret's charset."
         );
     }

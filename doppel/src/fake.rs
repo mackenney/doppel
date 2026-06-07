@@ -72,7 +72,7 @@ pub(crate) mod charsets {
 
     /// Standard wide charset used for registered-secret fakes by default.
     ///
-    /// 72 printable ASCII chars that are safe in JSON strings and most API contexts.
+    /// 92 printable ASCII chars that are safe in JSON strings and most API contexts.
     /// Excludes `"` (0x22) and `\` (0x5C) to avoid breaking JSON payloads.
     pub fn wide() -> Vec<u8> {
         // Printable ASCII 0x21..=0x7E minus '"' (0x22) and '\\' (0x5C).
