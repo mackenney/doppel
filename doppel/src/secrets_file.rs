@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::patterns::{self, Pattern, StructuralDef};
-use crate::secrets::RegisteredPat;
+use crate::patterns::{self, Pattern};
 use crate::segment::SegmentDef;
 use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
 
@@ -278,31 +277,18 @@ impl SecretsFile {
                 }
             };
 
-            patterns.push(Pattern::Structural(StructuralDef {
+            patterns.push(Pattern {
                 identifier: entry.identifier.clone(),
                 segments,
                 salt: entry.salt,
-            }));
+                digests: vec![],
+            });
         }
 
         for entry in &self.registered {
-            let charset = match &entry.charset {
-                Some(cs) => cs.clone(),
-                None => crate::fake::charsets::wide(),
-            };
-
-            let pat = RegisteredPat {
-                start_fragment: entry.start_fragment.clone(),
-                end_fragment: entry.end_fragment.clone(),
-                exact_length: entry.exact_length,
-                hmac_salt: entry.hmac_salt,
-                hmac_digest: entry.hmac_digest,
-                preserve_prefix: entry.preserve_prefix,
-                preserve_suffix: entry.preserve_suffix,
-                charset,
-            };
-
-            patterns.push(Pattern::Registered(Arc::new(pat)));
+            // Registration rework — step-04 will convert registered entries to unified Pattern.
+            let _ = entry;
+            todo!("registered pattern loading — step-04")
         }
 
         Ok(patterns)
@@ -320,41 +306,9 @@ impl SecretsFile {
         pattern: &Pattern,
         label: Option<String>,
     ) -> Result<(), SecretsFileError> {
-        match pattern {
-            Pattern::Registered(arc) => {
-                if let Some(ref l) = label {
-                    let duplicate = self
-                        .registered
-                        .iter()
-                        .any(|e| e.label.as_deref() == Some(l));
-                    if duplicate {
-                        return Err(SecretsFileError::DuplicateLabel { label: l.clone() });
-                    }
-                }
-
-                let p = arc.as_ref();
-                let charset = if p.charset == crate::fake::charsets::wide() {
-                    None
-                } else {
-                    Some(p.charset.clone())
-                };
-
-                self.registered.push(SecretEntry {
-                    label,
-                    start_fragment: p.start_fragment.clone(),
-                    end_fragment: p.end_fragment.clone(),
-                    exact_length: p.exact_length,
-                    hmac_salt: p.hmac_salt,
-                    hmac_digest: p.hmac_digest,
-                    preserve_prefix: p.preserve_prefix,
-                    preserve_suffix: p.preserve_suffix,
-                    charset,
-                });
-
-                Ok(())
-            }
-            _ => Err(SecretsFileError::WrongPatternType),
-        }
+        // Registration rework — step-04 will implement this with the unified Pattern model.
+        let _ = (pattern, label);
+        todo!("add_secret_pattern — step-04")
     }
 
     /// Add a user-defined structural pattern to this patterns file.
