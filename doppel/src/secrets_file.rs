@@ -335,7 +335,7 @@ mod tests {
         let bytes = pf.serialize().unwrap();
         let pf2 = SecretsFile::deserialize(&bytes).unwrap();
         assert_eq!(pf2.version, 3);
-        assert_eq!(pf2.pattern.len(), 15);
+        assert_eq!(pf2.pattern.len(), 28);
         let orig_salt = pf
             .pattern
             .iter()
@@ -372,10 +372,10 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_missing_fills_all_fifteen() {
+    fn test_generate_missing_fills_all_builtins() {
         let mut pf = SecretsFile::new();
         pf.generate_missing_structural_salts();
-        assert_eq!(pf.pattern.len(), 15);
+        assert_eq!(pf.pattern.len(), 28);
         for def in crate::patterns::all_defs() {
             assert!(pf.pattern.iter().any(|e| e.identifier == def.identifier));
         }

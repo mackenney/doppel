@@ -426,6 +426,261 @@ static LINEAR_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     salt: [0u8; 32],
 });
 
+const GROQ_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"gsk_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 52,
+        max: 52,
+    },
+];
+static GROQ_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "groq".into(),
+    // gsk_<52 alphanumeric> = 56 chars total
+    // Source: gitleaks groq api key rule
+    segments: GROQ_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const PERPLEXITY_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"pplx-"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::HexLower,
+        min: 48,
+        max: 48,
+    },
+];
+static PERPLEXITY_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "perplexity".into(),
+    // pplx-<48 hex_lower> = 53 chars total
+    segments: PERPLEXITY_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const CEREBRAS_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"csk-"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 48,
+        max: 48,
+    },
+];
+static CEREBRAS_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "cerebras".into(),
+    // csk-<48 alphanumeric> = 52 chars total
+    segments: CEREBRAS_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const STRIPE_LIVE_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk_live_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 24,
+        max: 32,
+    },
+];
+static STRIPE_LIVE_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "stripe_live".into(),
+    // sk_live_<24-32 alphanumeric> = 32-40 chars total
+    // Source: Stripe docs, gitleaks stripe_sk rule
+    segments: STRIPE_LIVE_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const STRIPE_TEST_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk_test_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 24,
+        max: 32,
+    },
+];
+static STRIPE_TEST_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "stripe_test".into(),
+    // sk_test_<24-32 alphanumeric> = 32-40 chars total
+    segments: STRIPE_TEST_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const CLERK_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk_live_"),
+    // Clerk live keys are longer than Stripe; length difference distinguishes them.
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 45,
+        max: 55,
+    },
+];
+static CLERK_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "clerk".into(),
+    // sk_live_<45-55 alphanumeric> = 53-63 chars total
+    // Shares prefix with stripe_live; longer variable range distinguishes them.
+    segments: CLERK_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const SVIX_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"svix_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 30,
+        max: 50,
+    },
+];
+static SVIX_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "svix".into(),
+    // svix_<30-50 alphanumeric>
+    segments: SVIX_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const DOPPLER_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"dp."),
+    BuiltinSegment::Variable {
+        charset: CharsetName::UrlSafeBase64,
+        min: 30,
+        max: 60,
+    },
+];
+static DOPPLER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "doppler".into(),
+    // dp.<30-60 url_safe_base64>
+    // url_safe_base64 covers the alphanumeric + - _ chars found in Doppler tokens.
+    segments: DOPPLER_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const CHROMATIC_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"chpt_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 30,
+        max: 50,
+    },
+];
+static CHROMATIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "chromatic".into(),
+    // chpt_<30-50 alphanumeric>
+    segments: CHROMATIC_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const GITHUB_OAUTH_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"gho_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 36,
+    },
+];
+static GITHUB_OAUTH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_oauth".into(),
+    // gho_<36 alphanumeric> = 40 chars total
+    // Source: GitHub docs on token formats (GitHub OAuth token)
+    segments: GITHUB_OAUTH_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const GITHUB_APP_SERVER_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ghs_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 36,
+    },
+];
+static GITHUB_APP_SERVER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_app_server".into(),
+    // ghs_<36 alphanumeric> = 40 chars total
+    // Source: GitHub docs — GitHub App server-to-server token
+    segments: GITHUB_APP_SERVER_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const GITHUB_APP_USER_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ghu_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 36,
+    },
+];
+static GITHUB_APP_USER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_app_user".into(),
+    // ghu_<36 alphanumeric> = 40 chars total
+    // Source: GitHub docs — GitHub App user-to-server token
+    segments: GITHUB_APP_USER_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
+
+const GITHUB_REFRESH_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ghr_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 76,
+    },
+];
+static GITHUB_REFRESH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_refresh".into(),
+    // ghr_<36-76 alphanumeric> = 40-80 chars total
+    // Source: GitHub docs — GitHub App refresh token
+    segments: GITHUB_REFRESH_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+    salt: [0u8; 32],
+});
 static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::new(|| {
     vec![
         &*ANTHROPIC_DEF,
@@ -443,10 +698,23 @@ static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::ne
         &*GOOGLE_OAUTH_SECRET_DEF,
         &*SLACK_BOT_DEF,
         &*LINEAR_DEF,
+        &*GROQ_DEF,
+        &*PERPLEXITY_DEF,
+        &*CEREBRAS_DEF,
+        &*STRIPE_LIVE_DEF,
+        &*STRIPE_TEST_DEF,
+        &*CLERK_DEF,
+        &*SVIX_DEF,
+        &*DOPPLER_DEF,
+        &*CHROMATIC_DEF,
+        &*GITHUB_OAUTH_DEF,
+        &*GITHUB_APP_SERVER_DEF,
+        &*GITHUB_APP_USER_DEF,
+        &*GITHUB_REFRESH_DEF,
     ]
 });
 
-/// Returns references to all 15 built-in structural pattern definitions.
+/// Returns references to all 28 built-in structural pattern definitions.
 /// Used by patterns file loading to iterate and inject salts.
 pub(crate) fn all_defs() -> &'static [&'static StructuralDef] {
     &ALL_STRUCTURAL_DEFS
@@ -726,6 +994,164 @@ pub fn linear() -> Pattern {
     }
 }
 
+/// Returns a Groq API key pattern (`gsk_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn groq() -> Pattern {
+    Pattern {
+        identifier: GROQ_DEF.identifier.clone(),
+        segments: GROQ_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Perplexity API key pattern (`pplx-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn perplexity() -> Pattern {
+    Pattern {
+        identifier: PERPLEXITY_DEF.identifier.clone(),
+        segments: PERPLEXITY_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Cerebras API key pattern (`csk-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn cerebras() -> Pattern {
+    Pattern {
+        identifier: CEREBRAS_DEF.identifier.clone(),
+        segments: CEREBRAS_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Stripe live secret key pattern (`sk_live_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn stripe_live() -> Pattern {
+    Pattern {
+        identifier: STRIPE_LIVE_DEF.identifier.clone(),
+        segments: STRIPE_LIVE_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Stripe test secret key pattern (`sk_test_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn stripe_test() -> Pattern {
+    Pattern {
+        identifier: STRIPE_TEST_DEF.identifier.clone(),
+        segments: STRIPE_TEST_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Clerk live secret key pattern (`sk_live_`) with an ephemeral salt.
+///
+/// Clerk live keys share the `sk_live_` prefix with Stripe; the longer variable
+/// segment (45–55 chars vs Stripe's 24–32) distinguishes them at detection time.
+/// See [`anthropic`] for salt stability semantics.
+pub fn clerk() -> Pattern {
+    Pattern {
+        identifier: CLERK_DEF.identifier.clone(),
+        segments: CLERK_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Svix API key pattern (`svix_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn svix() -> Pattern {
+    Pattern {
+        identifier: SVIX_DEF.identifier.clone(),
+        segments: SVIX_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Doppler service token pattern (`dp.`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn doppler() -> Pattern {
+    Pattern {
+        identifier: DOPPLER_DEF.identifier.clone(),
+        segments: DOPPLER_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Chromatic project token pattern (`chpt_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn chromatic() -> Pattern {
+    Pattern {
+        identifier: CHROMATIC_DEF.identifier.clone(),
+        segments: CHROMATIC_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub OAuth token pattern (`gho_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_oauth() -> Pattern {
+    Pattern {
+        identifier: GITHUB_OAUTH_DEF.identifier.clone(),
+        segments: GITHUB_OAUTH_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub App server-to-server token pattern (`ghs_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_app_server() -> Pattern {
+    Pattern {
+        identifier: GITHUB_APP_SERVER_DEF.identifier.clone(),
+        segments: GITHUB_APP_SERVER_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub App user-to-server token pattern (`ghu_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_app_user() -> Pattern {
+    Pattern {
+        identifier: GITHUB_APP_USER_DEF.identifier.clone(),
+        segments: GITHUB_APP_USER_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub App refresh token pattern (`ghr_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_refresh() -> Pattern {
+    Pattern {
+        identifier: GITHUB_REFRESH_DEF.identifier.clone(),
+        segments: GITHUB_REFRESH_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
 /// Returns all built-in structural patterns with ephemeral per-call salts.
 ///
 /// Fakes produced by these patterns are stable within the returned `Vec<Pattern>`
@@ -734,9 +1160,12 @@ pub fn linear() -> Pattern {
 ///
 /// Covers: Anthropic API (`sk-ant-api03-`), Anthropic Admin (`sk-ant-admin01-`,
 /// `sk-ant-admin03-`), OpenAI classic (`sk-`), OpenAI project (`sk-proj-`),
-/// OpenAI service account (`sk-svcacct-`), AWS AKIA/ASIA, GitHub classic/fine-grained,
+/// OpenAI service account (`sk-svcacct-`), AWS AKIA/ASIA, GitHub classic/fine-grained/
+/// OAuth (`gho_`)/app-server (`ghs_`)/app-user (`ghu_`)/refresh (`ghr_`),
 /// GCP/Gemini (`AIza`), OpenRouter (`sk-or-v1-`), Google OAuth secret (`GOCSPX-`),
-/// Slack bot (`xoxb-`), Linear (`lin_api_`).
+/// Slack bot (`xoxb-`), Linear (`lin_api_`), Groq (`gsk_`), Perplexity (`pplx-`),
+/// Cerebras (`csk-`), Stripe live/test (`sk_live_`/`sk_test_`), Clerk (`sk_live_`),
+/// Svix (`svix_`), Doppler (`dp.`), Chromatic (`chpt_`).
 pub fn all() -> Vec<Pattern> {
     vec![
         anthropic(),
@@ -754,6 +1183,19 @@ pub fn all() -> Vec<Pattern> {
         google_oauth_secret(),
         slack_bot(),
         linear(),
+        groq(),
+        perplexity(),
+        cerebras(),
+        stripe_live(),
+        stripe_test(),
+        clerk(),
+        svix(),
+        doppler(),
+        chromatic(),
+        github_oauth(),
+        github_app_server(),
+        github_app_user(),
+        github_refresh(),
     ]
 }
 
@@ -790,6 +1232,18 @@ mod tests {
             b"GOCSPX-",
             b"xoxb-",
             b"lin_api_",
+            b"gsk_",
+            b"pplx-",
+            b"csk-",
+            b"sk_live_",
+            b"sk_test_",
+            b"svix_",
+            b"dp.",
+            b"chpt_",
+            b"gho_",
+            b"ghs_",
+            b"ghu_",
+            b"ghr_",
         ] {
             assert!(
                 leading_lits.contains(expected),
@@ -891,11 +1345,11 @@ mod tests {
     #[test]
     fn test_all_defs_identifiers_unique() {
         let defs = all_defs();
-        assert_eq!(defs.len(), 15, "must have 15 built-in structural defs");
+        assert_eq!(defs.len(), 28, "must have 28 built-in structural defs");
         let mut ids: Vec<&str> = defs.iter().map(|d| d.identifier.as_str()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 15, "all identifiers must be unique");
+        assert_eq!(ids.len(), 28, "all identifiers must be unique");
     }
 
     #[test]
