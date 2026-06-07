@@ -74,6 +74,13 @@ pub enum SecretsFileError {
     /// The supplied `Pattern` was not an instance pattern (digests were empty).
     #[error("wrong pattern type: expected instance pattern with non-empty digests")]
     WrongPatternType,
+
+    /// No pattern with the given identifier was found.
+    #[error("no pattern with identifier '{identifier}'")]
+    NotFound {
+        /// The identifier that was looked up.
+        identifier: String,
+    },
 }
 
 impl SecretsFile {
@@ -185,37 +192,54 @@ impl SecretsFile {
 
     /// Add an instance pattern (registered secret) to this patterns file.
     ///
-    /// For v3, labels are not stored; the pattern's `identifier` field is used as the key.
-    /// The `label` parameter is accepted for API compatibility but ignored.
-    ///
     /// # Errors
     ///
     /// - [`SecretsFileError::WrongPatternType`] if `pattern` has no HMAC digests.
-    /// - [`SecretsFileError::DuplicateIdentifier`] if the identifier already exists.
+    /// - [`SecretsFileError::DuplicateIdentifier`] if `identifier` already exists.
     pub fn add_secret_pattern(
         &mut self,
+        identifier: String,
         pattern: &Pattern,
-        _label: Option<String>,
     ) -> Result<(), SecretsFileError> {
         if pattern.digests.is_empty() {
             return Err(SecretsFileError::WrongPatternType);
         }
-        let duplicate = self
-            .pattern
-            .iter()
-            .any(|e| e.identifier == pattern.identifier);
+        let duplicate = self.pattern.iter().any(|e| e.identifier == identifier);
         if duplicate {
-            return Err(SecretsFileError::DuplicateIdentifier {
-                identifier: pattern.identifier.clone(),
-            });
+            return Err(SecretsFileError::DuplicateIdentifier { identifier });
         }
         let seg_defs = pattern.segments.iter().map(|s| s.to_def()).collect();
         self.pattern.push(PatternEntry {
-            identifier: pattern.identifier.clone(),
+            identifier: identifier.clone(),
             salt: pattern.salt,
             digests: pattern.digests.clone(),
             segments: seg_defs,
         });
+        Ok(())
+    }
+
+    /// Append an HMAC digest for `secret` to an existing instance/group pattern.
+    ///
+    /// Computes `HMAC-SHA256(entry.salt, secret)` and pushes it to the entry's digest list,
+    /// allowing multiple secrets to share one detection pattern.
+    ///
+    /// # Errors
+    ///
+    /// - [`SecretsFileError::NotFound`] if no entry with `group_id` exists.
+    pub fn add_secret_to_group(
+        &mut self,
+        group_id: &str,
+        secret: &[u8],
+    ) -> Result<(), SecretsFileError> {
+        let entry = self
+            .pattern
+            .iter_mut()
+            .find(|e| e.identifier == group_id)
+            .ok_or_else(|| SecretsFileError::NotFound {
+                identifier: group_id.to_string(),
+            })?;
+        let digest = crate::crypto::hmac_sha256(&entry.salt, secret);
+        entry.digests.push(digest);
         Ok(())
     }
 

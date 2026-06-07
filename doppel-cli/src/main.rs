@@ -1,4 +1,4 @@
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -70,20 +70,23 @@ enum Commands {
         /// Path to the patterns file to update.
         #[arg(long)]
         patterns: PathBuf,
-        /// Unique label for this secret within the patterns file.
-        #[arg(long)]
-        label: String,
+        /// Unique identifier for this pattern entry.
+        #[arg(long, short = 'i', required_unless_present = "group")]
+        identifier: Option<String>,
+        /// Add this secret to an existing group pattern (its identifier).
+        #[arg(long, short = 'g', conflicts_with = "identifier")]
+        group: Option<String>,
         /// Number of leading secret bytes stored as the detection anchor. Default: 3.
-        #[arg(long, default_value_t = 3)]
+        #[arg(long, short = 'a', default_value_t = 3)]
         anchor_len: usize,
         /// Number of trailing secret bytes stored as secondary anchor. Default: 0.
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, short = 't', default_value_t = 0)]
         tail_anchor_len: usize,
         /// Generate fake bytes from the secret's own charset only.
         #[arg(long)]
         restrict_charset: bool,
         /// Suppress entropy hard-fail (83-bit threshold); warning is still emitted.
-        #[arg(long)]
+        #[arg(long, short = 'f')]
         force: bool,
     },
     /// Add a user-defined structural pattern to the patterns file.
@@ -112,61 +115,51 @@ enum Commands {
         #[arg(long)]
         patterns: PathBuf,
     },
-    /// Show details for a structural pattern or registered secret.
-    #[command(group(ArgGroup::new("target").required(true).args(["identifier", "label"])))]
+    /// Show details for a pattern entry.
     Inspect {
         /// Path to the patterns file.
         #[arg(long)]
         patterns: PathBuf,
-        /// Identifier of the structural pattern to inspect.
-        #[arg(long, group = "target")]
-        identifier: Option<String>,
-        /// Label of the registered secret to inspect.
-        #[arg(long, group = "target")]
-        label: Option<String>,
+        /// Identifier of the pattern to inspect.
+        #[arg(long, short = 'i', required = true)]
+        identifier: String,
     },
-    /// Remove a structural pattern or registered secret from a patterns file.
-    #[command(group(ArgGroup::new("target").required(true).args(["identifier", "label"])))]
+    /// Remove a pattern entry from a patterns file.
     Remove {
         /// Path to the patterns file.
         #[arg(long)]
         patterns: PathBuf,
-        /// Identifier of the structural pattern to remove.
-        #[arg(long, group = "target")]
-        identifier: Option<String>,
-        /// Label of the registered secret to remove.
-        #[arg(long, group = "target")]
-        label: Option<String>,
+        /// Identifier of the pattern to remove.
+        #[arg(long, short = 'i', required = true)]
+        identifier: String,
     },
 }
 
-const INIT_COMMENT_BLOCK: &str = r#"# Registered secrets are registered via the CLI:
+const INIT_COMMENT_BLOCK: &str = r#"# doppel patterns file (version 3)
 #
-#   echo -n 'my-secret-value' | doppel register \
-#     --patterns <this-file> \
-#     --label my-secret \
-#     --preserve-prefix 0 \
-#     --preserve-suffix 0 \
-#     --start-fragment 2 \
-#     --end-fragment 2
+# This file defines detection patterns for `doppel swap`. Edit with care.
 #
-# Each [[registered]] entry contains:
-#   label             - human-readable identifier (unique, required by CLI)
-#   start_fragment    - first bytes of the secret (hex; detection anchor)
-#   end_fragment      - last bytes of the secret (hex; detection anchor)
-#   exact_length      - total byte length of the secret
-#   hmac_salt         - unique salt for HMAC verification (hex)
-#   hmac_digest       - HMAC digest for candidate confirmation (hex)
-#   preserve_prefix   - bytes at start preserved verbatim in fake
-#   preserve_suffix   - bytes at end preserved verbatim in fake
-#   charset           - (optional) byte set for fake generation; omit for wide default
+# Each [[pattern]] entry has:
+#   identifier = "unique-name"
+#   salt = "64 hex characters"
+#   digests = ["64 hex chars", ...]  # optional; empty = family pattern
+#   [[pattern.segments]] ...
 #
-# User-defined Structural patterns can be added via:
+# Segment types:
+#   { type = "literal", value = "exact bytes" }
+#   { type = "opaque", value = "anchor bytes", charset = "name" }
+#   { type = "variable", charset = "name", min = N, max = M }
 #
-#   doppel define --patterns <this-file> \
-#     --identifier MY_PATTERN \
-#     --segment literal:prefix_ \
-#     --segment variable:alphanumeric:32:32
+# Valid charset names: alphanumeric, url_safe_base64, uppercase_alphanumeric,
+#                      digits, hex_lower, wide
+#
+# Commands:
+#   doppel register --identifier <id> --anchor-len 3 < secret.txt
+#   doppel register --group <id> < another_secret.txt
+#   doppel define --identifier <id> --segment 'literal:prefix_' \
+#                 --segment 'variable:alphanumeric:20:20' -- patterns.toml
+#   doppel list --patterns patterns.toml
+#   doppel remove --identifier <id> --patterns patterns.toml
 #
 "#;
 
@@ -256,7 +249,8 @@ fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error:
 
 fn run_register(
     patterns_path: &Path,
-    label: &str,
+    identifier: Option<&str>,
+    group: Option<&str>,
     anchor_len: usize,
     tail_anchor_len: usize,
     restrict_charset: bool,
@@ -287,47 +281,80 @@ fn run_register(
     let mut pf = SecretsFile::deserialize(file_content.as_bytes())
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
-    let opts = SecretOptions {
-        anchor_len,
-        tail_anchor_len,
-        restrict_charset,
-        force,
-    };
-    let pattern = register_with_options(&secret, &opts)?;
-    pf.add_secret_pattern(&pattern, Some(label.to_string()))?;
+    if let Some(group_id) = group {
+        pf.add_secret_to_group(group_id, &secret)?;
 
-    let new_entry = pf.pattern.last().expect("entry just added");
-    let item = toml_edit::ser::to_document(new_entry)
-        .map_err(|e| format!("failed to serialize entry: {}", e))?
-        .into_item();
-    let table = item
-        .into_table()
-        .map_err(|_| "serialized entry was not a TOML table")?;
+        let entry = pf
+            .pattern
+            .iter()
+            .find(|e| e.identifier == group_id)
+            .expect("entry just updated");
+        let item = toml_edit::ser::to_document(entry)
+            .map_err(|e| format!("failed to serialize entry: {}", e))?
+            .into_item();
+        let new_table = item
+            .into_table()
+            .map_err(|_| "serialized entry was not a TOML table")?;
 
-    if doc
-        .get("pattern")
-        .map(|i| i.is_array_of_tables())
-        .unwrap_or(false)
-    {
-        doc["pattern"].as_array_of_tables_mut().unwrap().push(table);
+        if let Some(aot) = doc["pattern"].as_array_of_tables_mut() {
+            let idx = aot
+                .iter()
+                .position(|t| t["identifier"].as_str() == Some(group_id));
+            if let Some(i) = idx {
+                aot.remove(i);
+                // toml_edit has no insert_at; we rebuild by removing and pushing
+            }
+            aot.push(new_table);
+        }
+
+        let new_content = doc.to_string();
+        write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
+        eprintln!("added digest to group: {}", group_id);
     } else {
-        doc.remove("pattern");
-        let mut aot = toml_edit::ArrayOfTables::new();
-        aot.push(table);
-        doc.insert("pattern", toml_edit::Item::ArrayOfTables(aot));
+        let id = identifier.expect("clap: --identifier required when --group absent");
+
+        let opts = SecretOptions {
+            anchor_len,
+            tail_anchor_len,
+            restrict_charset,
+            force,
+        };
+        let pattern = register_with_options(&secret, &opts)?;
+        pf.add_secret_pattern(id.to_string(), &pattern)?;
+
+        let new_entry = pf.pattern.last().expect("entry just added");
+        let item = toml_edit::ser::to_document(new_entry)
+            .map_err(|e| format!("failed to serialize entry: {}", e))?
+            .into_item();
+        let table = item
+            .into_table()
+            .map_err(|_| "serialized entry was not a TOML table")?;
+
+        if doc
+            .get("pattern")
+            .map(|i| i.is_array_of_tables())
+            .unwrap_or(false)
+        {
+            doc["pattern"].as_array_of_tables_mut().unwrap().push(table);
+        } else {
+            doc.remove("pattern");
+            let mut aot = toml_edit::ArrayOfTables::new();
+            aot.push(table);
+            doc.insert("pattern", toml_edit::Item::ArrayOfTables(aot));
+        }
+
+        let new_content = doc.to_string();
+        write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
+
+        let middle_len = secret
+            .len()
+            .saturating_sub(anchor_len)
+            .saturating_sub(tail_anchor_len.min(secret.len().saturating_sub(anchor_len)));
+        eprintln!(
+            "registered secret: {} (variable portion: {} bytes)",
+            id, middle_len
+        );
     }
-
-    let new_content = doc.to_string();
-    write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
-
-    let middle_len = secret
-        .len()
-        .saturating_sub(anchor_len)
-        .saturating_sub(tail_anchor_len.min(secret.len().saturating_sub(anchor_len)));
-    eprintln!(
-        "registered secret: {} (variable portion: {} bytes)",
-        label, middle_len
-    );
 
     Ok(())
 }
@@ -430,8 +457,15 @@ fn parse_segment_spec(spec: &str, index: usize) -> Result<doppel::segment::Segme
                 .map_err(|_| format!("segment {}: max is not a valid number", index))?;
             Ok(SegmentDef::Variable { charset, min, max })
         }
+        "opaque" => {
+            // Format: opaque:<value> or opaque:<value>:<charset>
+            let mut parts = rest.splitn(2, ':');
+            let value = parts.next().unwrap_or("").to_string();
+            let charset = parts.next().map(|s| s.to_string());
+            Ok(SegmentDef::Opaque { value, charset })
+        }
         _ => Err(format!(
-            "invalid segment spec \"{}\"; expected \"literal:<value>\" or \"variable:<charset>:<min>:<max>\"",
+            "invalid segment spec \"{}\"; expected \"literal:<value>\", \"opaque:<value>[:<charset>]\", or \"variable:<charset>:<min>:<max>\"",
             spec
         )),
     }
@@ -499,81 +533,67 @@ fn format_pattern_segments(entry: &doppel::PatternEntry) -> String {
         .join(" ")
 }
 
-fn run_inspect(
-    patterns_path: &Path,
-    identifier: Option<&str>,
-    label: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_inspect(patterns_path: &Path, identifier: &str) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::SecretsFile;
 
     let file_data = read_patterns_file(patterns_path)?;
     let pf = SecretsFile::deserialize(&file_data)
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
-    if let Some(id) = identifier {
-        let entry = pf
-            .pattern
-            .iter()
-            .find(|e| e.identifier == id)
-            .ok_or_else(|| format!("no pattern with identifier \"{}\"", id))?;
+    let entry = pf
+        .pattern
+        .iter()
+        .find(|e| e.identifier == identifier)
+        .ok_or_else(|| format!("no pattern with identifier \"{}\"", identifier))?;
 
-        let is_builtin = doppel::SecretsFile::is_builtin_identifier(id);
-        let type_str = if is_builtin {
-            "built-in"
-        } else {
-            "user-defined"
-        };
-        let salt_fingerprint = hex_encode(&entry.salt[..4]);
+    let is_builtin = doppel::SecretsFile::is_builtin_identifier(identifier);
+    let type_str = if is_builtin {
+        "built-in"
+    } else {
+        "user-defined"
+    };
+    let salt_fingerprint = hex_encode(&entry.salt[..4]);
 
-        let kind = if entry.digests.is_empty() {
-            "family"
-        } else {
-            "instance"
-        };
-        println!("Pattern: {}", id);
-        println!("  Kind: {}", kind);
-        println!("  Type: {}", type_str);
-        println!("  Salt: {}...", &*salt_fingerprint);
-        println!("  Segments:");
+    let kind = if entry.digests.is_empty() {
+        "family"
+    } else {
+        "instance"
+    };
+    println!("Pattern: {}", identifier);
+    println!("  Kind: {}", kind);
+    println!("  Type: {}", type_str);
+    println!("  Salt: {}...", &*salt_fingerprint);
+    println!("  Segments:");
 
-        for (i, d) in entry.segments.iter().enumerate() {
-            match d {
-                doppel::segment::SegmentDef::Literal { value } => {
-                    println!("    {}. literal \"{}\"", i + 1, value);
-                }
-                doppel::segment::SegmentDef::Variable { charset, min, max } => {
-                    println!(
-                        "    {}. variable charset={} min={} max={}",
-                        i + 1,
-                        charset,
-                        min,
-                        max
-                    );
-                }
-                doppel::segment::SegmentDef::Opaque { value, charset } => {
-                    println!(
-                        "    {}. opaque value={} charset={}",
-                        i + 1,
-                        value,
-                        charset.as_deref().unwrap_or("alphanumeric")
-                    );
-                }
+    for (i, d) in entry.segments.iter().enumerate() {
+        match d {
+            doppel::segment::SegmentDef::Literal { value } => {
+                println!("    {}. literal \"{}\"", i + 1, value);
+            }
+            doppel::segment::SegmentDef::Variable { charset, min, max } => {
+                println!(
+                    "    {}. variable charset={} min={} max={}",
+                    i + 1,
+                    charset,
+                    min,
+                    max
+                );
+            }
+            doppel::segment::SegmentDef::Opaque { value, charset } => {
+                println!(
+                    "    {}. opaque value={} charset={}",
+                    i + 1,
+                    value,
+                    charset.as_deref().unwrap_or("alphanumeric")
+                );
             }
         }
-    } else if let Some(_lbl) = label {
-        return Err("labels are not supported in patterns file v3; use --identifier".into());
-    } else {
-        unreachable!("clap requires --identifier or --label")
     }
 
     Ok(())
 }
 
-fn run_remove(
-    patterns_path: &Path,
-    identifier: Option<&str>,
-    label: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_remove(patterns_path: &Path, identifier: &str) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::SecretsFile;
 
     let file_content = std::fs::read_to_string(patterns_path).map_err(|_| {
@@ -591,44 +611,37 @@ fn run_remove(
     let pf = SecretsFile::deserialize(file_content.as_bytes())
         .map_err(|e| format!("invalid patterns file: {}: {}", patterns_path.display(), e))?;
 
-    if let Some(id) = identifier {
-        pf.pattern
-            .iter()
-            .position(|e| e.identifier == id)
-            .ok_or_else(|| {
-                format!(
-                    "no pattern with identifier \"{}\" in {}",
-                    id,
-                    patterns_path.display()
-                )
-            })?;
+    pf.pattern
+        .iter()
+        .position(|e| e.identifier == identifier)
+        .ok_or_else(|| {
+            format!(
+                "no pattern with identifier \"{}\" in {}",
+                identifier,
+                patterns_path.display()
+            )
+        })?;
 
-        if SecretsFile::is_builtin_identifier(id) {
-            eprintln!(
-                "warning: removing built-in pattern \"{}\"; swap will no longer detect this secret class",
-                id
-            );
-        }
-
-        if let Some(aot) = doc["pattern"].as_array_of_tables_mut() {
-            let idx = aot
-                .iter()
-                .position(|t| t["identifier"].as_str() == Some(id));
-            if let Some(i) = idx {
-                aot.remove(i);
-            }
-        }
-
-        let new_content = doc.to_string();
-        write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
-
-        eprintln!("removed pattern: {}", id);
-    } else if let Some(_lbl) = label {
-        return Err("labels are not supported in patterns file v3; use --identifier".into());
-    } else {
-        unreachable!("clap requires --identifier or --label")
+    if SecretsFile::is_builtin_identifier(identifier) {
+        eprintln!(
+            "warning: removing built-in pattern \"{}\"; swap will no longer detect this secret class",
+            identifier
+        );
     }
 
+    if let Some(aot) = doc["pattern"].as_array_of_tables_mut() {
+        let idx = aot
+            .iter()
+            .position(|t| t["identifier"].as_str() == Some(identifier));
+        if let Some(i) = idx {
+            aot.remove(i);
+        }
+    }
+
+    let new_content = doc.to_string();
+    write_patterns_file(patterns_path, new_content.as_bytes(), false)?;
+
+    eprintln!("removed pattern: {}", identifier);
     Ok(())
 }
 
@@ -787,14 +800,16 @@ fn main() {
         Commands::Init { patterns, force } => run_init(&patterns, force),
         Commands::Register {
             patterns,
-            label,
+            identifier,
+            group,
             anchor_len,
             tail_anchor_len,
             restrict_charset,
             force,
         } => run_register(
             &patterns,
-            &label,
+            identifier.as_deref(),
+            group.as_deref(),
             anchor_len,
             tail_anchor_len,
             restrict_charset,
@@ -809,13 +824,11 @@ fn main() {
         Commands::Inspect {
             patterns,
             identifier,
-            label,
-        } => run_inspect(&patterns, identifier.as_deref(), label.as_deref()),
+        } => run_inspect(&patterns, &identifier),
         Commands::Remove {
             patterns,
             identifier,
-            label,
-        } => run_remove(&patterns, identifier.as_deref(), label.as_deref()),
+        } => run_remove(&patterns, &identifier),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
