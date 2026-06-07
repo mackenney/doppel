@@ -26,6 +26,7 @@ pub(crate) enum BuiltinSegment {
     },
     /// Fixed bytes for detection, but derived (not verbatim) in fake generation.
     /// Charset defaults to detected from value bytes; can be overridden.
+    #[allow(dead_code)]
     Opaque {
         value: &'static [u8],
         charset: CharsetName,

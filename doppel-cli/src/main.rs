@@ -91,7 +91,7 @@ enum Commands {
     },
     /// Add a user-defined structural pattern to the patterns file.
     #[command(
-        long_about = "Add a user-defined structural pattern to the patterns file.\n\nStructural patterns match secrets by format, not exact value. Supply --segment for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
+        long_about = "Add a user-defined structural pattern to the patterns file.\n\nStructural patterns match secrets by format, not exact value. Supply --segment for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64, wide\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
     )]
     Define {
         /// Path to the patterns file to update.
@@ -105,7 +105,7 @@ enum Commands {
             long,
             required = true,
             num_args = 1,
-            long_help = "Repeat for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
+            long_help = "Repeat for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64, wide\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
         )]
         segment: Vec<String>,
     },
@@ -154,10 +154,10 @@ const INIT_COMMENT_BLOCK: &str = r#"# doppel patterns file (version 3)
 #                      digits, hex_lower, wide
 #
 # Commands:
-#   doppel register --identifier <id> --anchor-len 3 < secret.txt
-#   doppel register --group <id> < another_secret.txt
-#   doppel define --identifier <id> --segment 'literal:prefix_' \
-#                 --segment 'variable:alphanumeric:20:20' -- patterns.toml
+#   doppel register --patterns <file> --identifier <id> --anchor-len 3 < secret.txt
+#   doppel register --patterns <file> --group <id> < another_secret.txt
+#   doppel define --patterns <file> --identifier <id> --segment 'literal:prefix_' \
+#                 --segment 'variable:alphanumeric:20:20'
 #   doppel list --patterns patterns.toml
 #   doppel remove --identifier <id> --patterns patterns.toml
 #
@@ -497,10 +497,11 @@ fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             };
             let desc = format_pattern_segments(entry);
             println!(
-                "  {:width$}  [{}]  {}",
+                "  {:width$}  [{}]  {}  ({} digests)",
                 entry.identifier,
                 kind,
                 desc,
+                entry.digests.len(),
                 width = col_width
             );
         }
@@ -533,6 +534,33 @@ fn format_pattern_segments(entry: &doppel::PatternEntry) -> String {
         .join(" ")
 }
 
+fn charset_size(name: &str) -> usize {
+    match name {
+        "alphanumeric" => 62,
+        "url_safe_base64" => 64,
+        "uppercase_alphanumeric" => 36,
+        "digits" => 10,
+        "hex_lower" => 16,
+        "wide" => 92,
+        _ => 0,
+    }
+}
+
+fn entropy_estimate(min: usize, max: usize, charset: &str) -> String {
+    let size = charset_size(charset);
+    if size <= 1 {
+        return "0.0 bits".to_string();
+    }
+    let bits_per_byte = (size as f64).log2();
+    let lo = min as f64 * bits_per_byte;
+    if min == max {
+        format!("{:.1} bits", lo)
+    } else {
+        let hi = max as f64 * bits_per_byte;
+        format!("{:.1}-{:.1} bits", lo, hi)
+    }
+}
+
 fn run_inspect(patterns_path: &Path, identifier: &str) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::SecretsFile;
 
@@ -562,6 +590,7 @@ fn run_inspect(patterns_path: &Path, identifier: &str) -> Result<(), Box<dyn std
     println!("Pattern: {}", identifier);
     println!("  Kind: {}", kind);
     println!("  Type: {}", type_str);
+    println!("  Digests: {}", entry.digests.len());
     println!("  Salt: {}...", &*salt_fingerprint);
     println!("  Segments:");
 
@@ -571,12 +600,14 @@ fn run_inspect(patterns_path: &Path, identifier: &str) -> Result<(), Box<dyn std
                 println!("    {}. literal \"{}\"", i + 1, value);
             }
             doppel::segment::SegmentDef::Variable { charset, min, max } => {
+                let entropy = entropy_estimate(*min, *max, charset);
                 println!(
-                    "    {}. variable charset={} min={} max={}",
+                    "    {}. variable charset={} min={} max={} (~{})",
                     i + 1,
                     charset,
                     min,
-                    max
+                    max,
+                    entropy
                 );
             }
             doppel::segment::SegmentDef::Opaque { value, charset } => {

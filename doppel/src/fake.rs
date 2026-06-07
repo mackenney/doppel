@@ -14,6 +14,7 @@ pub(crate) enum FakeError {
 
 pub(crate) mod charsets {
     /// [A-Za-z0-9]
+    #[allow(dead_code)]
     pub fn alphanumeric() -> Vec<u8> {
         let mut v: Vec<u8> = (b'A'..=b'Z')
             .chain(b'a'..=b'z')
@@ -201,81 +202,6 @@ pub(crate) static WIDE: LazyLock<Charset> = LazyLock::new(|| {
 
 pub(crate) fn wide_ref() -> &'static Charset {
     &WIDE
-}
-
-fn derive_fake_core(
-    salt: &[u8; 32],
-    original: &[u8],
-    prefix: &[u8],
-    suffix: &[u8],
-    charset: &[u8],
-    target_len: usize,
-) -> Result<Vec<u8>, FakeError> {
-    let fixed_len = prefix.len() + suffix.len();
-    assert!(
-        target_len >= fixed_len,
-        "target_len must be >= prefix.len() + suffix.len()"
-    );
-    assert!(!charset.is_empty(), "charset must not be empty");
-
-    let variable_len = target_len - fixed_len;
-    const MAX_ATTEMPTS: u32 = 1_000;
-
-    for attempt in 0u32..MAX_ATTEMPTS {
-        let mut mac =
-            <Hmac<Sha256> as Mac>::new_from_slice(salt).expect("HMAC accepts any key size");
-        mac.update(original);
-        mac.update(&attempt.to_le_bytes());
-        let seed_bytes: [u8; 32] = mac.finalize().into_bytes().into();
-
-        let mut rng = StdRng::from_seed(seed_bytes);
-        let mut fake = Vec::with_capacity(target_len);
-        fake.extend_from_slice(prefix);
-
-        let charset_len = charset.len() as u32;
-        let threshold = u32::MAX - (u32::MAX % charset_len);
-        for _ in 0..variable_len {
-            let idx = loop {
-                let r = rng.next_u32();
-                if r < threshold {
-                    break (r % charset_len) as usize;
-                }
-            };
-            fake.push(charset[idx]);
-        }
-
-        fake.extend_from_slice(suffix);
-
-        if fake != original {
-            return Ok(fake);
-        }
-    }
-
-    Err(FakeError::CollisionLimit {
-        attempts: MAX_ATTEMPTS,
-    })
-}
-
-/// Derive a deterministic fake for a registered secret at match time.
-///
-/// Same HMAC→StdRng derivation as structural fakes but supports both prefix and suffix preservation.
-/// Called from `RegisteredPat::try_match` after HMAC verification confirms the candidate.
-pub(crate) fn derive_fake_registered(
-    salt: &[u8; 32],
-    original: &[u8],
-    preserved_prefix: &[u8],
-    preserved_suffix: &[u8],
-    charset: &[u8],
-    target_len: usize,
-) -> Result<Vec<u8>, FakeError> {
-    derive_fake_core(
-        salt,
-        original,
-        preserved_prefix,
-        preserved_suffix,
-        charset,
-        target_len,
-    )
 }
 
 /// Derive a structurally-equivalent fake for a structural-pattern secret using the segment model.
@@ -551,36 +477,6 @@ mod tests {
             fake[27..51].iter().all(|b| alnum_cs.contains(b)),
             "INV-29: seg5 alnum"
         );
-    }
-    #[test]
-    fn test_derive_fake_core_prefix_and_suffix() {
-        let salt = [99u8; 32];
-        let original = b"MY_ORG_secretbytes1234END";
-        let prefix = b"MY_ORG_";
-        let suffix = b"END";
-        let charset = charsets::alphanumeric();
-        let fake =
-            derive_fake_core(&salt, original, prefix, suffix, &charset, original.len()).unwrap();
-        assert!(fake.starts_with(prefix), "prefix must be preserved");
-        assert!(fake.ends_with(suffix), "suffix must be preserved");
-        assert_eq!(fake.len(), original.len());
-        assert_ne!(fake.as_slice(), original.as_slice());
-    }
-
-    #[test]
-    fn test_derive_fake_registered_stability() {
-        let salt = [7u8; 32];
-        let original = b"my-custom-api-token-abc123xyz";
-        let prefix = b"my-";
-        let suffix = b"";
-        let charset = charsets::wide();
-        let fake1 =
-            derive_fake_registered(&salt, original, prefix, suffix, &charset, original.len())
-                .unwrap();
-        let fake2 =
-            derive_fake_registered(&salt, original, prefix, suffix, &charset, original.len())
-                .unwrap();
-        assert_eq!(fake1, fake2, "same inputs must produce same fake (INV-13)");
     }
 
     #[test]

@@ -196,3 +196,68 @@ fn test_inspect_shows_salt_fingerprint_not_full_salt() {
         "salt fingerprint too long: {salt_part}"
     );
 }
+
+#[test]
+fn test_inspect_shows_digest_count() {
+    // SPEC §CLI Contract: inspect MUST output digest count
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["inspect", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "anthropic"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Digests:"),
+        "inspect must show digest count; stdout: {stdout}"
+    );
+    let digest_lines: Vec<&str> = stdout.lines().filter(|l| l.contains("Digests:")).collect();
+    assert_eq!(digest_lines.len(), 1, "exactly one Digests: line");
+    // anthropic is a family pattern — 0 digests
+    assert!(
+        digest_lines[0].contains('0'),
+        "family pattern must show 0 digests; line: {}",
+        digest_lines[0]
+    );
+}
+
+#[test]
+fn test_inspect_shows_entropy_for_variable_segments() {
+    // SPEC §CLI Contract: inspect MUST output entropy estimate for variable portions
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["inspect", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "anthropic"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("bits"),
+        "inspect must show entropy estimate in bits for variable segments; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn test_list_shows_digest_count() {
+    // SPEC §CLI Contract: list MUST output digest count per entry
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["list", "--patterns"])
+        .arg(&pat)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Built-in family patterns have 0 digests — output must contain the count
+    assert!(
+        stdout.contains("digests"),
+        "list must show digest count per entry; stdout: {stdout}"
+    );
+}

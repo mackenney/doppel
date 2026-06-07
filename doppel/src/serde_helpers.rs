@@ -31,6 +31,7 @@ pub mod hex_32 {
     }
 }
 
+#[allow(dead_code)]
 pub mod hex_vec {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -44,6 +45,7 @@ pub mod hex_vec {
     }
 }
 
+#[allow(dead_code)]
 pub mod hex_vec_option {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -69,8 +71,8 @@ pub mod hex_vec_option {
 pub mod hex_vec_32 {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S: Serializer>(data: &Vec<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
-        let hex_strings: Vec<String> = data.iter().map(|d| hex::encode(d)).collect();
+    pub fn serialize<S: Serializer>(data: &[[u8; 32]], s: S) -> Result<S::Ok, S::Error> {
+        let hex_strings: Vec<String> = data.iter().map(hex::encode).collect();
         hex_strings.serialize(s)
     }
 

@@ -8,8 +8,7 @@ use aho_corasick::AhoCorasick;
 use std::sync::{Arc, LazyLock};
 
 /// Internal structural definition used as a static template for built-in patterns.
-/// Holds the identifier and segment list; salt is zero in static definitions and
-/// set to a real value when constructing a runtime `Pattern`.
+/// Holds the identifier and segment list; salt is supplied by the per-call constructor.
 #[derive(Clone)]
 pub(crate) struct StructuralDef {
     /// Stable string identifier for this class, used as the key in patterns files.
@@ -17,11 +16,9 @@ pub(crate) struct StructuralDef {
     /// Ordered sequence of structural segments for this secret class.
     /// See SPEC.md §Structural Patterns.
     pub(crate) segments: Arc<[Segment]>,
-    /// Derivation salt for fake generation. Zero in static template definitions;
-    /// set to a real (random or loaded) value when constructing a Pattern.
-    pub(crate) salt: [u8; 32],
 }
 
+#[cfg(test)]
 impl StructuralDef {
     /// Walk `payload[pos..]` against the segment list. Returns `Some(MatchCapture)`
     /// on a complete match, `None` otherwise.
@@ -113,7 +110,6 @@ static ANTHROPIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
@@ -132,7 +128,6 @@ static OPENAI_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
@@ -161,7 +156,6 @@ static OPENAI_PROJECT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
@@ -180,7 +174,6 @@ static AWS_AKIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
@@ -199,7 +192,6 @@ static AWS_ASIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
@@ -218,7 +210,6 @@ static GITHUB_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
@@ -244,7 +235,6 @@ static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GCP_SEGS: [BuiltinSegment; 2] = [
@@ -263,7 +253,6 @@ static GCP_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
@@ -283,7 +272,6 @@ static OPENROUTER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef 
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
@@ -309,7 +297,6 @@ static OPENAI_SVCACCT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
@@ -329,7 +316,6 @@ static GOOGLE_OAUTH_SECRET_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Struc
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
@@ -361,7 +347,6 @@ static SLACK_BOT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
@@ -382,7 +367,6 @@ static ANTHROPIC_ADMIN01_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
@@ -403,7 +387,6 @@ static ANTHROPIC_ADMIN03_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const LINEAR_SEGS: [BuiltinSegment; 2] = [
@@ -423,7 +406,6 @@ static LINEAR_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GROQ_SEGS: [BuiltinSegment; 2] = [
@@ -443,7 +425,6 @@ static GROQ_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const PERPLEXITY_SEGS: [BuiltinSegment; 2] = [
@@ -462,7 +443,6 @@ static PERPLEXITY_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef 
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const CEREBRAS_SEGS: [BuiltinSegment; 2] = [
@@ -481,7 +461,6 @@ static CEREBRAS_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const STRIPE_LIVE_SEGS: [BuiltinSegment; 2] = [
@@ -501,7 +480,6 @@ static STRIPE_LIVE_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const STRIPE_TEST_SEGS: [BuiltinSegment; 2] = [
@@ -520,7 +498,6 @@ static STRIPE_TEST_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const CLERK_SEGS: [BuiltinSegment; 2] = [
@@ -541,7 +518,6 @@ static CLERK_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const SVIX_SEGS: [BuiltinSegment; 2] = [
@@ -560,7 +536,6 @@ static SVIX_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const DOPPLER_SEGS: [BuiltinSegment; 2] = [
@@ -580,7 +555,6 @@ static DOPPLER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const CHROMATIC_SEGS: [BuiltinSegment; 2] = [
@@ -599,7 +573,6 @@ static CHROMATIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_OAUTH_SEGS: [BuiltinSegment; 2] = [
@@ -619,7 +592,6 @@ static GITHUB_OAUTH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDe
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_APP_SERVER_SEGS: [BuiltinSegment; 2] = [
@@ -639,7 +611,6 @@ static GITHUB_APP_SERVER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_APP_USER_SEGS: [BuiltinSegment; 2] = [
@@ -659,7 +630,6 @@ static GITHUB_APP_USER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structura
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_REFRESH_SEGS: [BuiltinSegment; 2] = [
@@ -679,7 +649,6 @@ static GITHUB_REFRESH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::new(|| {
     vec![
@@ -751,14 +720,9 @@ pub struct Pattern {
 }
 
 impl Pattern {
-    /// Returns true if this is a family pattern (no HMAC gate).
-    pub(crate) fn is_family(&self) -> bool {
-        self.digests.is_empty()
-    }
-
-    /// Returns true if this is an instance or group pattern (has HMAC gate).
-    pub(crate) fn is_instance(&self) -> bool {
-        !self.digests.is_empty()
+    /// Returns the string identifier for this pattern (e.g. `"anthropic"`, `"prod-db"`).
+    pub fn id(&self) -> &str {
+        &self.identifier
     }
 
     /// Returns true if the first segment is a Literal (for INV-18 tiebreaker precedence).

@@ -39,21 +39,12 @@ fn generate_fake_for_match(
     capture: &crate::segment::MatchCapture,
     secret: &[u8],
 ) -> Result<Vec<u8>, FakeError> {
-    if pattern.is_family() {
-        crate::fake::derive_fake_structural_segments(
-            &pattern.salt,
-            &pattern.segments,
-            &capture.variable_lengths,
-            secret,
-        )
-    } else {
-        crate::fake::derive_fake_structural_segments(
-            &pattern.salt,
-            &pattern.segments,
-            &capture.variable_lengths,
-            secret,
-        )
-    }
+    crate::fake::derive_fake_structural_segments(
+        &pattern.salt,
+        &pattern.segments,
+        &capture.variable_lengths,
+        secret,
+    )
 }
 
 /// Scan `payload` for secrets matching `patterns`, replace each with a
