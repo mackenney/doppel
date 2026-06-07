@@ -112,7 +112,7 @@ Effective entropy is computed as:
 entropy_bits = variable_len × log₂(charset_size)
 ```
 
-where `charset_size` is the cardinality of the effective charset (72 for wide, 62 for alphanumeric, or the detected charset size when restrict-charset is enabled).
+where `charset_size` is the cardinality of the effective charset (92 for wide, 62 for alphanumeric, or the detected charset size when restrict-charset is enabled).
 
 Registration MUST also emit a warning-level diagnostic when the secret's observed byte set is a subset of the alphanumeric character class (`[A-Za-z0-9]`) and restrict-charset is false — this combination produces a fake whose charset is visibly wider than the original's, which may be unexpected.
 
