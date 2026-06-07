@@ -3,3 +3,6 @@
 
 #[path = "integration/round_trip.rs"]
 mod round_trip;
+
+#[path = "integration/detector.rs"]
+mod detector;

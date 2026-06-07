@@ -349,7 +349,7 @@ The CLI exposes `swap`, `restore`, `init`, `register`, `define`, `list`, `inspec
 36. `remove` MUST write the updated patterns file atomically; no partial write MUST be observable by concurrent readers.
 37. The `register`, `define`, and `remove` commands MUST preserve all comments present in the patterns file when writing it back.
 38. The CLI `swap` command MUST successfully create the session key output file before writing any bytes to stdout or the entries file; if key file creation fails, no output MUST be produced.
-39. `Detector::swap` called on the same payload with the same Patterns MUST produce fakes identical to those produced by the free `swap` function.
+39. `Detector::swap` called on the same payload with the same Patterns MUST produce fakes identical to those produced by the free `swap` function. "Same Patterns" means the same Pattern values including their salts — not merely the same pattern class.
 40. `Detector` MUST implement `Send + Sync`. It MUST be safe to share a `Detector` across threads without external synchronization.
 41. The Aho-Corasick automaton MUST NOT be rebuilt on `Detector::swap` calls. The automaton is built exactly once in `Detector::new`.
 

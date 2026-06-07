@@ -24,6 +24,7 @@ use crate::types::{SwapError, SwapResult};
 /// let detector = Detector::new(patterns::all());
 ///
 /// // ... later, once per request:
+/// // NOT real credentials — synthetic key matching the Anthropic structural pattern
 /// let payload = b"Authorization: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 /// let result = detector.swap(payload).unwrap();
 /// assert_eq!(result.entries.len(), 1);
@@ -48,6 +49,14 @@ impl Detector {
     /// The Aho-Corasick automaton is NOT rebuilt (INV-41).
     pub fn swap(&self, payload: &[u8]) -> Result<SwapResult, SwapError> {
         swap_with_ac(payload, &self.patterns, &self.ac)
+    }
+}
+
+impl std::fmt::Debug for Detector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Detector")
+            .field("pattern_count", &self.patterns.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -90,10 +99,10 @@ mod tests {
     }
 
     #[test]
-    fn test_detector_ac_not_rebuilt_across_calls() {
-        // INV-41: AC is NOT rebuilt on each Detector::swap call.
-        // Verified indirectly: the Detector struct holds `ac` as a field;
-        // multiple calls use the same field without re-invoking build_ac_automaton.
+    fn test_detector_multiple_calls_produce_correct_results() {
+        // INV-41: AC is shared across Detector::swap calls, not rebuilt each time.
+        // Verified by behavior: both calls produce correct results, proving the shared
+        // automaton remains valid across independent invocations.
         let detector = Detector::new(patterns::all());
         let payload_a = [b"token: ".as_slice(), TEST_ANT].concat();
         let payload_b = b"no secrets here".as_ref();

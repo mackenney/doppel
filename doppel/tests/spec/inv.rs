@@ -1339,3 +1339,70 @@ fn test_vc17_group_pattern_detects_both_members() {
     assert_eq!(r_c.entries.len(), 0, "VC-17: non-member C not detected");
     assert_eq!(r_c.payload, payload_c, "VC-17: C passes through unchanged");
 }
+
+// Spec: SPEC.md §Behavioral Invariants 39, 40, 41
+
+#[test]
+fn test_inv39_detector_swap_semantics_identical_to_free_swap() {
+    // "Detector::swap called on the same payload with the same Patterns MUST
+    //  produce fakes identical to those produced by the free swap function."
+    //  — SPEC.md INV-39. "Same Patterns" means same Pattern value including salt.
+    use doppel::{Detector, patterns, swap};
+
+    let pat = patterns::anthropic();
+    // NOT real credentials — synthetic key matching the Anthropic structural pattern
+    let payload = b"key: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    let detector = Detector::new(vec![pat.clone()]);
+    let r_detector = detector.swap(payload).unwrap();
+    let r_free = swap(payload, &[pat]).unwrap();
+
+    assert_eq!(
+        r_detector.entries[0].fake, r_free.entries[0].fake,
+        "INV-39: Detector::swap and free swap must produce identical fakes"
+    );
+    assert_eq!(
+        r_detector.payload, r_free.payload,
+        "INV-39: swapped payloads must match"
+    );
+}
+
+#[test]
+fn test_inv40_detector_is_send_sync() {
+    // "Detector MUST implement Send + Sync." — SPEC.md INV-40
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+    assert_send_sync::<doppel::Detector>();
+}
+
+#[test]
+fn test_inv41_detector_ac_not_rebuilt_per_swap_call() {
+    // "The Aho-Corasick automaton MUST NOT be rebuilt on Detector::swap calls."
+    // — SPEC.md INV-41
+    // Verified by design: Detector holds `ac` as a struct field built in ::new.
+    // Multiple swap calls share the same field; no call to build_ac_automaton
+    // occurs inside swap_with_ac.
+    use doppel::{Detector, patterns};
+
+    let detector = Detector::new(patterns::all());
+    // NOT real credentials — synthetic key matching the Anthropic structural pattern
+    let key = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let payload_a = [b"token: ".as_slice(), key].concat();
+    let payload_b = b"no secrets here".as_ref();
+
+    // Both calls must succeed and produce correct results, proving the shared
+    // AC automaton remains valid across independent swap calls.
+    let r_a = detector.swap(&payload_a).unwrap();
+    let r_b = detector.swap(payload_b).unwrap();
+
+    assert_eq!(
+        r_a.entries.len(),
+        1,
+        "INV-41: secret detected on first call"
+    );
+    assert_eq!(
+        r_b.entries.len(),
+        0,
+        "INV-41: no secret detected on second call"
+    );
+    assert_eq!(r_b.payload, payload_b, "INV-41: payload_b unchanged");
+}

@@ -66,6 +66,12 @@ pub fn swap(payload: &[u8], patterns: &[Pattern]) -> Result<SwapResult, SwapErro
     swap_with_ac(payload, patterns, &ac)
 }
 
+/// Inner swap implementation reusing a pre-built Aho-Corasick automaton.
+///
+/// # Contract
+///
+/// `ac` MUST have been built from `patterns` via [`build_ac_automaton`].
+/// Passing a mismatched pair produces silent detection failures.
 pub(crate) fn swap_with_ac(
     payload: &[u8],
     patterns: &[Pattern],
