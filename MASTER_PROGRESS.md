@@ -32,7 +32,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 - `restore-followup` — zeroize decrypted plaintext in sync restore, AEAD log in sync; commit 3bb4f97
 - `test-cleanup` — nonce consistency (24-byte), output.is_empty() assertion, explicit break in None branch; commit 54201f0
 - `restore-fixes` — empty-fake guard, cursor O(n) refactor, zeroize plaintext, AEAD log, #[must_use], async tests; commit 35dfb76
-
+- `spec-unified-pattern` — unified Pattern model (literal/opaque/variable segments), v3 patterns file, anchor_len registration, entropy enforcement, 28 built-ins, 130 tests; commit 38168b3
 ## Known Gaps
 
 - No CI configuration (out of scope for initial-implementation plan)
