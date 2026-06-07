@@ -47,6 +47,7 @@
 //! ```
 
 pub(crate) mod crypto;
+pub mod detector;
 pub(crate) mod fake;
 pub mod patterns;
 pub(crate) mod restore;
@@ -60,6 +61,7 @@ pub(crate) mod serde_helpers;
 pub(crate) mod swap;
 pub mod types;
 
+pub use detector::Detector;
 pub use patterns::Pattern;
 pub use restore::{RestoreError, restore};
 #[cfg(feature = "async")]

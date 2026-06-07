@@ -62,13 +62,20 @@ fn generate_fake_for_match(
 /// assert_ne!(result.payload, payload.to_vec());
 /// ```
 pub fn swap(payload: &[u8], patterns: &[Pattern]) -> Result<SwapResult, SwapError> {
+    let ac = build_ac_automaton(patterns);
+    swap_with_ac(payload, patterns, &ac)
+}
+
+pub(crate) fn swap_with_ac(
+    payload: &[u8],
+    patterns: &[Pattern],
+    ac: &aho_corasick::AhoCorasick,
+) -> Result<SwapResult, SwapError> {
     let session_key = generate_session_key();
     let mut output = Vec::with_capacity(payload.len());
     let mut entries: Vec<Entry> = Vec::new();
     let mut seen: HashMap<&[u8], usize> = HashMap::new();
     let mut pos = 0;
-
-    let ac = build_ac_automaton(patterns);
 
     while pos < payload.len() {
         // Jump to the next AC match candidate, bulk-copying non-candidate bytes.

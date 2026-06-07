@@ -35,6 +35,8 @@ Both built-in structural patterns (Anthropic, OpenAI, etc.) and user-registered 
 
 **Registration** is a preparatory operation that takes a secret value and produces an instance Pattern. The secret is consumed during registration and immediately discarded; the library has no persistent store. The produced Pattern is an opaque value the caller holds and passes to future `swap` calls.
 
+**`Detector`** is a pre-built detection context. It encapsulates a set of Patterns and the Aho-Corasick automaton derived from their first segments, built once at construction. `Detector::swap` has identical semantics to the free `swap` function but reuses the pre-built automaton across calls. `Detector` is `Send + Sync` and intended for use in long-running processes where the pattern set is fixed at startup.
+
 These operations and data abstractions are the complete public surface.
 
 ## Pattern Detection
@@ -347,6 +349,9 @@ The CLI exposes `swap`, `restore`, `init`, `register`, `define`, `list`, `inspec
 36. `remove` MUST write the updated patterns file atomically; no partial write MUST be observable by concurrent readers.
 37. The `register`, `define`, and `remove` commands MUST preserve all comments present in the patterns file when writing it back.
 38. The CLI `swap` command MUST successfully create the session key output file before writing any bytes to stdout or the entries file; if key file creation fails, no output MUST be produced.
+39. `Detector::swap` called on the same payload with the same Patterns MUST produce fakes identical to those produced by the free `swap` function.
+40. `Detector` MUST implement `Send + Sync`. It MUST be safe to share a `Detector` across threads without external synchronization.
+41. The Aho-Corasick automaton MUST NOT be rebuilt on `Detector::swap` calls. The automaton is built exactly once in `Detector::new`.
 
 ## Verifiable Conditions
 
