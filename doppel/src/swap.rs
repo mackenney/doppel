@@ -51,6 +51,11 @@ fn generate_fake_for_match(
 /// structurally-equivalent fake, and return the swapped payload, encrypted
 /// entries, and a fresh session key.
 ///
+/// For repeated calls with a fixed pattern set, prefer [`Detector`] to avoid
+/// rebuilding the Aho-Corasick automaton on every call.
+///
+/// [`Detector`]: crate::Detector
+///
 /// # Examples
 ///
 /// ```

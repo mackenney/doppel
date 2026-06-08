@@ -52,7 +52,7 @@ impl Default for SecretOptions {
 #[non_exhaustive]
 pub enum SecretError {
     /// Secret is empty or shorter than `anchor_len`.
-    #[error("secret is empty; registration requires at least 1 byte")]
+    #[error("secret too short for the given anchor_len")]
     TooShort,
 
     /// `anchor_len + tail_anchor_len` covers the entire secret, leaving no variable bytes.

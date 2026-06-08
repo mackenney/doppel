@@ -26,6 +26,7 @@ pub(crate) enum BuiltinSegment {
     },
     /// Fixed bytes for detection, but derived (not verbatim) in fake generation.
     /// Charset defaults to detected from value bytes; can be overridden.
+    // Built-in patterns currently use only Literal and Variable; Opaque is reserved for completeness.
     #[allow(dead_code)]
     Opaque {
         value: &'static [u8],
@@ -156,8 +157,8 @@ pub(crate) struct MatchCapture {
 
 /// Named character set for Variable segments.
 ///
-/// Maps 1:1 to the charset names in SPEC.md §Patterns File line 90:
-/// `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`.
+/// Maps 1:1 to the charset names in SPEC.md §Patterns File:
+/// `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CharsetName {

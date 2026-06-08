@@ -20,7 +20,8 @@ pub struct SecretsFile {
     pub pattern: Vec<PatternEntry>,
 }
 
-/// A pattern entry: identifier, salt, optional digests, and segment list.
+/// On-disk TOML (version 3) serialization form for a single pattern entry.
+/// Holds an identifier, 32-byte salt, optional HMAC digests, and ordered segment definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatternEntry {
     /// Unique string identifier for this pattern (e.g. `"anthropic"`, `"prod-db-password"`).
@@ -92,7 +93,7 @@ impl SecretsFile {
         }
     }
 
-    /// Serialize to TOML bytes.
+    /// Serialize to TOML version 3 bytes.
     ///
     /// # Errors
     ///
@@ -102,7 +103,7 @@ impl SecretsFile {
         Ok(s.into_bytes())
     }
 
-    /// Deserialize from TOML bytes with validation.
+    /// Deserialize from TOML version 3 bytes with validation.
     ///
     /// # Errors
     ///
@@ -161,6 +162,10 @@ impl SecretsFile {
     }
 
     /// Convert to runtime [`Pattern`] values.
+    ///
+    /// Salts are read from the file entries and remain stable across process restarts.
+    /// This differs from [`patterns::all`] which generates a fresh ephemeral salt each
+    /// time — important when you need the same secret to produce the same fake across runs.
     ///
     /// # Errors
     ///

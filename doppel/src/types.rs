@@ -5,6 +5,9 @@ use zeroize::ZeroizeOnDrop;
 
 /// Session key: 32-byte random value, destroyed on drop.
 /// Never serialized, never logged. See SPEC.md INV-10, INV-12.
+///
+/// `Clone`, `Debug`, and `Display` are intentionally not derived — prevents accidental
+/// logging or copying of the key material.
 #[derive(ZeroizeOnDrop)]
 pub struct SessionKey(Box<[u8; 32]>);
 
@@ -19,8 +22,6 @@ impl SessionKey {
         &self.0
     }
 }
-
-// No Clone, no Debug, no Display — prevents accidental logging or copying.
 
 /// One substitution record produced by a single swap call.
 /// Contains the fake bytes (not secret) and the AEAD-encrypted original secret.
@@ -75,7 +76,12 @@ impl Entry {
     }
 }
 
-/// Result of a swap() call.
+/// Result of a [`swap`] call.
+///
+/// Marked `#[non_exhaustive]`: struct-update syntax (`SwapResult { .., ..other }`) will not
+/// compile; construct via `swap()` only.
+///
+/// [`swap`]: crate::swap
 #[non_exhaustive]
 pub struct SwapResult {
     /// The input payload with every detected secret replaced by a structurally-equivalent fake.

@@ -14,6 +14,10 @@
 //! 3. **[`restore`]** — stream the response through the restore function, which
 //!    replaces fakes with originals using the session key and entries.
 //!
+//! For repeated swap calls against the same fixed pattern set, use [`Detector`] to
+//! pre-build the Aho-Corasick automaton once and reuse it across calls; this avoids
+//! rebuilding the automaton on every request.
+//!
 //! # Quick start
 //!
 //! ```rust
