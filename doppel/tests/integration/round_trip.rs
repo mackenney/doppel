@@ -266,6 +266,10 @@ fn test_two_different_secrets_two_entries() {
         2,
         "two different secrets → two entries"
     );
+    assert_ne!(
+        result.entries[0].fake, result.entries[1].fake,
+        "two different secrets must produce distinct fakes"
+    );
 
     let mut input = result.payload.as_slice();
     let mut output = Vec::new();
@@ -384,4 +388,76 @@ fn test_mixed_structural_registered_swap_restore() {
     let mut input = std::io::Cursor::new(sr.payload.clone());
     restore(&mut input, &mut restored, &sr.entries, &sr.session_key).unwrap();
     assert_eq!(restored, payload, "both secrets must be restored");
+}
+
+#[test]
+fn test_group_pattern_both_members_swap_restore() {
+    // A single group Pattern with 2 digests must detect both members in one payload
+    // and restore both correctly — verifying multi-entry restore from the same Pattern.
+    use doppel::{SecretOptions, SecretsFile, register_with_options};
+
+    let secret_a = b"group-rt-member-alpha-secret-value-01";
+    let secret_b = b"group-rt-member-beta-secrets-value-02";
+
+    let opts = SecretOptions::default();
+    let pat_a = register_with_options(secret_a, &opts).unwrap();
+    let mut pf = SecretsFile::new();
+    pf.add_secret_pattern("rt-group".to_string(), &pat_a)
+        .unwrap();
+    pf.add_secret_to_group("rt-group", secret_b).unwrap();
+    let patterns = pf.to_patterns().unwrap();
+    assert_eq!(patterns.len(), 1, "one group Pattern");
+
+    let payload = [
+        b"token_a: ".as_slice(),
+        secret_a,
+        b" token_b: ".as_slice(),
+        secret_b,
+    ]
+    .concat();
+
+    let sr = swap(&payload, &patterns).unwrap();
+    assert_eq!(sr.entries.len(), 2, "both group members detected");
+    assert_ne!(
+        sr.entries[0].fake, sr.entries[1].fake,
+        "distinct fakes per member"
+    );
+    assert!(!sr.payload.windows(secret_a.len()).any(|w| w == secret_a));
+    assert!(!sr.payload.windows(secret_b.len()).any(|w| w == secret_b));
+
+    let mut input = sr.payload.as_slice();
+    let mut restored = Vec::new();
+    restore(&mut input, &mut restored, &sr.entries, &sr.session_key).unwrap();
+    assert_eq!(restored, payload, "group round-trip must recover original");
+}
+
+#[test]
+fn test_swap_empty_payload_nonempty_patterns() {
+    // swap on an empty payload with active patterns must return empty output and no entries.
+    let result = swap(b"", &[patterns::anthropic()]).unwrap();
+    assert_eq!(result.payload, b"", "empty payload stays empty");
+    assert!(result.entries.is_empty(), "no entries for empty payload");
+}
+
+#[test]
+fn test_inv2_gap_bytes_between_two_secrets_unchanged() {
+    // INV-2: bytes outside detected secrets are unchanged.
+    // Explicit check for gap bytes between two distinct detected secrets.
+    let gap = b" |GAP| ";
+    let payload = [SYNTH_ANTHROPIC, gap.as_slice(), SYNTH_OPENAI].concat();
+    let result = swap(
+        &payload,
+        &[patterns::anthropic(), patterns::openai_classic()],
+    )
+    .unwrap();
+    assert_eq!(result.entries.len(), 2, "both secrets detected");
+    // The gap must appear verbatim at offset fake1_len in the output.
+    let fake1_len = SYNTH_ANTHROPIC.len(); // same length as original for structural fake
+    let gap_start = fake1_len;
+    let gap_end = gap_start + gap.len();
+    assert_eq!(
+        &result.payload[gap_start..gap_end],
+        gap,
+        "INV-2: gap bytes between two detected secrets must be unchanged"
+    );
 }

@@ -110,21 +110,38 @@ impl Segment {
     }
 
     /// Convert to the serializable `SegmentDef` representation.
-    pub(crate) fn to_def(&self) -> SegmentDef {
+    /// Convert to the serializable `SegmentDef` representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SegmentDefError::NonUtf8Bytes`] if a Literal or Opaque segment's
+    /// value bytes are not valid UTF-8 (SPEC §Patterns File).
+    pub(crate) fn try_to_def(&self) -> Result<SegmentDef, SegmentDefError> {
         match self {
-            Segment::Literal(bytes) => SegmentDef::Literal {
-                value: String::from_utf8_lossy(bytes).into_owned(),
-            },
-            Segment::Variable { charset, min, max } => SegmentDef::Variable {
+            Segment::Literal(bytes) => Ok(SegmentDef::Literal {
+                value: std::str::from_utf8(bytes)
+                    .map_err(|_| SegmentDefError::NonUtf8Bytes)?
+                    .to_owned(),
+            }),
+            Segment::Variable { charset, min, max } => Ok(SegmentDef::Variable {
                 charset: charset.as_str().to_string(),
                 min: *min,
                 max: *max,
-            },
-            Segment::Opaque { value, charset } => SegmentDef::Opaque {
-                value: String::from_utf8_lossy(value).into_owned(),
+            }),
+            Segment::Opaque { value, charset } => Ok(SegmentDef::Opaque {
+                value: std::str::from_utf8(value)
+                    .map_err(|_| SegmentDefError::NonUtf8Bytes)?
+                    .to_owned(),
                 charset: Some(charset.as_str().to_owned()),
-            },
+            }),
         }
+    }
+
+    /// Convert to `SegmentDef`, panicking on non-UTF-8 bytes.
+    /// Only for built-in patterns whose bytes are guaranteed ASCII.
+    pub(crate) fn to_def(&self) -> SegmentDef {
+        self.try_to_def()
+            .expect("built-in segment bytes are always ASCII")
     }
 }
 
@@ -354,6 +371,11 @@ pub enum SegmentDefError {
     /// The segment list is empty.
     #[error("segment list must not be empty")]
     EmptySegmentList,
+
+    /// A Literal or Opaque segment value contains non-UTF-8 bytes.
+    /// SPEC §Patterns File: all segment `value` fields MUST be valid UTF-8.
+    #[error("segment value contains non-UTF-8 bytes")]
+    NonUtf8Bytes,
 }
 
 #[cfg(test)]

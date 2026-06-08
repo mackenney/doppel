@@ -214,6 +214,10 @@ fn test_detector_mixed_structural_and_registered_payload() {
             .any(|w| w == reg_secret),
         "registered secret must not appear in swapped payload"
     );
+    assert_ne!(
+        result.entries[0].fake, result.entries[1].fake,
+        "two different secrets in same swap call must produce distinct fakes"
+    );
 }
 
 #[test]

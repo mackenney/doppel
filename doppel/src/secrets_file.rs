@@ -169,6 +169,14 @@ impl SecretsFile {
         self.pattern
             .iter()
             .map(|entry| {
+                // Validate segment structure (defense-in-depth for programmatically
+                // constructed SecretsFile values that bypass deserialize/add_structural_entry).
+                crate::segment::validate_segment_defs(&entry.segments).map_err(|e| {
+                    SecretsFileError::InvalidSegment {
+                        identifier: entry.identifier.clone(),
+                        reason: e.to_string(),
+                    }
+                })?;
                 let segments: Result<Vec<Segment>, _> = entry
                     .segments
                     .iter()
@@ -226,7 +234,18 @@ impl SecretsFile {
         if duplicate {
             return Err(SecretsFileError::DuplicateIdentifier { identifier });
         }
-        let seg_defs = pattern.segments.iter().map(|s| s.to_def()).collect();
+        let seg_defs: Result<Vec<_>, _> = pattern
+            .segments
+            .iter()
+            .map(|s| {
+                s.try_to_def()
+                    .map_err(|e| SecretsFileError::InvalidSegment {
+                        identifier: identifier.clone(),
+                        reason: e.to_string(),
+                    })
+            })
+            .collect();
+        let seg_defs = seg_defs?;
         self.pattern.push(PatternEntry {
             identifier: identifier.clone(),
             salt: pattern.salt,
