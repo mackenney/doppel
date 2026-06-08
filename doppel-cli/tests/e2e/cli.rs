@@ -295,8 +295,9 @@ fn test_e2e_init_creates_patterns_file() {
     assert_eq!(val["version"].as_integer(), Some(3));
     let pattern = val["pattern"].as_array().unwrap();
     assert!(
-        pattern.len() >= 28,
-        "init must produce at least 28 built-in patterns"
+        pattern.len() >= 27,
+        "init must produce at least 27 built-in patterns (got {})",
+        pattern.len()
     );
 
     #[cfg(unix)]

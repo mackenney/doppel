@@ -266,7 +266,8 @@ const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
 static OPENROUTER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "openrouter".into(),
     // sk-or-v1-<64 hex_lower> = 73 chars total
-    // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}`
+    // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}` — pattern uses lowercase-only
+    // (HexLower); uppercase hex not observed in OpenRouter keys in practice.
     segments: OPENROUTER_SEGS
         .iter()
         .map(Segment::from)

@@ -297,16 +297,18 @@ fn run_register(
 
         // Surgically append only the new digest to the existing entry's digests array,
         // preserving inline comments, entry position, and all other fields (INV-37).
-        if let Some(aot) = doc["pattern"].as_array_of_tables_mut() {
-            if let Some(table) = aot
-                .iter_mut()
-                .find(|t| t["identifier"].as_str() == Some(group_id))
-            {
-                if let Some(arr) = table["digests"].as_array_mut() {
-                    arr.push(new_digest_hex.as_str());
-                }
-            }
-        }
+        // Each ok_or propagates as an error rather than silently no-oping.
+        let aot = doc["pattern"]
+            .as_array_of_tables_mut()
+            .ok_or("TOML structure error: 'pattern' is not an array-of-tables")?;
+        let table = aot
+            .iter_mut()
+            .find(|t| t["identifier"].as_str() == Some(group_id))
+            .ok_or_else(|| format!("TOML structure error: '{}' not found in doc", group_id))?;
+        let arr = table["digests"]
+            .as_array_mut()
+            .ok_or("TOML structure error: 'digests' is not an inline array")?;
+        arr.push(new_digest_hex.as_str());
 
         let new_content = doc.to_string();
         write_patterns_file(patterns_path, new_content.as_bytes(), false)?;

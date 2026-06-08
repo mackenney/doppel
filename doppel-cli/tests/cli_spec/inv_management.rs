@@ -300,3 +300,131 @@ fn test_inv37_register_preserves_comments() {
         "INV-37: register must preserve existing comments; got:\n{after}"
     );
 }
+
+#[test]
+fn test_inv37_register_group_preserves_inline_comments() {
+    // INV-37: the --group path of `register` must preserve inline comments inside
+    // the updated [[pattern]] block. This exercises the round-4 in-place TOML surgery
+    // code path (doc["pattern"].as_array_of_tables_mut() → arr.push), not the first-
+    // registration path tested by test_inv37_register_preserves_comments.
+    use std::fs;
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = dir.path().join("secrets.toml");
+
+    // Patterns file with one instance pattern entry containing an inline sentinel comment.
+    // The comment must survive a `register --group` update to this entry.
+    let initial = concat!(
+        "# file-level-comment\n",
+        "version = 3\n",
+        "[[pattern]]\n",
+        "# sentinel-inside-entry\n",
+        "identifier = \"grp-inv37\"\n",
+        "salt = \"0000000000000000000000000000000000000000000000000000000000000001\"\n",
+        "digests = [\"aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233\"]\n",
+        "[[pattern.segments]]\n",
+        "type = \"opaque\"\n",
+        "value = \"pfx_\"\n",
+        "[[pattern.segments]]\n",
+        "type = \"variable\"\n",
+        "charset = \"alphanumeric\"\n",
+        "min = 20\n",
+        "max = 20\n",
+    );
+    fs::write(&pat, initial).unwrap();
+
+    // Secret must be long enough to clear the entropy threshold.
+    let secret = b"inv37-group-second-secret-long-enough-for-entropy-threshold";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--group", "grp-inv37"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let status = child.wait_with_output().unwrap().status;
+    assert!(status.success(), "register --group failed");
+
+    let after = fs::read_to_string(&pat).unwrap();
+    assert!(
+        after.contains("# sentinel-inside-entry"),
+        "INV-37: --group must preserve inline comments inside the updated entry; got:\n{after}"
+    );
+    assert!(
+        after.contains("# file-level-comment"),
+        "INV-37: --group must preserve file-level comments; got:\n{after}"
+    );
+    // The updated entry must have two digests (original + newly added).
+    let pf = doppel::SecretsFile::deserialize(after.as_bytes()).unwrap();
+    let entry = pf
+        .pattern
+        .iter()
+        .find(|e| e.identifier == "grp-inv37")
+        .unwrap();
+    assert_eq!(entry.digests.len(), 2, "--group must add a second digest");
+}
+
+#[test]
+fn test_vc16_remove_eliminates_identifier() {
+    // VC-16: After `remove` succeeds on an existing identifier, the patterns file
+    // MUST NOT contain any entry with that identifier.
+    use std::fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = dir.path().join("secrets.toml");
+
+    // File with two family pattern entries; remove one and verify it is gone.
+    let initial = concat!(
+        "version = 3\n",
+        "[[pattern]]\n",
+        "identifier = \"keep-me\"\n",
+        "salt = \"0000000000000000000000000000000000000000000000000000000000000001\"\n",
+        "digests = []\n",
+        "[[pattern.segments]]\n",
+        "type = \"literal\"\n",
+        "value = \"pfx_\"\n",
+        "[[pattern.segments]]\n",
+        "type = \"variable\"\n",
+        "charset = \"alphanumeric\"\n",
+        "min = 10\n",
+        "max = 20\n",
+        "[[pattern]]\n",
+        "identifier = \"remove-me\"\n",
+        "salt = \"0000000000000000000000000000000000000000000000000000000000000002\"\n",
+        "digests = []\n",
+        "[[pattern.segments]]\n",
+        "type = \"literal\"\n",
+        "value = \"pre_\"\n",
+        "[[pattern.segments]]\n",
+        "type = \"variable\"\n",
+        "charset = \"alphanumeric\"\n",
+        "min = 10\n",
+        "max = 20\n",
+    );
+    fs::write(&pat, initial).unwrap();
+
+    let output = cli_bin()
+        .args(["remove", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "remove-me"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "remove must succeed");
+
+    let after = fs::read_to_string(&pat).unwrap();
+    let pf = doppel::SecretsFile::deserialize(after.as_bytes()).unwrap();
+    assert!(
+        pf.pattern.iter().all(|e| e.identifier != "remove-me"),
+        "VC-16: removed identifier must not appear in the file"
+    );
+    assert!(
+        pf.pattern.iter().any(|e| e.identifier == "keep-me"),
+        "VC-16: other entries must be preserved"
+    );
+}
