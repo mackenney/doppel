@@ -756,13 +756,15 @@ impl Pattern {
         if !self.digests.is_empty() {
             let candidate = &payload[pos..end];
             // SPEC §Detection Algorithm step 4: compute HMAC once, compare against each digest
-            // in constant time. fold (not any) ensures all digests are evaluated — no early
-            // exit that would leak the ordinal position of a matching digest.
+            // in constant time. Accumulate in subtle::Choice throughout the fold to prevent
+            // the optimizer from eliding ct_eq calls once a match is found; convert to bool
+            // only after all digests have been evaluated.
+            use subtle::{Choice, ConstantTimeEq};
             let computed_hmac = crate::crypto::hmac_sha256(&self.salt, candidate);
-            let matches_any = self.digests.iter().fold(false, |acc, digest| {
-                use subtle::ConstantTimeEq;
-                acc | bool::from(computed_hmac.ct_eq(digest))
-            });
+            let matches_any =
+                bool::from(self.digests.iter().fold(Choice::from(0u8), |acc, digest| {
+                    acc | computed_hmac.ct_eq(digest)
+                }));
             if !matches_any {
                 return None;
             }

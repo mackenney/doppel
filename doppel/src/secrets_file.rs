@@ -305,7 +305,7 @@ impl SecretsFile {
 
     /// Fill in all built-in family patterns not already present, embedding segment definitions.
     ///
-    /// Equivalent to [`generate_missing_structural_salts`] in v3 (segments always required).
+    /// Equivalent to [`Self::generate_missing_structural_salts`] in v3 (segments always required).
     pub fn generate_missing_structural_salts_with_segments(&mut self) {
         self.generate_missing_structural_salts();
     }

@@ -1408,3 +1408,33 @@ fn test_inv41_detector_shared_automaton_produces_correct_results_across_calls() 
     );
     assert_eq!(r_b.payload, payload_b, "INV-41: payload_b unchanged");
 }
+
+#[test]
+fn test_inv39_detector_swap_semantics_identical_for_registered_pattern() {
+    // INV-39: "Detector::swap called on the same payload with the same Patterns MUST
+    //  produce fakes identical to those produced by the free swap function."
+    //  This variant tests with a registered (instance) pattern, not just a family pattern.
+    use doppel::{Detector, register, swap};
+
+    let secret = b"inv39-registered-secret-value-check-0001";
+    let pat = register(secret).unwrap();
+    let payload = [b"token: ".as_slice(), secret].concat();
+
+    let detector = Detector::new(vec![pat.clone()]);
+    let r_detector = detector.swap(&payload).unwrap();
+    let r_free = swap(&payload, &[pat]).unwrap();
+
+    assert_eq!(
+        r_detector.entries.len(),
+        1,
+        "INV-39: Detector must detect the registered secret"
+    );
+    assert_eq!(
+        r_detector.entries[0].fake, r_free.entries[0].fake,
+        "INV-39: Detector::swap and free swap must produce identical fakes for registered pattern"
+    );
+    assert_eq!(
+        r_detector.payload, r_free.payload,
+        "INV-39: swapped payloads must match for registered pattern"
+    );
+}

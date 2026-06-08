@@ -260,3 +260,25 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
 
     Ok(pattern)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    #[test]
+    fn test_register_with_rng_deterministic() {
+        // register_with_rng exists for deterministic tests per AGENTS.md.
+        // Same seed must produce the same salt and digest.
+        let secret = b"deterministic-registration-test-secret-01";
+        let mut rng_a = StdRng::seed_from_u64(42);
+        let mut rng_b = StdRng::seed_from_u64(42);
+        let pat_a = register_with_rng(secret, &mut rng_a).unwrap();
+        let pat_b = register_with_rng(secret, &mut rng_b).unwrap();
+        assert_eq!(pat_a.salt, pat_b.salt, "same seed must produce same salt");
+        assert_eq!(
+            pat_a.digests, pat_b.digests,
+            "same seed must produce same digest"
+        );
+    }
+}

@@ -112,11 +112,21 @@ fn test_detector_group_pattern_detects_both_members() {
     let r_b = detector.swap(&payload_b).unwrap();
     assert_eq!(r_b.entries.len(), 1, "secret_b must be detected");
 
-    // Non-member passes through
-    let secret_c = b"non-member-gamma-secrets-val-for-det-test!";
+    // Non-member with SAME anchor prefix as the group (starts "gro") and matching length.
+    // The AC automaton fires, but the HMAC gate rejects it — verifying the gate works.
+    let secret_c = b"group-impostor-zeta-secret-value-for-det!!!!";
+    assert_eq!(
+        secret_c.len(),
+        secret_a.len(),
+        "impostor must match group member length"
+    );
     let payload_c = [b"token: ".as_slice(), secret_c].concat();
     let r_c = detector.swap(&payload_c).unwrap();
     assert_eq!(r_c.entries.len(), 0, "non-member must not be detected");
+    assert_eq!(
+        r_c.payload, payload_c,
+        "non-member payload must be unchanged"
+    );
 }
 
 #[test]
@@ -132,10 +142,14 @@ fn test_detector_concurrent_swap_is_safe() {
     let key: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     let payload = Arc::new([b"Authorization: ".as_slice(), key, b"\n"].concat());
 
+    // Compute reference result to verify fake correctness under concurrency.
+    let reference_fake = Arc::new(detector.swap(&payload).unwrap().entries[0].fake.clone());
+
     let handles: Vec<_> = (0..8)
         .map(|_| {
             let d = Arc::clone(&detector);
             let p = Arc::clone(&payload);
+            let expected = Arc::clone(&reference_fake);
             thread::spawn(move || {
                 let result = d.swap(&p).unwrap();
                 assert_eq!(
@@ -144,6 +158,10 @@ fn test_detector_concurrent_swap_is_safe() {
                     "each thread must detect the secret"
                 );
                 assert!(!result.payload.windows(key.len()).any(|w| w == key));
+                assert_eq!(
+                    result.entries[0].fake, *expected,
+                    "fake must be deterministic across concurrent calls"
+                );
             })
         })
         .collect();
@@ -151,4 +169,78 @@ fn test_detector_concurrent_swap_is_safe() {
     for h in handles {
         h.join().expect("thread panicked");
     }
+}
+
+#[test]
+fn test_detector_mixed_structural_and_registered_payload() {
+    // Critical test vector: a Detector built with both a structural (family) pattern
+    // and a registered (instance) pattern must detect and replace both types of secrets
+    // when they appear together in the same payload.
+    use doppel::{Detector, patterns, register};
+
+    let structural_pat = patterns::anthropic();
+    // NOT real credentials — synthetic registered secret
+    let reg_secret = b"my-registered-secret-for-mixed-detector-01";
+    let reg_pat = register(reg_secret).unwrap();
+
+    let detector = Detector::new(vec![structural_pat, reg_pat]);
+
+    let payload = [
+        b"key: ".as_slice(),
+        SYNTH_ANTHROPIC,
+        b" token: ".as_slice(),
+        reg_secret,
+    ]
+    .concat();
+
+    let result = detector.swap(&payload).unwrap();
+
+    assert_eq!(
+        result.entries.len(),
+        2,
+        "both structural and registered secrets must be detected"
+    );
+    assert!(
+        !result
+            .payload
+            .windows(SYNTH_ANTHROPIC.len())
+            .any(|w| w == SYNTH_ANTHROPIC),
+        "structural secret must not appear in swapped payload"
+    );
+    assert!(
+        !result
+            .payload
+            .windows(reg_secret.len())
+            .any(|w| w == reg_secret),
+        "registered secret must not appear in swapped payload"
+    );
+}
+
+#[test]
+fn test_detector_registered_hmac_mismatch_passthrough() {
+    // HMAC mismatch via Detector::swap: a candidate that matches the registered pattern's
+    // structural shape but fails HMAC verification must pass through unchanged.
+    // This exercises a different failure mode than the free swap tests — verifying that
+    // the shared AC automaton in Detector doesn't cause a wrong Pattern to be consulted.
+    use doppel::{Detector, register};
+
+    let real_secret = b"my-registered-secret-for-hmac-mismatch-test";
+    let pat = register(real_secret).unwrap();
+    let detector = Detector::new(vec![pat]);
+
+    let mut lookalike = real_secret.to_vec();
+    lookalike[12] ^= 0xFF;
+    let payload = [b"token: ".as_slice(), &lookalike].concat();
+
+    let result = detector.swap(&payload).unwrap();
+
+    assert!(
+        result.entries.is_empty(),
+        "HMAC mismatch must not produce an entry"
+    );
+    assert_eq!(
+        result.payload.as_slice(),
+        payload.as_slice(),
+        "HMAC mismatch must pass through unchanged"
+    );
 }
