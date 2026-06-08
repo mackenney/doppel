@@ -552,8 +552,7 @@ fn test_inv19_restore_exact_matching_only() {
 
 #[test]
 fn test_inv22_all_structural_built_in_classes_present() {
-    // INV-22: built-in structural MUST cover Anthropic, OpenAI (classic + project),
-    //         AWS IAM (AKIA + ASIA), GitHub PAT (classic + fine-grained), and GCP API keys.
+    // INV-22: built-in structural patterns MUST cover all 27 built-in classes.
     //
     // Validates behaviorally: swap a synthetic key of each class and assert detection.
     let cases: &[(&str, &[u8])] = &[
@@ -605,6 +604,86 @@ fn test_inv22_all_structural_built_in_classes_present() {
             "OpenAI svcacct",
             b"sk-svcacct-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
             // "sk-svcacct-" (11) + 58 B's + "T3BlbkFJ" (8) + 58 B's = 135 chars
+        ),
+        // Anthropic Admin01: sk-ant-admin01- + 93 url_safe_base64 + AA
+        (
+            "Anthropic Admin01",
+            b"sk-ant-admin01-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA",
+        ),
+        // Anthropic Admin03: sk-ant-admin03- + 93 url_safe_base64 + AA
+        (
+            "Anthropic Admin03",
+            b"sk-ant-admin03-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA",
+        ),
+        // Linear: lin_api_ + 40 alphanumeric
+        (
+            "Linear",
+            b"lin_api_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Groq: gsk_ + 52 alphanumeric
+        (
+            "Groq",
+            b"gsk_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Perplexity: pplx- + 48 hex_lower
+        (
+            "Perplexity",
+            b"pplx-abcdef0123456789abcdef0123456789abcdef0123456789",
+        ),
+        // Cerebras: csk- + 48 alphanumeric
+        (
+            "Cerebras",
+            b"csk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Stripe live: sk_live_ + 24 alphanumeric
+        (
+            "Stripe live",
+            b"sk_live_AAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Stripe test: sk_test_ + 24 alphanumeric
+        (
+            "Stripe test",
+            b"sk_test_AAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Clerk live: sk_live_ + 45 alphanumeric (distinct from Stripe by length)
+        (
+            "Clerk",
+            b"sk_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Svix: svix_ + 30 alphanumeric
+        (
+            "Svix",
+            b"svix_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Chromatic: chpt_ + 30 alphanumeric
+        (
+            "Chromatic",
+            b"chpt_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Google OAuth Secret: GOCSPX- + 28 url_safe_base64
+        (
+            "Google OAuth Secret",
+            b"GOCSPX-AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub OAuth: gho_ + 36 alphanumeric
+        (
+            "GitHub OAuth",
+            b"gho_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub App Server: ghs_ + 36 alphanumeric
+        (
+            "GitHub App Server",
+            b"ghs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub App User: ghu_ + 36 alphanumeric
+        (
+            "GitHub App User",
+            b"ghu_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub Refresh: ghr_ + 36 alphanumeric (min:36, max:76; use min)
+        (
+            "GitHub Refresh",
+            b"ghr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
     ];
     let all = patterns::all();
@@ -1436,5 +1515,34 @@ fn test_inv39_detector_swap_semantics_identical_for_registered_pattern() {
     assert_eq!(
         r_detector.payload, r_free.payload,
         "INV-39: swapped payloads must match for registered pattern"
+    );
+}
+
+#[test]
+fn test_add_secret_to_group_rejects_family_pattern() {
+    // add_secret_to_group must reject family (structural) patterns with WrongPatternType,
+    // not silently convert them to instance patterns.
+    use doppel::{SecretsFile, SecretsFileError, segment::SegmentDef};
+    let mut pf = SecretsFile::new();
+    pf.add_structural_entry(
+        "my-family".to_string(),
+        vec![
+            SegmentDef::Literal {
+                value: "prefix_".into(),
+            },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 10,
+                max: 20,
+            },
+        ],
+        [0u8; 32],
+    )
+    .unwrap();
+    let result = pf.add_secret_to_group("my-family", b"some-secret-value-here-here-12345");
+    assert!(
+        matches!(result, Err(SecretsFileError::WrongPatternType)),
+        "add_secret_to_group must return WrongPatternType for family patterns, got: {:?}",
+        result
     );
 }

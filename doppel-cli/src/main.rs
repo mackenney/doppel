@@ -208,8 +208,8 @@ fn run_swap(
     let entries_json = Entry::serialize_entries(&result.entries)?;
     write_key_file(key_out_path, result.session_key.as_bytes())?;
 
-    io::stdout().write_all(&result.payload)?;
     std::fs::write(entries_path, &entries_json)?;
+    io::stdout().write_all(&result.payload)?;
 
     Ok(())
 }
@@ -284,27 +284,28 @@ fn run_register(
     if let Some(group_id) = group {
         pf.add_secret_to_group(group_id, &secret)?;
 
-        let entry = pf
-            .pattern
-            .iter()
-            .find(|e| e.identifier == group_id)
-            .expect("entry just updated");
-        let item = toml_edit::ser::to_document(entry)
-            .map_err(|e| format!("failed to serialize entry: {}", e))?
-            .into_item();
-        let new_table = item
-            .into_table()
-            .map_err(|_| "serialized entry was not a TOML table")?;
-
-        if let Some(aot) = doc["pattern"].as_array_of_tables_mut() {
-            let idx = aot
+        // Get the hex of the newly appended digest
+        let new_digest_hex = {
+            let entry = pf
+                .pattern
                 .iter()
-                .position(|t| t["identifier"].as_str() == Some(group_id));
-            if let Some(i) = idx {
-                aot.remove(i);
-                // toml_edit has no insert_at; we rebuild by removing and pushing
+                .find(|e| e.identifier == group_id)
+                .expect("entry just updated");
+            let digest = entry.digests.last().expect("just pushed");
+            hex_encode(digest)
+        };
+
+        // Surgically append only the new digest to the existing entry's digests array,
+        // preserving inline comments, entry position, and all other fields (INV-37).
+        if let Some(aot) = doc["pattern"].as_array_of_tables_mut() {
+            if let Some(table) = aot
+                .iter_mut()
+                .find(|t| t["identifier"].as_str() == Some(group_id))
+            {
+                if let Some(arr) = table["digests"].as_array_mut() {
+                    arr.push(new_digest_hex.as_str());
+                }
             }
-            aot.push(new_table);
         }
 
         let new_content = doc.to_string();

@@ -538,25 +538,6 @@ static SVIX_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .into(),
 });
 
-const DOPPLER_SEGS: [BuiltinSegment; 2] = [
-    BuiltinSegment::Literal(b"dp."),
-    BuiltinSegment::Variable {
-        charset: CharsetName::UrlSafeBase64,
-        min: 30,
-        max: 60,
-    },
-];
-static DOPPLER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
-    identifier: "doppler".into(),
-    // dp.<30-60 url_safe_base64>
-    // url_safe_base64 covers the alphanumeric + - _ chars found in Doppler tokens.
-    segments: DOPPLER_SEGS
-        .iter()
-        .map(Segment::from)
-        .collect::<Vec<_>>()
-        .into(),
-});
-
 const CHROMATIC_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"chpt_"),
     BuiltinSegment::Variable {
@@ -674,7 +655,6 @@ static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::ne
         &*STRIPE_TEST_DEF,
         &*CLERK_DEF,
         &*SVIX_DEF,
-        &*DOPPLER_DEF,
         &*CHROMATIC_DEF,
         &*GITHUB_OAUTH_DEF,
         &*GITHUB_APP_SERVER_DEF,
@@ -683,7 +663,7 @@ static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::ne
     ]
 });
 
-/// Returns references to all 28 built-in structural pattern definitions.
+/// Returns references to all 27 built-in structural pattern definitions.
 /// Used by patterns file loading to iterate and inject salts.
 pub(crate) fn all_defs() -> &'static [&'static StructuralDef] {
     &ALL_STRUCTURAL_DEFS
@@ -1054,18 +1034,6 @@ pub fn svix() -> Pattern {
     }
 }
 
-/// Returns a Doppler service token pattern (`dp.`) with an ephemeral salt.
-///
-/// See [`anthropic`] for salt stability semantics.
-pub fn doppler() -> Pattern {
-    Pattern {
-        identifier: DOPPLER_DEF.identifier.clone(),
-        segments: DOPPLER_DEF.segments.clone(),
-        salt: random_salt(),
-        digests: vec![],
-    }
-}
-
 /// Returns a Chromatic project token pattern (`chpt_`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
@@ -1139,7 +1107,7 @@ pub fn github_refresh() -> Pattern {
 /// GCP/Gemini (`AIza`), OpenRouter (`sk-or-v1-`), Google OAuth secret (`GOCSPX-`),
 /// Slack bot (`xoxb-`), Linear (`lin_api_`), Groq (`gsk_`), Perplexity (`pplx-`),
 /// Cerebras (`csk-`), Stripe live/test (`sk_live_`/`sk_test_`), Clerk (`sk_live_`),
-/// Svix (`svix_`), Doppler (`dp.`), Chromatic (`chpt_`).
+/// Svix (`svix_`), Chromatic (`chpt_`).
 pub fn all() -> Vec<Pattern> {
     vec![
         anthropic(),
@@ -1164,7 +1132,6 @@ pub fn all() -> Vec<Pattern> {
         stripe_test(),
         clerk(),
         svix(),
-        doppler(),
         chromatic(),
         github_oauth(),
         github_app_server(),
@@ -1212,7 +1179,6 @@ mod tests {
             b"sk_live_",
             b"sk_test_",
             b"svix_",
-            b"dp.",
             b"chpt_",
             b"gho_",
             b"ghs_",
@@ -1319,11 +1285,11 @@ mod tests {
     #[test]
     fn test_all_defs_identifiers_unique() {
         let defs = all_defs();
-        assert_eq!(defs.len(), 28, "must have 28 built-in structural defs");
+        assert_eq!(defs.len(), 27, "must have 27 built-in structural defs");
         let mut ids: Vec<&str> = defs.iter().map(|d| d.identifier.as_str()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 28, "all identifiers must be unique");
+        assert_eq!(ids.len(), 27, "all identifiers must be unique");
     }
 
     #[test]

@@ -179,10 +179,28 @@ impl SecretsFile {
                         })
                     })
                     .collect();
+                let segments = segments?;
+
+                // INV-31: instance patterns must have fixed-length variable segments.
+                if !entry.digests.is_empty() {
+                    for (i, seg) in entry.segments.iter().enumerate() {
+                        if let crate::segment::SegmentDef::Variable { min, max, .. } = seg {
+                            if min != max {
+                                return Err(SecretsFileError::InvalidSegment {
+                                    identifier: entry.identifier.clone(),
+                                    reason: format!(
+                                        "instance pattern variable segment at index {} has min ({}) != max ({})",
+                                        i, min, max
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
 
                 Ok(Pattern {
                     identifier: entry.identifier.clone(),
-                    segments: segments?.into(),
+                    segments: segments.into(),
                     salt: entry.salt,
                     digests: entry.digests.clone(),
                 })
@@ -225,6 +243,7 @@ impl SecretsFile {
     ///
     /// # Errors
     ///
+    /// - [`SecretsFileError::WrongPatternType`] if the target entry is a family pattern (has no digests).
     /// - [`SecretsFileError::NotFound`] if no entry with `group_id` exists.
     pub fn add_secret_to_group(
         &mut self,
@@ -238,6 +257,9 @@ impl SecretsFile {
             .ok_or_else(|| SecretsFileError::NotFound {
                 identifier: group_id.to_string(),
             })?;
+        if entry.digests.is_empty() {
+            return Err(SecretsFileError::WrongPatternType);
+        }
         let digest = crate::crypto::hmac_sha256(&entry.salt, secret);
         entry.digests.push(digest);
         Ok(())
@@ -335,7 +357,7 @@ mod tests {
         let bytes = pf.serialize().unwrap();
         let pf2 = SecretsFile::deserialize(&bytes).unwrap();
         assert_eq!(pf2.version, 3);
-        assert_eq!(pf2.pattern.len(), 28);
+        assert_eq!(pf2.pattern.len(), 27);
         let orig_salt = pf
             .pattern
             .iter()
@@ -375,7 +397,7 @@ mod tests {
     fn test_generate_missing_fills_all_builtins() {
         let mut pf = SecretsFile::new();
         pf.generate_missing_structural_salts();
-        assert_eq!(pf.pattern.len(), 28);
+        assert_eq!(pf.pattern.len(), 27);
         for def in crate::patterns::all_defs() {
             assert!(pf.pattern.iter().any(|e| e.identifier == def.identifier));
         }

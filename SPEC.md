@@ -77,7 +77,7 @@ At each candidate position, `swap` attempts every Pattern whose first segment ma
 
 ### Built-in Family Patterns
 
-The library MUST ship built-in family pattern definitions covering at minimum: Anthropic API keys, OpenAI API keys (classic, project, service account), AWS IAM access key IDs (AKIA and ASIA prefixes), GitHub personal access tokens (classic, fine-grained, OAuth, app server, app user, refresh), GCP API keys, OpenRouter keys, Google OAuth client secrets, Slack bot tokens, Linear API keys, Groq, Perplexity, Cerebras, Stripe, Clerk, Svix, Doppler, and Chromatic. Additional definitions MAY be added; the built-in set is not closed.
+The library MUST ship built-in family pattern definitions covering at minimum: Anthropic API keys, OpenAI API keys (classic, project, service account), AWS IAM access key IDs (AKIA and ASIA prefixes), GitHub personal access tokens (classic, fine-grained, OAuth, app server, app user, refresh), GCP API keys, OpenRouter keys, Google OAuth client secrets, Slack bot tokens, Linear API keys, Groq, Perplexity, Cerebras, Stripe, Clerk, Svix, and Chromatic. Additional definitions MAY be added; the built-in set is not closed.
 
 Each built-in pattern constructor generates a new Pattern with an ephemeral random salt. For stable fakes across process restarts, load patterns from a patterns file.
 
