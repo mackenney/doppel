@@ -1546,3 +1546,93 @@ fn test_add_secret_to_group_rejects_family_pattern() {
         result
     );
 }
+
+#[test]
+fn test_vc14_family_pattern_opaque_first_detection_and_fake() {
+    // VC-14: A family pattern defined with [opaque("sec_"), variable(alphanumeric, 20, 20)]
+    // detects a payload containing "sec_" + 20 alphanumeric chars and produces a fake
+    // whose opaque portion (first 4 bytes) differs from "sec_" (derived, not verbatim),
+    // and whose variable portion also differs from the original.
+    use doppel::{SecretsFile, swap};
+
+    let toml = concat!(
+        "version = 3\n",
+        "[[pattern]]\n",
+        "identifier = \"vc14-family\"\n",
+        "salt = \"0000000000000000000000000000000000000000000000000000000000000001\"\n",
+        "digests = []\n",
+        "[[pattern.segments]]\n",
+        "type = \"opaque\"\n",
+        "value = \"sec_\"\n",
+        "[[pattern.segments]]\n",
+        "type = \"variable\"\n",
+        "charset = \"alphanumeric\"\n",
+        "min = 20\n",
+        "max = 20\n",
+    );
+    let pf = SecretsFile::deserialize(toml.as_bytes()).unwrap();
+    let patterns = pf.to_patterns().unwrap();
+
+    // Payload: opaque anchor "sec_" + 20 alphanumeric chars
+    let secret = b"sec_AAAABBBBCCCCDDDDEEEE";
+    assert_eq!(secret.len(), 24);
+
+    let result = swap(secret, &patterns).unwrap();
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "VC-14: family pattern must detect the secret"
+    );
+
+    let fake = &result.entries[0].fake;
+    assert_eq!(
+        fake.len(),
+        secret.len(),
+        "VC-14: fake must be same length as original"
+    );
+    // Opaque portion must be derived (not verbatim "sec_")
+    assert_ne!(
+        &fake[..4],
+        b"sec_",
+        "VC-14: opaque segment fake bytes must not equal original anchor"
+    );
+    // Variable portion must differ from original
+    assert_ne!(
+        &fake[4..],
+        b"AAAABBBBCCCCDDDDEEEE",
+        "VC-14: variable segment fake bytes must differ from original"
+    );
+}
+
+#[test]
+fn test_stripe_clerk_sk_live_gap_behavior() {
+    // Documents the detection gap for sk_live_ tokens with 33-44 variable chars.
+    // stripe_live covers [24,32]; clerk covers [45,55]. A 36-char variable payload
+    // is partially matched by stripe_live (max=32): the first 40 bytes are replaced
+    // with a fake, and the remaining 4 chars pass through unchanged.
+    //
+    // This test documents and pins current behavior so that any change to the
+    // Stripe/Clerk ranges is immediately visible.
+    let payload = b"sk_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 8 + 36 = 44 bytes
+    assert_eq!(payload.len(), 44);
+
+    let result = swap(payload, &patterns::all()).unwrap();
+
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "Stripe pattern fires for first 32 variable chars"
+    );
+    // The fake covers bytes 0..40 (sk_live_ prefix + 32 variable chars).
+    // Bytes 40..44 (the last 4 chars) pass through unchanged.
+    assert_eq!(
+        &result.payload[40..],
+        b"AAAA",
+        "trailing chars beyond stripe_live max=32 must pass through unchanged"
+    );
+    assert_ne!(
+        result.payload[..40].to_vec(),
+        payload[..40].to_vec(),
+        "first 40 bytes must be replaced with a fake"
+    );
+}

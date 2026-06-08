@@ -23,8 +23,10 @@
 //! let payload = b"Authorization: sk-ant-api03-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA";
 //!
 //! // 1. Swap: detect and replace the key before sending to an external service
-//! // Note: `patterns::all()` uses ephemeral salts — fakes differ across process restarts.
-//! // For persistent fake stability, use `SecretsFile::to_patterns()`.
+//! // Note: `patterns::all()` uses ephemeral salts — two separate calls to `swap` with
+//! // the same secret will produce different fakes. For stable fakes across calls,
+//! // use `SecretsFile::to_patterns()`. The `restore` call always works correctly because
+//! // fakes are embedded in the encrypted entries, independent of pattern salts.
 //! let result = swap(payload, &patterns::all()).unwrap();
 //! assert_eq!(result.entries.len(), 1); // one secret detected
 //! assert_ne!(result.payload.as_slice(), payload as &[u8]); // key replaced with a fake

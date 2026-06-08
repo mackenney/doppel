@@ -335,7 +335,8 @@ fn test_inv37_register_group_preserves_inline_comments() {
     );
     fs::write(&pat, initial).unwrap();
 
-    // Secret must be long enough to clear the entropy threshold.
+    // The --group path calls add_secret_to_group which has no entropy gate; any
+    // non-empty secret is accepted. Use a long secret to match the group pattern shape.
     let secret = b"inv37-group-second-secret-long-enough-for-entropy-threshold";
 
     let mut child = cli_bin()
