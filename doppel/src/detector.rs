@@ -29,6 +29,18 @@ use crate::types::{SwapError, SwapResult};
 /// let result = detector.swap(payload).unwrap();
 /// assert_eq!(result.entries.len(), 1);
 /// ```
+///
+/// # Loading from a patterns file
+///
+/// ```rust,no_run
+/// use doppel::{Detector, SecretsFile};
+///
+/// let bytes = std::fs::read("patterns.toml").unwrap();
+/// let pf = SecretsFile::deserialize(&bytes).unwrap();
+/// let patterns = pf.to_patterns().unwrap();
+/// let detector = Detector::new(patterns);
+/// // reuse `detector` across requests
+/// ```
 pub struct Detector {
     patterns: Vec<Pattern>,
     ac: AhoCorasick,
@@ -38,6 +50,14 @@ impl Detector {
     /// Build the Aho-Corasick automaton from `patterns` and store both.
     ///
     /// O(total first-segment prefix bytes). Call once at startup.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the Aho-Corasick automaton cannot be built. In practice this requires
+    /// an extreme number of patterns or total prefix bytes and never occurs with the
+    /// built-in pattern set from [`crate::patterns::all`].
+    #[must_use = "the Detector should be stored and reused across requests; \
+              discarding it wastes the cost of building the AC automaton"]
     pub fn new(patterns: Vec<Pattern>) -> Self {
         let ac = build_ac_automaton(&patterns);
         Self { patterns, ac }
@@ -46,7 +66,10 @@ impl Detector {
     /// Swap secrets in `payload` using the pre-built automaton.
     ///
     /// Semantics are identical to the free [`crate::swap`] function (INV-39).
-    /// The Aho-Corasick automaton is NOT rebuilt (INV-41).
+    /// Note: "same Patterns" in INV-39 means the same [`Pattern`] values including
+    /// their salts. Two independently-constructed pattern lists (e.g., two calls to
+    /// [`crate::patterns::all`]) have different random salts and will produce different
+    /// fakes. The Aho-Corasick automaton is NOT rebuilt on each call (INV-41).
     pub fn swap(&self, payload: &[u8]) -> Result<SwapResult, SwapError> {
         swap_with_ac(payload, &self.patterns, &self.ac)
     }

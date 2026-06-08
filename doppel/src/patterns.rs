@@ -689,9 +689,13 @@ pub(crate) fn all_defs() -> &'static [&'static StructuralDef] {
     &ALL_STRUCTURAL_DEFS
 }
 
-/// Build an Aho-Corasick automaton from the first-segment anchor bytes of each pattern.
-/// Patterns whose first segment has no fixed bytes (e.g., starts with Variable) are
-/// excluded from the automaton; callers must fall back to byte-by-byte scan for those.
+/// Build an Aho-Corasick automaton from the first-segment bytes of each pattern.
+///
+/// Patterns whose first segment is `literal` or `opaque` contribute their value bytes
+/// as AC keywords. Patterns with a `variable` first segment are excluded; this cannot
+/// occur in practice because the First-Segment Invariant (SPEC.md §First-Segment
+/// Invariant) requires every Pattern to start with a `literal` or `opaque` segment,
+/// enforced at load and registration time.
 pub(crate) fn build_ac_automaton(patterns: &[Pattern]) -> AhoCorasick {
     let prefixes: Vec<&[u8]> = patterns
         .iter()

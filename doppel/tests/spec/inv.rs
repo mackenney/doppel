@@ -1375,12 +1375,14 @@ fn test_inv40_detector_is_send_sync() {
 }
 
 #[test]
-fn test_inv41_detector_ac_not_rebuilt_per_swap_call() {
+fn test_inv41_detector_shared_automaton_produces_correct_results_across_calls() {
     // "The Aho-Corasick automaton MUST NOT be rebuilt on Detector::swap calls."
     // — SPEC.md INV-41
-    // Verified by design: Detector holds `ac` as a struct field built in ::new.
-    // Multiple swap calls share the same field; no call to build_ac_automaton
-    // occurs inside swap_with_ac.
+    // INV-41 is a structural guarantee: `ac` is a plain field of `Detector`,
+    // `swap_with_ac` receives `&self.ac` (an immutable reference), so no rebuild
+    // can occur. This test verifies that multiple sequential calls on the same
+    // Detector produce correct results, which would fail if the shared automaton
+    // were corrupted or invalidated between calls.
     use doppel::{Detector, patterns};
 
     let detector = Detector::new(patterns::all());
