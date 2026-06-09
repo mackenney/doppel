@@ -3,24 +3,22 @@
 //! Each `pub fn` in this module returns a [`Pattern`] with an ephemeral salt.
 //! For persistent cross-restart fake stability, use [`crate::SecretsFile::to_patterns`].
 
-use crate::secrets::RegisteredPat;
 use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use aho_corasick::AhoCorasick;
 use std::sync::{Arc, LazyLock};
 
-/// Structural definition of a structural built-in secret class.
+/// Internal structural definition used as a static template for built-in patterns.
+/// Holds the identifier and segment list; salt is supplied by the per-call constructor.
 #[derive(Clone)]
-pub struct StructuralDef {
+pub(crate) struct StructuralDef {
     /// Stable string identifier for this class, used as the key in patterns files.
     pub(crate) identifier: String,
     /// Ordered sequence of structural segments for this secret class.
     /// See SPEC.md §Structural Patterns.
     pub(crate) segments: Arc<[Segment]>,
-    /// Derivation salt for fake generation. Zero in static template definitions;
-    /// set to a real (random or loaded) value when constructing a Pattern.
-    pub(crate) salt: [u8; 32],
 }
 
+#[cfg(test)]
 impl StructuralDef {
     /// Walk `payload[pos..]` against the segment list. Returns `Some(MatchCapture)`
     /// on a complete match, `None` otherwise.
@@ -79,6 +77,14 @@ fn match_segments(
             }
             None
         }
+        Segment::Opaque { value, .. } => {
+            let end = cur + value.len();
+            if payload.get(cur..end)? == value.as_slice() {
+                match_segments(payload, end, &segs[1..], var_lens)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -104,7 +110,6 @@ static ANTHROPIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
@@ -123,7 +128,6 @@ static OPENAI_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
@@ -152,7 +156,6 @@ static OPENAI_PROJECT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
@@ -171,7 +174,6 @@ static AWS_AKIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
@@ -190,7 +192,6 @@ static AWS_ASIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
@@ -209,7 +210,6 @@ static GITHUB_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
@@ -235,7 +235,6 @@ static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GCP_SEGS: [BuiltinSegment; 2] = [
@@ -254,7 +253,6 @@ static GCP_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
@@ -268,13 +266,13 @@ const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
 static OPENROUTER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     identifier: "openrouter".into(),
     // sk-or-v1-<64 hex_lower> = 73 chars total
-    // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}`
+    // Source: xchecker-dev `sk-or-v1-[0-9a-fA-F]{64}` — pattern uses lowercase-only
+    // (HexLower); uppercase hex not observed in OpenRouter keys in practice.
     segments: OPENROUTER_SEGS
         .iter()
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
@@ -300,7 +298,6 @@ static OPENAI_SVCACCT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
@@ -320,7 +317,6 @@ static GOOGLE_OAUTH_SECRET_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Struc
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
@@ -352,7 +348,6 @@ static SLACK_BOT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
@@ -373,7 +368,6 @@ static ANTHROPIC_ADMIN01_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
@@ -394,7 +388,6 @@ static ANTHROPIC_ADMIN03_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
 const LINEAR_SEGS: [BuiltinSegment; 2] = [
@@ -414,9 +407,231 @@ static LINEAR_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    salt: [0u8; 32],
 });
 
+const GROQ_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"gsk_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 52,
+        max: 52,
+    },
+];
+static GROQ_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "groq".into(),
+    // gsk_<52 alphanumeric> = 56 chars total
+    // Source: gitleaks groq api key rule
+    segments: GROQ_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const PERPLEXITY_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"pplx-"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::HexLower,
+        min: 48,
+        max: 48,
+    },
+];
+static PERPLEXITY_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "perplexity".into(),
+    // pplx-<48 hex_lower> = 53 chars total
+    segments: PERPLEXITY_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const CEREBRAS_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"csk-"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 48,
+        max: 48,
+    },
+];
+static CEREBRAS_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "cerebras".into(),
+    // csk-<48 alphanumeric> = 52 chars total
+    segments: CEREBRAS_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const STRIPE_LIVE_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk_live_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 24,
+        max: 32,
+    },
+];
+static STRIPE_LIVE_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "stripe_live".into(),
+    // sk_live_<24-32 alphanumeric> = 32-40 chars total
+    // Source: Stripe docs, gitleaks stripe_sk rule
+    segments: STRIPE_LIVE_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const STRIPE_TEST_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk_test_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 24,
+        max: 32,
+    },
+];
+static STRIPE_TEST_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "stripe_test".into(),
+    // sk_test_<24-32 alphanumeric> = 32-40 chars total
+    segments: STRIPE_TEST_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const CLERK_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"sk_live_"),
+    // Clerk live keys are longer than Stripe; length difference distinguishes them.
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 45,
+        max: 55,
+    },
+];
+static CLERK_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "clerk".into(),
+    // sk_live_<45-55 alphanumeric> = 53-63 chars total
+    // Shares prefix with stripe_live; longer variable range distinguishes them.
+    segments: CLERK_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const SVIX_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"svix_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 30,
+        max: 50,
+    },
+];
+static SVIX_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "svix".into(),
+    // svix_<30-50 alphanumeric>
+    segments: SVIX_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const CHROMATIC_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"chpt_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 30,
+        max: 50,
+    },
+];
+static CHROMATIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "chromatic".into(),
+    // chpt_<30-50 alphanumeric>
+    segments: CHROMATIC_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const GITHUB_OAUTH_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"gho_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 36,
+    },
+];
+static GITHUB_OAUTH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_oauth".into(),
+    // gho_<36 alphanumeric> = 40 chars total
+    // Source: GitHub docs on token formats (GitHub OAuth token)
+    segments: GITHUB_OAUTH_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const GITHUB_APP_SERVER_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ghs_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 36,
+    },
+];
+static GITHUB_APP_SERVER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_app_server".into(),
+    // ghs_<36 alphanumeric> = 40 chars total
+    // Source: GitHub docs — GitHub App server-to-server token
+    segments: GITHUB_APP_SERVER_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const GITHUB_APP_USER_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ghu_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 36,
+    },
+];
+static GITHUB_APP_USER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_app_user".into(),
+    // ghu_<36 alphanumeric> = 40 chars total
+    // Source: GitHub docs — GitHub App user-to-server token
+    segments: GITHUB_APP_USER_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
+
+const GITHUB_REFRESH_SEGS: [BuiltinSegment; 2] = [
+    BuiltinSegment::Literal(b"ghr_"),
+    BuiltinSegment::Variable {
+        charset: CharsetName::Alphanumeric,
+        min: 36,
+        max: 76,
+    },
+];
+static GITHUB_REFRESH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
+    identifier: "github_refresh".into(),
+    // ghr_<36-76 alphanumeric> = 40-80 chars total
+    // Source: GitHub docs — GitHub App refresh token
+    segments: GITHUB_REFRESH_SEGS
+        .iter()
+        .map(Segment::from)
+        .collect::<Vec<_>>()
+        .into(),
+});
 static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::new(|| {
     vec![
         &*ANTHROPIC_DEF,
@@ -434,59 +649,112 @@ static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::ne
         &*GOOGLE_OAUTH_SECRET_DEF,
         &*SLACK_BOT_DEF,
         &*LINEAR_DEF,
+        &*GROQ_DEF,
+        &*PERPLEXITY_DEF,
+        &*CEREBRAS_DEF,
+        &*STRIPE_LIVE_DEF,
+        &*STRIPE_TEST_DEF,
+        &*CLERK_DEF,
+        &*SVIX_DEF,
+        &*CHROMATIC_DEF,
+        &*GITHUB_OAUTH_DEF,
+        &*GITHUB_APP_SERVER_DEF,
+        &*GITHUB_APP_USER_DEF,
+        &*GITHUB_REFRESH_DEF,
     ]
 });
 
-/// Returns references to all 15 built-in structural pattern definitions.
+/// Returns references to all 27 built-in structural pattern definitions.
 /// Used by patterns file loading to iterate and inject salts.
 pub(crate) fn all_defs() -> &'static [&'static StructuralDef] {
     &ALL_STRUCTURAL_DEFS
 }
 
-static STRUCTURAL_PREFIXES: &[&[u8]] = &[
-    b"sk-ant-api03-",
-    b"sk-ant-admin01-",
-    b"sk-ant-admin03-",
-    b"sk-proj-",
-    b"sk-svcacct-",
-    b"sk-or-v1-",
-    b"sk-",
-    b"AKIA",
-    b"ASIA",
-    b"ghp_",
-    b"github_pat_",
-    b"AIza",
-    b"GOCSPX-",
-    b"xoxb-",
-    b"lin_api_",
-];
-
-pub(crate) static TIER1_PREFIX_FILTER: LazyLock<AhoCorasick> = LazyLock::new(|| {
-    AhoCorasick::new(STRUCTURAL_PREFIXES).expect("failed to build structural prefix AC")
-});
-
-/// Returns the pre-built Aho-Corasick automaton for structural-pattern literal prefix detection.
-pub(crate) fn prefix_filter() -> &'static AhoCorasick {
-    &TIER1_PREFIX_FILTER
+/// Build an Aho-Corasick automaton from the first-segment bytes of each pattern.
+///
+/// Patterns whose first segment is `literal` or `opaque` contribute their value bytes
+/// as AC keywords. Patterns with a `variable` first segment are excluded; this cannot
+/// occur in practice because the First-Segment Invariant (SPEC.md §First-Segment
+/// Invariant) requires every Pattern to start with a `literal` or `opaque` segment,
+/// enforced at load and registration time.
+pub(crate) fn build_ac_automaton(patterns: &[Pattern]) -> AhoCorasick {
+    let prefixes: Vec<&[u8]> = patterns
+        .iter()
+        .filter_map(|p| p.first_segment_bytes())
+        .collect();
+    AhoCorasick::new(&prefixes).expect("AC build should not fail for valid patterns")
 }
 
-/// A detection descriptor for [`crate::swap`].
+/// Unified detection descriptor for both family and instance patterns.
 ///
 /// Obtain via [`crate::patterns`] functions or [`crate::register`]/[`crate::register_with_options`].
-/// Pass to [`crate::swap`] — do not match on variants in stable code; the variant
-/// set may change in future versions.
+/// Pass to [`crate::swap`].
+///
+/// - Family pattern (`digests` is empty): matches any candidate satisfying the segment list.
+/// - Instance/group pattern (`digests` is non-empty): additionally requires HMAC verification.
 #[derive(Clone)]
-#[non_exhaustive]
-pub enum Pattern {
-    /// Structural pattern: matched by walking payload bytes against a segment list.
-    Structural(StructuralDef),
-    /// Registered pattern: matched by start/end fragment + HMAC verification.
-    Registered(Arc<RegisteredPat>),
+pub struct Pattern {
+    /// Unique identifier for this pattern (e.g., "anthropic", "prod-credentials").
+    pub(crate) identifier: String,
+    /// Ordered segment list defining detection structure.
+    pub(crate) segments: Arc<[Segment]>,
+    /// 32-byte salt for HMAC computation and fake derivation.
+    pub(crate) salt: [u8; 32],
+    /// HMAC digests; empty = family pattern, non-empty = instance/group pattern.
+    pub(crate) digests: Vec<[u8; 32]>,
 }
 
 impl Pattern {
-    pub(crate) fn is_registered(&self) -> bool {
-        matches!(self, Pattern::Registered(_))
+    /// Returns the string identifier for this pattern (e.g. `"anthropic"`, `"prod-db"`).
+    pub fn id(&self) -> &str {
+        &self.identifier
+    }
+
+    /// Returns true if the first segment is a Literal (for INV-18 tiebreaker precedence).
+    pub(crate) fn first_segment_is_literal(&self) -> bool {
+        matches!(self.segments.first(), Some(Segment::Literal(_)))
+    }
+
+    /// Returns the first segment's anchor bytes for AC automaton building.
+    /// Returns `None` for patterns whose first segment has no fixed prefix bytes.
+    pub(crate) fn first_segment_bytes(&self) -> Option<&[u8]> {
+        match self.segments.first() {
+            Some(Segment::Literal(bytes)) => Some(bytes),
+            Some(Segment::Opaque { value, .. }) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Attempt to match this pattern against the payload at the given position.
+    ///
+    /// For family patterns (empty digests): returns a match on segment success alone.
+    /// For instance patterns (non-empty digests): additionally requires HMAC verification
+    /// against one of the stored digests (INV-16: HMAC failure → pass through unchanged).
+    pub(crate) fn try_match(&self, payload: &[u8], pos: usize) -> Option<MatchCapture> {
+        let mut variable_lengths = Vec::new();
+        let end = match_segments(payload, pos, &self.segments, &mut variable_lengths)?;
+
+        if !self.digests.is_empty() {
+            let candidate = &payload[pos..end];
+            // SPEC §Detection Algorithm step 4: compute HMAC once, compare against each digest
+            // in constant time. Accumulate in subtle::Choice throughout the fold to prevent
+            // the optimizer from eliding ct_eq calls once a match is found; convert to bool
+            // only after all digests have been evaluated.
+            use subtle::{Choice, ConstantTimeEq};
+            let computed_hmac = crate::crypto::hmac_sha256(&self.salt, candidate);
+            let matches_any =
+                bool::from(self.digests.iter().fold(Choice::from(0u8), |acc, digest| {
+                    acc | computed_hmac.ct_eq(digest)
+                }));
+            if !matches_any {
+                return None;
+            }
+        }
+
+        Some(MatchCapture {
+            end,
+            variable_lengths,
+        })
     }
 }
 
@@ -505,150 +773,326 @@ fn random_salt() -> [u8; 32] {
 /// across calls and process restarts. For cross-restart stability, use
 /// `SecretsFile::to_patterns()`.
 pub fn anthropic() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: ANTHROPIC_DEF.identifier.clone(),
+        segments: ANTHROPIC_DEF.segments.clone(),
         salt: random_salt(),
-        ..ANTHROPIC_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an Anthropic Admin v1 key pattern (`sk-ant-admin01-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn anthropic_admin01() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: ANTHROPIC_ADMIN01_DEF.identifier.clone(),
+        segments: ANTHROPIC_ADMIN01_DEF.segments.clone(),
         salt: random_salt(),
-        ..ANTHROPIC_ADMIN01_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an Anthropic Admin v3 key pattern (`sk-ant-admin03-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn anthropic_admin03() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: ANTHROPIC_ADMIN03_DEF.identifier.clone(),
+        segments: ANTHROPIC_ADMIN03_DEF.segments.clone(),
         salt: random_salt(),
-        ..ANTHROPIC_ADMIN03_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an OpenAI classic secret key pattern (`sk-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn openai_classic() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: OPENAI_CLASSIC_DEF.identifier.clone(),
+        segments: OPENAI_CLASSIC_DEF.segments.clone(),
         salt: random_salt(),
-        ..OPENAI_CLASSIC_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an OpenAI project key pattern (`sk-proj-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn openai_project() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: OPENAI_PROJECT_DEF.identifier.clone(),
+        segments: OPENAI_PROJECT_DEF.segments.clone(),
         salt: random_salt(),
-        ..OPENAI_PROJECT_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an OpenAI service account key pattern (`sk-svcacct-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn openai_svcacct() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: OPENAI_SVCACCT_DEF.identifier.clone(),
+        segments: OPENAI_SVCACCT_DEF.segments.clone(),
         salt: random_salt(),
-        ..OPENAI_SVCACCT_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an AWS IAM access key ID pattern (`AKIA`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn aws_akia() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: AWS_AKIA_DEF.identifier.clone(),
+        segments: AWS_AKIA_DEF.segments.clone(),
         salt: random_salt(),
-        ..AWS_AKIA_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an AWS STS temporary credential pattern (`ASIA`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn aws_asia() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: AWS_ASIA_DEF.identifier.clone(),
+        segments: AWS_ASIA_DEF.segments.clone(),
         salt: random_salt(),
-        ..AWS_ASIA_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns a GitHub classic personal access token pattern (`ghp_`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn github_classic() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: GITHUB_CLASSIC_DEF.identifier.clone(),
+        segments: GITHUB_CLASSIC_DEF.segments.clone(),
         salt: random_salt(),
-        ..GITHUB_CLASSIC_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns a GitHub fine-grained personal access token pattern (`github_pat_`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn github_fine_grained() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: GITHUB_FG_DEF.identifier.clone(),
+        segments: GITHUB_FG_DEF.segments.clone(),
         salt: random_salt(),
-        ..GITHUB_FG_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns a GCP/Gemini API key pattern (`AIza`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn gcp() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: GCP_DEF.identifier.clone(),
+        segments: GCP_DEF.segments.clone(),
         salt: random_salt(),
-        ..GCP_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns an OpenRouter API key pattern (`sk-or-v1-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn openrouter() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: OPENROUTER_DEF.identifier.clone(),
+        segments: OPENROUTER_DEF.segments.clone(),
         salt: random_salt(),
-        ..OPENROUTER_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns a Google OAuth client secret pattern (`GOCSPX-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn google_oauth_secret() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: GOOGLE_OAUTH_SECRET_DEF.identifier.clone(),
+        segments: GOOGLE_OAUTH_SECRET_DEF.segments.clone(),
         salt: random_salt(),
-        ..GOOGLE_OAUTH_SECRET_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns a Slack bot token pattern (`xoxb-`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn slack_bot() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: SLACK_BOT_DEF.identifier.clone(),
+        segments: SLACK_BOT_DEF.segments.clone(),
         salt: random_salt(),
-        ..SLACK_BOT_DEF.clone()
-    })
+        digests: vec![],
+    }
 }
 
 /// Returns a Linear API key pattern (`lin_api_`) with an ephemeral salt.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn linear() -> Pattern {
-    Pattern::Structural(StructuralDef {
+    Pattern {
+        identifier: LINEAR_DEF.identifier.clone(),
+        segments: LINEAR_DEF.segments.clone(),
         salt: random_salt(),
-        ..LINEAR_DEF.clone()
-    })
+        digests: vec![],
+    }
+}
+
+/// Returns a Groq API key pattern (`gsk_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn groq() -> Pattern {
+    Pattern {
+        identifier: GROQ_DEF.identifier.clone(),
+        segments: GROQ_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Perplexity API key pattern (`pplx-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn perplexity() -> Pattern {
+    Pattern {
+        identifier: PERPLEXITY_DEF.identifier.clone(),
+        segments: PERPLEXITY_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Cerebras API key pattern (`csk-`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn cerebras() -> Pattern {
+    Pattern {
+        identifier: CEREBRAS_DEF.identifier.clone(),
+        segments: CEREBRAS_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Stripe live secret key pattern (`sk_live_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn stripe_live() -> Pattern {
+    Pattern {
+        identifier: STRIPE_LIVE_DEF.identifier.clone(),
+        segments: STRIPE_LIVE_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Stripe test secret key pattern (`sk_test_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn stripe_test() -> Pattern {
+    Pattern {
+        identifier: STRIPE_TEST_DEF.identifier.clone(),
+        segments: STRIPE_TEST_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Clerk live secret key pattern (`sk_live_`) with an ephemeral salt.
+///
+/// Clerk live keys share the `sk_live_` prefix with Stripe; the longer variable
+/// segment (45–55 chars vs Stripe's 24–32) distinguishes them at detection time.
+/// See [`anthropic`] for salt stability semantics.
+pub fn clerk() -> Pattern {
+    Pattern {
+        identifier: CLERK_DEF.identifier.clone(),
+        segments: CLERK_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Svix API key pattern (`svix_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn svix() -> Pattern {
+    Pattern {
+        identifier: SVIX_DEF.identifier.clone(),
+        segments: SVIX_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a Chromatic project token pattern (`chpt_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn chromatic() -> Pattern {
+    Pattern {
+        identifier: CHROMATIC_DEF.identifier.clone(),
+        segments: CHROMATIC_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub OAuth token pattern (`gho_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_oauth() -> Pattern {
+    Pattern {
+        identifier: GITHUB_OAUTH_DEF.identifier.clone(),
+        segments: GITHUB_OAUTH_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub App server-to-server token pattern (`ghs_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_app_server() -> Pattern {
+    Pattern {
+        identifier: GITHUB_APP_SERVER_DEF.identifier.clone(),
+        segments: GITHUB_APP_SERVER_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub App user-to-server token pattern (`ghu_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_app_user() -> Pattern {
+    Pattern {
+        identifier: GITHUB_APP_USER_DEF.identifier.clone(),
+        segments: GITHUB_APP_USER_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
+}
+
+/// Returns a GitHub App refresh token pattern (`ghr_`) with an ephemeral salt.
+///
+/// See [`anthropic`] for salt stability semantics.
+pub fn github_refresh() -> Pattern {
+    Pattern {
+        identifier: GITHUB_REFRESH_DEF.identifier.clone(),
+        segments: GITHUB_REFRESH_DEF.segments.clone(),
+        salt: random_salt(),
+        digests: vec![],
+    }
 }
 
 /// Returns all built-in structural patterns with ephemeral per-call salts.
@@ -659,9 +1103,12 @@ pub fn linear() -> Pattern {
 ///
 /// Covers: Anthropic API (`sk-ant-api03-`), Anthropic Admin (`sk-ant-admin01-`,
 /// `sk-ant-admin03-`), OpenAI classic (`sk-`), OpenAI project (`sk-proj-`),
-/// OpenAI service account (`sk-svcacct-`), AWS AKIA/ASIA, GitHub classic/fine-grained,
+/// OpenAI service account (`sk-svcacct-`), AWS AKIA/ASIA, GitHub classic/fine-grained/
+/// OAuth (`gho_`)/app-server (`ghs_`)/app-user (`ghu_`)/refresh (`ghr_`),
 /// GCP/Gemini (`AIza`), OpenRouter (`sk-or-v1-`), Google OAuth secret (`GOCSPX-`),
-/// Slack bot (`xoxb-`), Linear (`lin_api_`).
+/// Slack bot (`xoxb-`), Linear (`lin_api_`), Groq (`gsk_`), Perplexity (`pplx-`),
+/// Cerebras (`csk-`), Stripe live/test (`sk_live_`/`sk_test_`), Clerk (`sk_live_`),
+/// Svix (`svix_`), Chromatic (`chpt_`).
 pub fn all() -> Vec<Pattern> {
     vec![
         anthropic(),
@@ -679,6 +1126,18 @@ pub fn all() -> Vec<Pattern> {
         google_oauth_secret(),
         slack_bot(),
         linear(),
+        groq(),
+        perplexity(),
+        cerebras(),
+        stripe_live(),
+        stripe_test(),
+        clerk(),
+        svix(),
+        chromatic(),
+        github_oauth(),
+        github_app_server(),
+        github_app_user(),
+        github_refresh(),
     ]
 }
 
@@ -694,11 +1153,8 @@ mod tests {
         // Verify by probing each pattern's first Literal segment
         let leading_lits: Vec<&[u8]> = all
             .iter()
-            .filter_map(|p| match p {
-                Pattern::Structural(d) => match d.segments.first()? {
-                    Segment::Literal(b) => Some(b.as_slice()),
-                    _ => None,
-                },
+            .filter_map(|p| match p.segments.first() {
+                Some(Segment::Literal(b)) => Some(b.as_slice()),
                 _ => None,
             })
             .collect();
@@ -718,6 +1174,17 @@ mod tests {
             b"GOCSPX-",
             b"xoxb-",
             b"lin_api_",
+            b"gsk_",
+            b"pplx-",
+            b"csk-",
+            b"sk_live_",
+            b"sk_test_",
+            b"svix_",
+            b"chpt_",
+            b"gho_",
+            b"ghs_",
+            b"ghu_",
+            b"ghr_",
         ] {
             assert!(
                 leading_lits.contains(expected),
@@ -819,11 +1286,11 @@ mod tests {
     #[test]
     fn test_all_defs_identifiers_unique() {
         let defs = all_defs();
-        assert_eq!(defs.len(), 15, "must have 15 built-in structural defs");
+        assert_eq!(defs.len(), 27, "must have 27 built-in structural defs");
         let mut ids: Vec<&str> = defs.iter().map(|d| d.identifier.as_str()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 15, "all identifiers must be unique");
+        assert_eq!(ids.len(), 27, "all identifiers must be unique");
     }
 
     #[test]
@@ -837,8 +1304,7 @@ mod tests {
         );
         for def in defs {
             assert!(
-                all.iter()
-                    .any(|p| matches!(p, Pattern::Structural(d) if d.identifier == def.identifier)),
+                all.iter().any(|p| p.identifier == def.identifier),
                 "all_defs entry {} must appear in patterns::all()",
                 def.identifier
             );

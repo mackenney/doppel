@@ -1,65 +1,52 @@
-use rand::{RngCore, rngs::OsRng};
+use crate::patterns::Pattern;
+use crate::segment::{CharsetName, Segment};
+use rand::rngs::OsRng;
 use std::sync::Arc;
 
-use crate::crypto::hmac_sha256;
-use crate::fake::{FakeError, charsets, derive_fake_registered};
-use crate::patterns::Pattern;
+const ENTROPY_HARD_FAIL_BITS: f64 = 83.0;
+const ENTROPY_WARN_BITS: f64 = 131.0;
+
+/// Calculate effective entropy for a variable portion.
+///
+/// entropy_bits = variable_len × log₂(charset_size)
+fn calculate_entropy(variable_len: usize, charset_size: usize) -> f64 {
+    if charset_size <= 1 {
+        return 0.0;
+    }
+    variable_len as f64 * (charset_size as f64).log2()
+}
 
 /// Options for registered secret registration.
-///
-/// All fields default to the secure-by-default configuration: no prefix/suffix
-/// preservation, wide charset for fake generation.
 #[derive(Debug, Clone)]
 pub struct SecretOptions {
-    /// Number of bytes at the start of the secret that are declared **non-secret**
-    /// by the caller and will appear verbatim in the fake.
+    /// Number of leading secret bytes stored as the detection anchor (default 3).
     ///
-    /// Use this when the secret has a well-known structural prefix that must appear
-    /// in the payload for detection to fire (e.g., `MY_ORG_`). Setting this to a
-    /// non-zero value means those bytes are visible in the entries file; they are
-    /// explicitly not part of the confidential value. Misuse — marking actual secret
-    /// bytes as prefix — weakens protection for those bytes.
-    ///
-    /// Default: 0.
-    pub preserve_prefix: usize,
+    /// Must be at least 2; values of 0 or 1 are rejected with [`SecretError::AnchorTooShort`].
+    /// Values below 3 emit a warning — 3 (the default) is the recommended minimum.
+    /// Longer anchors reduce false-positive Aho-Corasick hits at the cost of more
+    /// plaintext bytes stored in the patterns file.
+    pub anchor_len: usize,
 
-    /// Number of bytes at the end of the secret that are declared **non-secret**
-    /// by the caller and will appear verbatim in the fake. Same caveats as
-    /// `preserve_prefix`.
-    ///
-    /// Default: 0.
-    pub preserve_suffix: usize,
+    /// Number of trailing secret bytes stored as secondary anchor.
+    /// SPEC: default 0; non-zero adds trailing Opaque segment.
+    pub tail_anchor_len: usize,
 
-    /// When `true`, the variable portion of the fake is drawn exclusively from the
-    /// distinct byte values observed in the registered secret (`charsets::detect`).
-    ///
-    /// When `false` (default), the wide standard charset is used. The wide charset
-    /// has no connection to the secret's content; it reveals only the byte length of
-    /// the detected secret. Use `restrict_charset: true` only when the target system
-    /// requires a structurally plausible replacement — the trade-off is that an
-    /// observer of the entries file can infer the secret's character class.
-    ///
-    /// Default: false.
+    /// When true, variable portion uses detected charset instead of wide.
+    /// SPEC: default false; use only when target system requires.
     pub restrict_charset: bool,
 
-    /// Number of bytes taken from the start of the secret as the detection anchor.
-    /// Shorter values reduce false-positive eliminations before HMAC verification;
-    /// longer values allow faster pre-filtering. Default: 2.
-    pub start_fragment_len: usize,
-
-    /// Number of bytes taken from the end of the secret as the detection anchor.
-    /// Default: 2.
-    pub end_fragment_len: usize,
+    /// Suppress entropy hard failure (83-bit threshold).
+    /// SPEC: entropy warning is still emitted; only hard fail is suppressed.
+    pub force: bool,
 }
 
 impl Default for SecretOptions {
     fn default() -> Self {
         Self {
-            preserve_prefix: 0,
-            preserve_suffix: 0,
+            anchor_len: 3,
+            tail_anchor_len: 0,
             restrict_charset: false,
-            start_fragment_len: 2,
-            end_fragment_len: 2,
+            force: false,
         }
     }
 }
@@ -68,22 +55,30 @@ impl Default for SecretOptions {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SecretError {
-    /// Secret is empty; there are no bytes to protect.
-    #[error("secret is empty; registration requires at least 1 byte")]
+    /// Secret is empty or shorter than `anchor_len`.
+    #[error("secret too short for the given anchor_len")]
     TooShort,
 
-    /// `preserve_prefix + preserve_suffix` covers the entire secret, leaving no
-    /// variable bytes. A fake with zero variable bytes cannot differ from the
-    /// original, making replacement impossible.
+    /// `anchor_len` is 0 or 1 — too short to serve as a reliable Aho-Corasick anchor.
+    /// Use at least 2; the default and recommended value is 3.
     #[error(
-        "preserve_prefix ({preserve_prefix}) + preserve_suffix ({preserve_suffix}) \
-         >= secret length ({secret_len}); no variable bytes remain"
+        "anchor_len {anchor_len} is too short (minimum 2, recommended 3+); a 0- or 1-byte anchor cannot pre-filter candidates reliably"
+    )]
+    AnchorTooShort {
+        /// The `anchor_len` value that was rejected.
+        anchor_len: usize,
+    },
+
+    /// `anchor_len + tail_anchor_len` covers the entire secret, leaving no variable bytes.
+    /// A fake with zero variable bytes cannot differ from the original.
+    #[error(
+        "anchor_len ({anchor_len}) + tail_anchor_len ({tail_anchor_len}) >= secret length ({secret_len}); no variable bytes remain"
     )]
     NoVariableBytes {
-        /// The `preserve_prefix` value passed to registration.
-        preserve_prefix: usize,
-        /// The `preserve_suffix` value passed to registration.
-        preserve_suffix: usize,
+        /// The `anchor_len` value passed to registration.
+        anchor_len: usize,
+        /// The effective `tail_anchor_len` value.
+        tail_anchor_len: usize,
         /// Total byte length of the secret.
         secret_len: usize,
     },
@@ -95,46 +90,24 @@ pub enum SecretError {
         /// Number of derivation attempts made before giving up.
         attempts: u32,
     },
-}
 
-impl From<FakeError> for SecretError {
-    fn from(e: FakeError) -> Self {
-        match e {
-            FakeError::CollisionLimit { attempts } => SecretError::CollisionLimit { attempts },
-        }
-    }
-}
-
-/// Minimum variable-byte count below which a warning is emitted (INV-26).
-const MIN_VARIABLE_BYTES_WARNING: usize = 14;
-
-/// Internal representation of a registered secret pattern.
-/// Opaque to callers — they receive a `Pattern::Registered(Arc<RegisteredPat>)`.
-pub struct RegisteredPat {
-    /// First N bytes of the original secret. Used to quickly identify candidates.
-    pub(crate) start_fragment: Vec<u8>,
-    /// Last M bytes of the original secret. Verified after start fragment matches.
-    pub(crate) end_fragment: Vec<u8>,
-    /// Exact byte length of the original secret.
-    pub(crate) exact_length: usize,
-    /// Unique random salt for this registration (INV-17: must not reuse).
-    pub(crate) hmac_salt: [u8; 32],
-    /// HMAC-SHA256(hmac_salt, original_secret) — confirmation token.
-    pub(crate) hmac_digest: [u8; 32],
-    /// Number of prefix bytes declared non-secret, preserved verbatim in the fake.
-    pub(crate) preserve_prefix: usize,
-    /// Number of suffix bytes declared non-secret, preserved verbatim in the fake.
-    pub(crate) preserve_suffix: usize,
-    /// Resolved charset for fake variable bytes. Wide charset when restrict_charset is false;
-    /// detected charset otherwise.
-    pub(crate) charset: Vec<u8>,
+    /// Registration rejected due to insufficient entropy in variable portion.
+    /// Use `force: true` in `SecretOptions` to override.
+    #[error(
+        "insufficient entropy: {bits:.1} bits < {threshold:.1} bit minimum (use --force to override)"
+    )]
+    InsufficientEntropy {
+        /// Computed entropy in bits.
+        bits: f64,
+        /// Minimum threshold (83.0).
+        threshold: f64,
+    },
 }
 
 /// Register an arbitrary secret with default options and produce a registered-secret Pattern.
 ///
-/// Returns `Err` instead of panicking on invalid input. See [`SecretError`]
-/// for the error conditions. See [`register_with_options`] to customise prefix/suffix
-/// preservation or charset restriction.
+/// Returns `Err` instead of panicking on invalid input. See [`SecretError`] for error conditions.
+/// See [`register_with_options`] to customise anchor lengths, charset restriction, or force.
 ///
 /// # Examples
 ///
@@ -150,8 +123,8 @@ pub struct RegisteredPat {
 /// # Errors
 ///
 /// See [`register_with_options`] for the full error set.
-pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, SecretError> {
-    register_with_options(secret, &SecretOptions::default())
+pub fn register(secret: &[u8]) -> Result<Pattern, SecretError> {
+    register_with_options_rng(secret, &SecretOptions::default(), &mut OsRng)
 }
 
 /// Register an arbitrary secret with explicit options.
@@ -160,19 +133,18 @@ pub fn register(secret: impl AsRef<[u8]>) -> Result<Pattern, SecretError> {
 ///
 /// # Errors
 ///
-/// - [`SecretError::TooShort`] if `secret` is empty.
-/// - [`SecretError::NoVariableBytes`] if `preserve_prefix + preserve_suffix >= secret.len()`.
-/// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts (charset too small).
-pub fn register_with_options(
-    secret: impl AsRef<[u8]>,
-    opts: &SecretOptions,
-) -> Result<Pattern, SecretError> {
-    register_with_options_rng(secret.as_ref(), opts, &mut OsRng)
+/// - [`SecretError::AnchorTooShort`] if `anchor_len` < 2.
+/// - [`SecretError::TooShort`] if `secret` is empty or shorter than `anchor_len`.
+/// - [`SecretError::NoVariableBytes`] if `anchor_len + tail_anchor_len >= secret.len()`.
+/// - [`SecretError::InsufficientEntropy`] if entropy < 83 bits and `!opts.force`.
+/// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts.
+pub fn register_with_options(secret: &[u8], opts: &SecretOptions) -> Result<Pattern, SecretError> {
+    register_with_options_rng(secret, opts, &mut OsRng)
 }
 
 /// Testable variant — accepts any RNG (seeded for deterministic tests).
 #[cfg(test)]
-pub(crate) fn register_with_rng<R: RngCore>(
+pub(crate) fn register_with_rng<R: rand::RngCore>(
     secret: &[u8],
     rng: &mut R,
 ) -> Result<Pattern, SecretError> {
@@ -180,169 +152,137 @@ pub(crate) fn register_with_rng<R: RngCore>(
 }
 
 /// Core registration logic. All public entry points funnel here.
-pub(crate) fn register_with_options_rng<R: RngCore>(
+pub(crate) fn register_with_options_rng<R: rand::RngCore>(
     secret: &[u8],
     opts: &SecretOptions,
     rng: &mut R,
 ) -> Result<Pattern, SecretError> {
-    // INV-25: return error, never panic.
+    if opts.anchor_len < 2 {
+        return Err(SecretError::AnchorTooShort {
+            anchor_len: opts.anchor_len,
+        });
+    }
     if secret.is_empty() {
         return Err(SecretError::TooShort);
     }
+    if secret.len() < opts.anchor_len {
+        return Err(SecretError::TooShort);
+    }
+    if opts.anchor_len < 3 {
+        log::warn!(
+            "doppel: anchor_len {} is below the recommended minimum of 3; short anchors generate more false Aho-Corasick candidates",
+            opts.anchor_len
+        );
+    }
 
-    let pp = opts.preserve_prefix;
-    let ps = opts.preserve_suffix;
+    let anchor_len = opts.anchor_len;
+    // Clamp tail_anchor_len so it can't exceed the bytes after the head anchor.
+    let tail_anchor_len = opts
+        .tail_anchor_len
+        .min(secret.len().saturating_sub(anchor_len));
 
-    if pp + ps >= secret.len() {
+    let middle_start = anchor_len;
+    let middle_end = secret.len().saturating_sub(tail_anchor_len);
+    let middle_len = middle_end.saturating_sub(middle_start);
+
+    if middle_len == 0 {
         return Err(SecretError::NoVariableBytes {
-            preserve_prefix: pp,
-            preserve_suffix: ps,
+            anchor_len,
+            tail_anchor_len,
             secret_len: secret.len(),
         });
     }
 
-    let variable_len = secret.len() - pp - ps;
+    let middle_bytes = &secret[middle_start..middle_end];
 
-    // INV-26: warn when variable portion is small.
-    if variable_len < MIN_VARIABLE_BYTES_WARNING {
+    // Determine charset for variable portion and entropy calculation.
+    let (charset, charset_size) = if opts.restrict_charset {
+        let detected_name = crate::segment::detect_charset_name(middle_bytes);
+        let size = detected_name.resolve().bytes.len();
+        (detected_name, size)
+    } else {
+        (CharsetName::Wide, 92)
+    };
+
+    // Entropy enforcement.
+    let entropy = calculate_entropy(middle_len, charset_size);
+    if entropy < ENTROPY_HARD_FAIL_BITS && !opts.force {
+        return Err(SecretError::InsufficientEntropy {
+            bits: entropy,
+            threshold: ENTROPY_HARD_FAIL_BITS,
+        });
+    }
+    if entropy < ENTROPY_WARN_BITS {
         log::warn!(
-            "doppel: registered secret registration has only {} variable byte(s) (minimum recommended: {}). \
-             Secrets with small variable portions offer weak protection.",
-            variable_len,
-            MIN_VARIABLE_BYTES_WARNING
+            "doppel: effective entropy {:.1} bits < {:.1} bits recommended; \
+             consider a longer secret or --force",
+            entropy,
+            ENTROPY_WARN_BITS
         );
     }
 
-    // INV-27: warn when secret looks alphanumeric but restrict_charset is off.
-    if !opts.restrict_charset {
-        let observed = charsets::detect(secret);
-        let alnum = charsets::alphanumeric();
-        if observed.iter().all(|b| alnum.contains(b)) {
-            log::warn!(
-                "doppel: registered secret appears alphanumeric ([A-Za-z0-9]) but \
-                 restrict_charset is false. The fake will be drawn from the wide charset, \
-                 which may look structurally different from the original. Set \
-                 restrict_charset: true if the replacement must also be alphanumeric."
+    // INV-26: warn when alphanumeric secret uses wide charset (unexpected wide fakes).
+    if !opts.restrict_charset && middle_bytes.iter().all(|b| b.is_ascii_alphanumeric()) {
+        log::warn!(
+            "doppel: secret variable bytes are all alphanumeric but restrict-charset is false; \
+             fake bytes will be drawn from the wide charset (92 chars) which may be structurally \
+             implausible for the target system. Use --restrict-charset to match the secret's charset."
+        );
+    }
+    let anchor_bytes = &secret[..anchor_len];
+    let anchor_charset = crate::segment::detect_charset_name(anchor_bytes);
+
+    let mut segments: Vec<Segment> = vec![
+        Segment::Opaque {
+            value: anchor_bytes.to_vec(),
+            charset: anchor_charset,
+        },
+        Segment::Variable {
+            charset,
+            min: middle_len,
+            max: middle_len, // INV-31: instance patterns have fixed-length variable segments
+        },
+    ];
+
+    if tail_anchor_len > 0 {
+        let tail_bytes = &secret[middle_end..];
+        let tail_charset = crate::segment::detect_charset_name(tail_bytes);
+        segments.push(Segment::Opaque {
+            value: tail_bytes.to_vec(),
+            charset: tail_charset,
+        });
+    }
+
+    // INV-31 assertion: variable segments in instance patterns must have min == max.
+    for seg in &segments {
+        if let Segment::Variable { min, max, .. } = seg {
+            debug_assert_eq!(
+                min, max,
+                "INV-31: instance pattern variable segment min must equal max"
             );
         }
     }
 
-    // Unique salt per registration (INV-17).
-    let mut hmac_salt = [0u8; 32];
-    rng.fill_bytes(&mut hmac_salt);
+    let mut salt = [0u8; 32];
+    rng.fill_bytes(&mut salt);
 
-    let hmac_digest = hmac_sha256(&hmac_salt, secret);
+    let digest = crate::crypto::hmac_sha256(&salt, secret);
 
-    let start_len = opts.start_fragment_len.min(secret.len());
-    let end_len = if secret.len() > start_len {
-        opts.end_fragment_len.min(secret.len() - start_len)
-    } else {
-        0
+    let arc_segments: Arc<[Segment]> = segments.into();
+
+    let pattern = Pattern {
+        identifier: String::new(),
+        segments: arc_segments.clone(),
+        salt,
+        digests: vec![digest],
     };
 
-    let start_fragment = secret[..start_len].to_vec();
-    let end_fragment = if end_len > 0 {
-        secret[secret.len() - end_len..].to_vec()
-    } else {
-        vec![]
-    };
+    // Sanity check: verify fake derivation succeeds at registration time.
+    let variable_lengths = vec![middle_len];
+    crate::fake::derive_fake_structural_segments(&salt, &arc_segments, &variable_lengths, secret)
+        .map_err(|_| SecretError::CollisionLimit { attempts: 1_000 })?;
 
-    // Choose charset for variable bytes.
-    let charset = if opts.restrict_charset {
-        let detected = charsets::detect(secret);
-        if detected.len() <= 1 {
-            charsets::alphanumeric()
-        } else {
-            detected
-        }
-    } else {
-        charsets::wide()
-    };
-
-    let pat = RegisteredPat {
-        start_fragment,
-        end_fragment,
-        exact_length: secret.len(),
-        hmac_salt,
-        hmac_digest,
-        preserve_prefix: pp,
-        preserve_suffix: ps,
-        charset,
-    };
-
-    // Trial derivation to detect CollisionLimit at registration time (INV-25).
-    // The secret itself is the canonical candidate for this pattern.
-    derive_fake_registered(
-        &pat.hmac_salt,
-        secret,
-        &secret[..pp],
-        &secret[secret.len() - ps..],
-        &pat.charset,
-        secret.len(),
-    )
-    .map_err(SecretError::from)?;
-
-    Ok(Pattern::Registered(Arc::new(pat)))
-}
-
-impl RegisteredPat {
-    /// Attempt to match this pattern at `payload[pos..]`.
-    ///
-    /// Returns `Some(end_pos)` if:
-    /// 1. payload[pos..pos+start_fragment.len()] == start_fragment
-    /// 2. payload[pos..pos+exact_length].ends_with(&end_fragment)
-    /// 3. HMAC-SHA256(hmac_salt, payload[pos..pos+exact_length]) == hmac_digest
-    ///
-    /// Returns `None` on any structural mismatch (no HMAC computed).
-    /// Returns `None` on HMAC failure (structural match but wrong content — INV-16).
-    #[rustfmt::skip]
-    pub(crate) fn try_match(&self, payload: &[u8], pos: usize) -> Result<Option<(usize, Vec<u8>)>, FakeError> {
-        use crate::crypto::verify_hmac;
-        use crate::fake::derive_fake_registered;
-
-        // 1. Start fragment
-        if !payload[pos..].starts_with(&self.start_fragment) {
-            return Ok(None);
-        }
-
-        // 2. Length check
-        let end = pos + self.exact_length;
-        if end > payload.len() {
-            return Ok(None);
-        }
-
-        // 3. End fragment
-        if !self.end_fragment.is_empty() {
-            let ef_start = end - self.end_fragment.len();
-            if &payload[ef_start..end] != self.end_fragment.as_slice() {
-                return Ok(None);
-            }
-        }
-
-        // 4. HMAC verification (INV-16: failure → None, caller passes through)
-        let candidate = &payload[pos..end];
-        if !verify_hmac(&self.hmac_salt, candidate, &self.hmac_digest) {
-            return Ok(None);
-        }
-
-        // 5. Derive fake from salt + candidate (deterministic, INV-13)
-        let prefix_bytes = &candidate[..self.preserve_prefix];
-        let suffix_bytes = if self.preserve_suffix > 0 {
-            &candidate[candidate.len() - self.preserve_suffix..]
-        } else {
-            &[]
-        };
-        let fake = derive_fake_registered(
-            &self.hmac_salt,
-            candidate,
-            prefix_bytes,
-            suffix_bytes,
-            &self.charset,
-            self.exact_length,
-        )?;
-
-        Ok(Some((end, fake)))
-    }
+    Ok(pattern)
 }
 
 #[cfg(test)]
@@ -351,266 +291,58 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
-    fn test_register_unique_salts() {
-        // INV-17: two registrations of the same secret must have different salts.
-        let secret = b"my-arbitrary-secret-value-12345";
-        let pat1 = register_with_rng(secret, &mut StdRng::seed_from_u64(1)).unwrap();
-        let pat2 = register_with_rng(secret, &mut StdRng::seed_from_u64(2)).unwrap();
-        match (&pat1, &pat2) {
-            (Pattern::Registered(a), Pattern::Registered(b)) => {
-                assert_ne!(
-                    a.hmac_salt, b.hmac_salt,
-                    "salts must differ per registration (INV-17)"
-                );
-            }
-            _ => panic!("expected Tier2"),
-        }
+    fn test_register_with_rng_deterministic() {
+        // register_with_rng exists for deterministic tests per AGENTS.md.
+        // Same seed must produce the same salt and digest.
+        let secret = b"deterministic-registration-test-secret-01";
+        let mut rng_a = StdRng::seed_from_u64(42);
+        let mut rng_b = StdRng::seed_from_u64(42);
+        let pat_a = register_with_rng(secret, &mut rng_a).unwrap();
+        let pat_b = register_with_rng(secret, &mut rng_b).unwrap();
+        assert_eq!(pat_a.salt, pat_b.salt, "same seed must produce same salt");
+        assert_eq!(
+            pat_a.digests, pat_b.digests,
+            "same seed must produce same digest"
+        );
     }
 
     #[test]
-    fn test_register_hmac_digest_correct() {
-        use crate::crypto::hmac_sha256;
-        let secret = b"my-arbitrary-secret-value-12345";
-        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(99)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                let expected = hmac_sha256(&p.hmac_salt, secret);
-                assert_eq!(
-                    p.hmac_digest, expected,
-                    "HMAC digest must match recomputed value"
-                );
-            }
-            _ => panic!("expected Tier2"),
-        }
-    }
-
-    #[test]
-    fn test_registered_try_match_correct_secret() {
-        let secret = b"my-arbitrary-secret-value-12345";
-        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(99)).unwrap();
-        let payload = b"token: my-arbitrary-secret-value-12345 end";
-        match &pat {
-            Pattern::Registered(p) => {
-                let pos = 7;
-                let result = p
-                    .try_match(payload, pos)
-                    .expect("try_match should not error");
-                assert!(result.is_some(), "should match");
-                let (end, fake) = result.unwrap();
-                assert_eq!(end, pos + secret.len());
-                assert_eq!(
-                    fake.len(),
-                    secret.len(),
-                    "fake must have same length as secret"
-                );
-                assert_ne!(fake.as_slice(), secret, "fake must differ from original");
-            }
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn test_registered_try_match_hmac_failure_returns_none() {
-        // INV-16: structural match + HMAC failure → None (pass through)
-        let secret = b"my-arbitrary-secret-value-12345";
-        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(99)).unwrap();
-        let mut fake_payload = secret.to_vec();
-        fake_payload[8] ^= 0xFF;
-        let payload = fake_payload.clone();
-        match &pat {
-            Pattern::Registered(p) => {
-                let result = p
-                    .try_match(&payload, 0)
-                    .expect("try_match should not error");
-                assert!(result.is_none(), "HMAC failure must return None (INV-16)");
-            }
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn test_register_discards_secret() {
-        let secret = b"super-secret-api-key-value-here!";
-        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(7)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                let middle = &secret[8..secret.len() - 8];
-                let all_fields: Vec<u8> = p
-                    .start_fragment
-                    .iter()
-                    .chain(&p.end_fragment)
-                    .chain(&p.hmac_salt)
-                    .chain(&p.hmac_digest)
-                    .copied()
-                    .collect();
-                assert!(
-                    !all_fields.windows(middle.len()).any(|w| w == middle),
-                    "middle bytes of secret must not appear verbatim in pattern fields"
-                );
-            }
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn test_register_fake_contains_no_secret_variable_bytes() {
-        let secret = b"deadbeef12345678";
-        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(123)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                let result = p
-                    .try_match(secret, 0)
-                    .expect("try_match error")
-                    .expect("should match");
-                let (_end, fake) = result;
-                for window in secret.windows(4) {
-                    assert!(
-                        !fake.windows(4).any(|w| w == window),
-                        "fake must not contain secret bytes (variable portion): {:?}",
-                        std::str::from_utf8(window).unwrap_or("<binary>")
-                    );
-                }
-            }
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn test_register_with_preserve_prefix_affix_in_fake() {
-        let secret = b"MY_ORG_secretbytes1234END";
+    fn test_anchor_too_short_rejects_zero() {
+        let secret = b"my-long-enough-secret-value";
         let opts = SecretOptions {
-            preserve_prefix: 7,
-            preserve_suffix: 3,
-            restrict_charset: false,
-            ..Default::default()
+            anchor_len: 0,
+            ..SecretOptions::default()
         };
-        let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(55)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                let result = p
-                    .try_match(secret, 0)
-                    .expect("try_match error")
-                    .expect("should match");
-                let (_end, fake) = result;
-                assert!(
-                    fake.starts_with(b"MY_ORG_"),
-                    "declared prefix must appear in fake"
-                );
-                assert!(
-                    fake.ends_with(b"END"),
-                    "declared suffix must appear in fake"
-                );
-                assert_eq!(fake.len(), secret.len());
-            }
-            _ => panic!(),
-        }
+        let mut rng = StdRng::seed_from_u64(1);
+        assert!(matches!(
+            register_with_options_rng(secret, &opts, &mut rng),
+            Err(SecretError::AnchorTooShort { anchor_len: 0 })
+        ));
     }
 
     #[test]
-    fn test_register_wide_charset_by_default() {
-        let secret = b"my-hex-secret-value-abcd1234";
-        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(77)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                let result = p
-                    .try_match(secret, 0)
-                    .expect("try_match error")
-                    .expect("should match");
-                let (_end, fake) = result;
-                let wide = charsets::wide();
-                for &b in &fake {
-                    assert!(wide.contains(&b), "fake byte 0x{b:02x} not in wide charset");
-                }
-            }
-            _ => panic!(),
-        }
-    }
-
-    #[test]
-    fn test_register_restrict_charset_uses_secret_charset() {
-        let secret = b"abcdef1234567890abcdef";
+    fn test_anchor_too_short_rejects_one() {
+        let secret = b"my-long-enough-secret-value";
         let opts = SecretOptions {
-            preserve_prefix: 0,
-            preserve_suffix: 0,
-            restrict_charset: true,
-            ..Default::default()
+            anchor_len: 1,
+            ..SecretOptions::default()
         };
-        let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(88)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                let result = p
-                    .try_match(secret, 0)
-                    .expect("try_match error")
-                    .expect("should match");
-                let (_end, fake) = result;
-                let allowed: std::collections::BTreeSet<u8> = secret.iter().copied().collect();
-                for &b in &fake {
-                    assert!(
-                        allowed.contains(&b),
-                        "fake byte 0x{b:02x} not in secret charset under restrict_charset"
-                    );
-                }
-            }
-            _ => panic!(),
-        }
+        let mut rng = StdRng::seed_from_u64(2);
+        assert!(matches!(
+            register_with_options_rng(secret, &opts, &mut rng),
+            Err(SecretError::AnchorTooShort { anchor_len: 1 })
+        ));
     }
 
     #[test]
-    fn test_registration_performs_trial_derivation() {
-        // A normal secret should register without collision.
-        // Verifies that trial derivation runs (INV-25) and does not false-positive.
-        let secret = b"sk-test-abcdefghijklmnopqrstuvwxyz1234567890abcdef";
+    fn test_anchor_len_two_succeeds() {
+        // anchor_len=2 is above the hard-fail threshold; registration must succeed.
+        let secret = b"my-long-enough-secret-value";
         let opts = SecretOptions {
-            preserve_prefix: 0,
-            preserve_suffix: 0,
-            restrict_charset: false,
-            ..Default::default()
+            anchor_len: 2,
+            ..SecretOptions::default()
         };
-        let pattern = register_with_options(secret, &opts).unwrap();
-        match &pattern {
-            Pattern::Registered(_) => {}
-            _ => panic!("expected Tier2"),
-        }
-    }
-}
-
-#[cfg(test)]
-mod derivation_param_tests {
-    use super::*;
-    use rand::{SeedableRng, rngs::StdRng};
-
-    #[test]
-    fn test_register_stores_derivation_params() {
-        let secret = b"MY_ORG_secretbytes1234END";
-        let opts = SecretOptions {
-            preserve_prefix: 7,
-            preserve_suffix: 3,
-            restrict_charset: true,
-            ..Default::default()
-        };
-        let pat = register_with_options_rng(secret, &opts, &mut StdRng::seed_from_u64(42)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                assert_eq!(p.preserve_prefix, 7);
-                assert_eq!(p.preserve_suffix, 3);
-                let detected = crate::fake::charsets::detect(secret);
-                assert_eq!(p.charset, detected, "charset must match detected charset");
-            }
-            _ => panic!("expected Tier2"),
-        }
-    }
-
-    #[test]
-    fn test_register_default_uses_wide_charset() {
-        let secret = b"my-arbitrary-secret-value-12345";
-        let pat = register_with_rng(secret, &mut StdRng::seed_from_u64(1)).unwrap();
-        match &pat {
-            Pattern::Registered(p) => {
-                assert_eq!(p.preserve_prefix, 0);
-                assert_eq!(p.preserve_suffix, 0);
-                assert_eq!(p.charset, crate::fake::charsets::wide());
-            }
-            _ => panic!("expected Tier2"),
-        }
+        let mut rng = StdRng::seed_from_u64(3);
+        assert!(register_with_options_rng(secret, &opts, &mut rng).is_ok());
     }
 }

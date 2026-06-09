@@ -5,6 +5,7 @@ use chacha20poly1305::{
 use hmac::{Hmac, Mac};
 use rand::{RngCore, rngs::OsRng};
 use sha2::Sha256;
+#[cfg(test)]
 use subtle::ConstantTimeEq;
 
 use crate::types::{Entry, SessionKey};
@@ -69,6 +70,7 @@ pub(crate) fn hmac_sha256(salt: &[u8], data: &[u8]) -> [u8; 32] {
 
 /// Verify HMAC-SHA256(salt, data) == expected in constant time.
 /// Returns true if match, false if not. Never leaks timing information.
+#[cfg(test)]
 pub(crate) fn verify_hmac(salt: &[u8], data: &[u8], expected: &[u8; 32]) -> bool {
     let computed = hmac_sha256(salt, data);
     computed.ct_eq(expected).into()

@@ -13,8 +13,8 @@ See [SPEC.md](SPEC.md) for the behavioral contract.
 ```
               secrets.toml
      ┌─────────────────────────────┐
-     │ [[structural]] anthropic, … │
-     │ [[registered]]  db-password │
+     │ [[pattern]] anthropic, …    │
+     │ [[pattern]] db-password     │
      └──────────────┬──────────────┘
                  patterns
                     │
@@ -44,18 +44,21 @@ response stream using the encrypted entries and the session key.
 ## Patterns
 
 **You decide what gets swapped.** A pattern describes how to detect and replace
-one secret or one class of secrets. There are two kinds:
+one secret or one class of secrets. Every pattern is a `[[pattern]]` entry in the
+TOML file; the distinction between detecting by shape vs. detecting by value is made
+via the segment definitions:
 
 ### Structural patterns
 
 A structural pattern describes the *shape* of a secret class: an ordered sequence of
-**Literal** segments (fixed byte sequences) and **Variable** segments (a character
-set with a length range). Detection fires on any payload byte that matches that
-shape; no prior knowledge of the actual secret value is required.
+**Literal** segments (fixed byte sequences), **Variable** segments (a character set
+with a length range), and optionally **Opaque** segments (fixed bytes for detection
+but re-derived in fake generation). Detection fires on any payload byte that matches
+that shape; no prior knowledge of the actual secret value is required.
 
-The library ships built-in structural pattern definitions for common providers (Anthropic,
-OpenAI, AWS, GitHub, GCP). These are available as a starting set — you opt into
-them; they are not applied automatically.
+The library ships built-in structural pattern definitions for 27 providers (Anthropic,
+OpenAI, AWS, GitHub, GCP, Stripe, Clerk, and more). These are available as a starting
+set — you opt into them; they are not applied automatically.
 
 ### Registered secrets
 
@@ -65,20 +68,22 @@ the full secret bytes; the library derives a detection fingerprint and generates
 deterministically from a salt. The original value is never stored.
 
 ```rust
-// Simple registration (default options)
+// Simple registration (default options: 3-byte detection anchor)
 let pat = register(b"my-super-secret-api-token")?;
 
-// With options: preserve a non-secret prefix, restrict fake charset
-let pat = register_with_options(b"MY_ORG_secretpart_END", &SecretOptions {
-    preserve_prefix: 7,  // "MY_ORG_" reproduced verbatim in every fake
-    preserve_suffix: 4,  // "_END" reproduced verbatim in every fake
-    restrict_charset: false,
-})?;
+// With options: longer anchor for lower false-positive rate
+let pat = register_with_options(b"my-super-secret-api-token", &SecretOptions {
+    anchor_len: 6,           // store 6 leading bytes as the detection anchor
+    tail_anchor_len: 0,      // no trailing anchor
+    restrict_charset: false, // fake uses wide charset by default
+    force: false,            // reject secrets below 83-bit entropy
+})?
 ```
 
-`SecretOptions` lets you declare a non-secret prefix/suffix (preserved
-verbatim in the fake) and restrict the fake's character set to match the
-original's. `register` is shorthand for `register_with_options` with all defaults.
+`SecretOptions` controls the detection anchor length (`anchor_len`, default 3),
+an optional trailing anchor (`tail_anchor_len`), fake charset restriction, and an
+entropy override (`force`). `register` is shorthand for `register_with_options` with
+all defaults.
 
 Source: [`doppel/src/secrets.rs`](doppel/src/secrets.rs).
 
@@ -99,7 +104,7 @@ pattern definition.
 
 ### Patterns file
 
-The CLI reads patterns from a TOML file (version 2). You create it with `init`
+The CLI reads patterns from a TOML file (version 3). You create it with `init`
 and extend it with `register` and `define`. Each entry embeds its salt, so fakes
 are stable across process restarts.
 
@@ -114,6 +119,42 @@ let patterns = sf.to_patterns()?;
 let result = swap(&payload, &patterns)?;
 ```
 
+
+For long-running processes that call `swap` on every incoming request, use
+[`Detector`](https://docs.rs/doppel/latest/doppel/struct.Detector.html). The free
+`swap` function rebuilds an internal multi-pattern search structure on every call;
+`Detector` builds it once at startup and reuses it across all requests, which makes
+a measurable difference at hundreds of requests per second.
+
+`Detector` is `Send + Sync`, so you can store it in an `Arc` and share it across
+threads or async tasks. The full swap→restore cycle with `Detector`:
+
+```rust
+use doppel::{Detector, SecretsFile, restore};
+use std::sync::Arc;
+
+// At startup — build once:
+let data = std::fs::read("secrets.toml")?;
+let patterns = SecretsFile::deserialize(&data)?.to_patterns()?;
+let detector = Arc::new(Detector::new(patterns));
+
+// Per request — swap outgoing payload:
+let result = detector.swap(&outgoing_payload)?;
+// result.payload      — send to external service (secrets replaced with fakes)
+// result.entries      — keep locally
+// result.session_key  — keep locally
+
+// Per response — restore incoming stream:
+let mut restored = Vec::new();
+restore(
+    &mut response_stream,
+    &mut restored,
+    &result.entries,
+    &result.session_key,
+)?;
+// restored now contains the original secret bytes
+```
+
 **Create a new patterns file:**
 
 ```sh
@@ -126,43 +167,52 @@ definitions and freshly generated salts. The registered secrets list starts empt
 **Patterns file structure:**
 
 ```toml
-version = 2
-registered = []
+version = 3
 
-[[structural]]
+[[pattern]]
 identifier = "anthropic"
-salt = "47abb6fb..."   # 64 hex chars (32 bytes)
+salt = "47abb6fb..."   # 64 hex chars (32 bytes); generated by `doppel init`
 
-[[structural.segments]]
+[[pattern.segments]]
 type = "literal"
 value = "sk-ant-api03-"
 
-[[structural.segments]]
+[[pattern.segments]]
 type = "variable"
 charset = "url_safe_base64"
 min = 93
 max = 93
 
-[[structural.segments]]
+[[pattern.segments]]
 type = "literal"
 value = "AA"
 
-# ... more [[structural]] entries for other built-in classes ...
+# ... more [[pattern]] entries for other built-in providers ...
 
-[[registered]]
-label = "my-api-key"
-start_fragment = "6d792d..."    # hex; detection anchor (first bytes of secret)
-end_fragment   = "6c75652d..."  # hex; detection anchor (last bytes of secret)
-exact_length   = 36
-hmac_salt      = "ff3c005b..."  # hex; unique per registration
-hmac_digest    = "8a5843ef..."  # hex; HMAC confirmation token
-preserve_prefix = 3
-preserve_suffix = 0
-# charset omitted → wide default ([A-Za-z0-9!@#$%^&*\-_+.~|])
+# Instance pattern (registered secret — added by `doppel register`):
+[[pattern]]
+identifier = "my-api-key"
+salt = "ff3c005b..."         # 64 hex chars; unique per registration
+digests = [
+  "8a5843ef...",             # HMAC-SHA256(salt, secret)
+]
+
+[[pattern.segments]]
+type = "opaque"              # detection anchor: first anchor_len bytes of the secret
+value = "my-"
+
+[[pattern.segments]]
+type = "variable"
+charset = "alphanumeric"
+min = 33
+max = 33
 ```
 
 Valid charset names for structural pattern segments: `alphanumeric`, `url_safe_base64`,
-`uppercase_alphanumeric`, `digits`, `hex_lower`.
+`uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`.
+
+(`wide` = 92 printable ASCII bytes: 0x21–0x7E excluding `"` and `\`; used by default for
+registered-secret variable segments.)
 
 The file MUST be treated with the same sensitivity as the secrets it detects — it
 contains detection fragments. On Unix systems, all write operations (`init`,
@@ -210,16 +260,25 @@ arguments are visible in process listings and shell history).
 
 ```sh
 echo -n 'my-secret-value' | doppel register \
-  --patterns secrets.toml \
-  --label    my-api-key \
-  [--preserve-prefix N] \
-  [--preserve-suffix M] \
-  [--restrict-charset]
+  --patterns    secrets.toml \
+  --identifier  my-api-key \
+  [--anchor-len N] \
+  [--tail-anchor-len M] \
+  [--restrict-charset] \
+  [--force]
 ```
 
-Reads the secret from stdin (raw bytes, no trimming), appends a new registered-secret
-entry to the patterns file, and writes it back atomically. The secret never appears
-in command-line arguments. `--label` is required and must be unique within the file.
+Reads the secret from stdin (raw bytes, no trimming), appends a new instance-pattern
+entry to the patterns file, and writes it back atomically. The secret never appears in
+command-line arguments. `--identifier` is required and must be unique within the file.
+
+`--anchor-len` controls how many leading bytes of the secret become the detection anchor.
+Minimum 2 (hard fail for 0 or 1); default 3 is recommended. Values below 3 emit a
+warning — shorter anchors generate more false Aho-Corasick candidates per payload byte.
+
+Alternatively, use `--group <id>` instead of `--identifier` to add this secret as an
+additional digest to an existing group pattern (for grouping multiple secrets under one
+detection rule).
 
 Source: [`doppel/src/secrets.rs`](doppel/src/secrets.rs) (registration logic) · [`doppel-cli/src/main.rs`](doppel-cli/src/main.rs) (`run_register`).
 
@@ -239,10 +298,11 @@ segment in order. Segment specs:
 - `variable:<charset>:<min>:<max>` — variable-length field from named charset
 
 Valid charset names: `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`,
-`digits`, `hex_lower`.
+`digits`, `hex_lower`, `wide`.
 
 At least one Variable segment is required. The identifier must be unique in the
-file.
+file. The first segment value must be at least 2 bytes (hard fail for shorter); values
+below 4 bytes emit a warning — short prefixes match too many positions in the payload.
 
 ### `list` — list all patterns
 
@@ -250,33 +310,30 @@ file.
 doppel list --patterns secrets.toml
 ```
 
-Prints a human-readable summary: structural pattern entries with identifier and segment
-description; registered-secret entries with label, exact length, and charset summary. Does
-not modify the file.
+Prints a human-readable summary: each `[[pattern]]` entry's identifier, kind (`family` or
+`instance`), segment description, and digest count. Does not modify the file.
 
 ### `inspect` — show detail for one pattern
 
 ```sh
 doppel inspect --patterns secrets.toml --identifier anthropic
-doppel inspect --patterns secrets.toml --label my-api-key
+doppel inspect --patterns secrets.toml --identifier my-api-key
 ```
 
-Exactly one of `--identifier` (structural) or `--label` (registered) is required.
-Prints full detail for the matched entry: all segments and salt fingerprint (first
-8 hex chars) for structural patterns; length, charset, and derivation parameters
-for registered secrets. Does not modify the file.
+`--identifier` is required. Accepts any pattern kind (family or instance).
+Prints full detail for the matched entry: all segments, salt fingerprint (first 8 hex
+chars), kind, and digest count. Does not modify the file.
 
 ### `remove` — remove a pattern
 
 ```sh
 doppel remove --patterns secrets.toml --identifier anthropic
-doppel remove --patterns secrets.toml --label my-api-key
+doppel remove --patterns secrets.toml --identifier my-api-key
 ```
 
-Exactly one of `--identifier` (structural) or `--label` (registered) is required.
-Removes the specified entry and writes the file back atomically. Removing a
-built-in structural pattern identifier emits a warning but succeeds; `swap` will no longer
-detect that secret class.
+`--identifier` is required. Removes the specified entry and writes the file back
+atomically. Removing a built-in structural pattern identifier emits a warning but
+succeeds; `swap` will no longer detect that secret class.
 
 ## Streaming
 
@@ -298,12 +355,13 @@ it yields restored `Bytes` chunks as they arrive — no runtime dependency beyon
 
 ## For the paranoid
 
-Registered secrets are stored as a detection fingerprint — `start_fragment`,
-`end_fragment`, `exact_length`, and `hmac_digest` (HMAC-SHA256 of the secret
-against a per-registration salt) — never as the plaintext value. The source of
-truth is [`doppel/src/secrets.rs`](doppel/src/secrets.rs).
+Registered secrets are stored as: a 32-byte `salt`, an `opaque` segment holding the
+first `anchor_len` bytes of the secret (default 3), a `variable` segment encoding the
+remaining byte count, and one or more HMAC-SHA256 digests (`HMAC(salt, secret)`) in the
+`digests` array — never as the plaintext value. The source of truth is
+[`doppel/src/secrets.rs`](doppel/src/secrets.rs).
 
-You can verify any registered entry against its original secret using only
-`openssl` and standard POSIX utilities, and independently reproduce the fake
-doppel will generate. See [docs/for-the-paranoid.md](docs/for-the-paranoid.md)
-for the full audit script and fake-derivation walkthrough.
+You can verify any registered entry against its original secret using only `openssl`,
+`python3`, and standard POSIX utilities, and independently reproduce the fake doppel
+will generate. See [docs/for-the-paranoid.md](docs/for-the-paranoid.md) for the full
+audit script and fake-derivation walkthrough.

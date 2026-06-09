@@ -34,8 +34,13 @@ impl From<aho_corasick::BuildError> for RestoreError {
 
 const CHUNK_SIZE: usize = 4096;
 
-/// Stream `input` to `output`, replacing any fakes found in `entries` with
-/// their original plaintext, decrypted using `session_key`.
+/// Stream `input` to `output` incrementally, replacing any fakes found in `entries`
+/// with their original plaintext, decrypted using `session_key`.
+///
+/// Processes input in fixed-size chunks with a sliding hold window bounded by the
+/// longest fake across all entries — output is emitted as soon as bytes are safe to
+/// flush, not only at the end. Fakes split across chunk boundaries are handled
+/// correctly; partial matches are held in the window until resolved.
 ///
 /// # Examples
 ///

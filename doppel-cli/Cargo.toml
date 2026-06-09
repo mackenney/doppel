@@ -19,6 +19,8 @@ doc = false
 [dependencies]
 doppel = { path = "../doppel", version = "0.0.1" }
 clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
 zeroize = "1"
 rand = { version = "0.8", features = ["std", "std_rng"] }
 toml_edit = { version = "0.22", features = ["serde"] }

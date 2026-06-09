@@ -3,93 +3,58 @@ use std::collections::HashMap;
 use crate::crypto::encrypt_secret;
 use crate::crypto::generate_session_key;
 use crate::fake::FakeError;
-use crate::patterns::{Pattern, StructuralDef, prefix_filter};
-use crate::secrets::RegisteredPat;
+use crate::patterns::{Pattern, build_ac_automaton};
 use crate::types::{Entry, SwapError, SwapResult};
-
-struct Match<'a> {
-    start: usize,
-    end: usize,
-    is_structural: bool,
-    pattern_ref: PatternRef<'a>,
-    structural_capture: Option<crate::segment::MatchCapture>,
-    derived_fake: Option<Vec<u8>>,
-}
-
-enum PatternRef<'a> {
-    Tier1(&'a StructuralDef),
-    Tier2(&'a RegisteredPat),
-}
 
 fn find_best_match<'a>(
     payload: &[u8],
     pos: usize,
     patterns: &'a [Pattern],
-) -> Result<Option<Match<'a>>, FakeError> {
-    let mut best: Option<Match<'a>> = None;
+) -> Option<(&'a Pattern, crate::segment::MatchCapture)> {
+    let mut best: Option<(&'a Pattern, crate::segment::MatchCapture)> = None;
 
     for pattern in patterns {
-        let candidate = match pattern {
-            Pattern::Structural(def) => def.try_match(payload, pos).map(|capture| Match {
-                start: pos,
-                end: capture.end,
-                is_structural: true,
-                pattern_ref: PatternRef::Tier1(def),
-                structural_capture: Some(capture),
-                derived_fake: None,
-            }),
-            Pattern::Registered(arc) => arc.try_match(payload, pos)?.map(|(end, fake)| Match {
-                start: pos,
-                end,
-                is_structural: false,
-                pattern_ref: PatternRef::Tier2(arc.as_ref()),
-                structural_capture: None,
-                derived_fake: Some(fake),
-            }),
-        };
-
-        if let Some(candidate) = candidate {
+        if let Some(capture) = pattern.try_match(payload, pos) {
             best = Some(match best {
-                None => candidate,
-                Some(b) if candidate.end > b.end => candidate,
-                // Tier1 wins on tie (INV-18)
-                Some(b)
-                    if candidate.end == b.end && candidate.is_structural && !b.is_structural =>
+                None => (pattern, capture),
+                Some((_bp, bc)) if capture.end > bc.end => (pattern, capture),
+                // INV-18: literal-first wins on length tie
+                Some((bp, bc))
+                    if capture.end == bc.end
+                        && pattern.first_segment_is_literal()
+                        && !bp.first_segment_is_literal() =>
                 {
-                    candidate
+                    (pattern, capture)
                 }
                 Some(b) => b,
             });
         }
     }
 
-    Ok(best)
+    best
 }
 
-fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, FakeError> {
-    match &m.pattern_ref {
-        PatternRef::Tier1(def) => {
-            let capture = m
-                .structural_capture
-                .as_ref()
-                .expect("Tier1 match always has a capture");
-            crate::fake::derive_fake_structural_segments(
-                &def.salt,
-                &def.segments,
-                &capture.variable_lengths,
-                secret,
-            )
-        }
-        PatternRef::Tier2(_pat) => Ok(m
-            .derived_fake
-            .clone()
-            .expect("registered match must have derived_fake")),
-    }
+fn generate_fake_for_match(
+    pattern: &Pattern,
+    capture: &crate::segment::MatchCapture,
+    secret: &[u8],
+) -> Result<Vec<u8>, FakeError> {
+    crate::fake::derive_fake_structural_segments(
+        &pattern.salt,
+        &pattern.segments,
+        &capture.variable_lengths,
+        secret,
+    )
 }
 
 /// Scan `payload` for secrets matching `patterns`, replace each with a
 /// structurally-equivalent fake, and return the swapped payload, encrypted
 /// entries, and a fresh session key.
+///
+/// For repeated calls with a fixed pattern set, prefer [`Detector`] to avoid
+/// rebuilding the Aho-Corasick automaton on every call.
+///
+/// [`Detector`]: crate::Detector
 ///
 /// # Examples
 ///
@@ -102,44 +67,56 @@ fn generate_fake_for_match(m: &Match<'_>, secret: &[u8]) -> Result<Vec<u8>, Fake
 /// assert_ne!(result.payload, payload.to_vec());
 /// ```
 pub fn swap(payload: &[u8], patterns: &[Pattern]) -> Result<SwapResult, SwapError> {
+    let ac = build_ac_automaton(patterns);
+    swap_with_ac(payload, patterns, &ac)
+}
+
+/// Inner swap implementation reusing a pre-built Aho-Corasick automaton.
+///
+/// # Contract
+///
+/// `ac` MUST have been built from `patterns` via [`build_ac_automaton`].
+/// Passing a mismatched pair produces silent detection failures.
+pub(crate) fn swap_with_ac(
+    payload: &[u8],
+    patterns: &[Pattern],
+    ac: &aho_corasick::AhoCorasick,
+) -> Result<SwapResult, SwapError> {
     let session_key = generate_session_key();
     let mut output = Vec::with_capacity(payload.len());
     let mut entries: Vec<Entry> = Vec::new();
     let mut seen: HashMap<&[u8], usize> = HashMap::new();
     let mut pos = 0;
-    let has_registered = patterns.iter().any(|p| p.is_registered());
 
     while pos < payload.len() {
-        if !has_registered {
-            // Jump to next structural-pattern prefix candidate, bulk-copying non-candidate bytes.
-            let next_candidate = prefix_filter()
-                .find(&payload[pos..])
-                .map(|m| pos + m.start())
-                .unwrap_or(payload.len());
-            if next_candidate > pos {
-                output.extend_from_slice(&payload[pos..next_candidate]);
-                pos = next_candidate;
-            }
-            if pos >= payload.len() {
-                break;
-            }
+        // Jump to the next AC match candidate, bulk-copying non-candidate bytes.
+        let next_candidate = ac
+            .find(&payload[pos..])
+            .map(|m| pos + m.start())
+            .unwrap_or(payload.len());
+        if next_candidate > pos {
+            output.extend_from_slice(&payload[pos..next_candidate]);
+            pos = next_candidate;
+        }
+        if pos >= payload.len() {
+            break;
         }
 
-        match find_best_match(payload, pos, patterns)? {
+        match find_best_match(payload, pos, patterns) {
             None => {
                 // INV-2: copy this byte unchanged
                 output.push(payload[pos]);
                 pos += 1;
             }
-            Some(m) => {
-                let matched_slice = &payload[m.start..m.end];
+            Some((pattern, capture)) => {
+                let matched_slice = &payload[pos..capture.end];
 
                 let (fake, _entry_idx) = if let Some(&idx) = seen.get(matched_slice) {
                     // INV-14: same secret → reuse existing fake and entry
                     (entries[idx].fake.clone(), idx)
                 } else {
                     // New secret: generate fake, encrypt, create entry
-                    let fake = generate_fake_for_match(&m, matched_slice)?;
+                    let fake = generate_fake_for_match(pattern, &capture, matched_slice)?;
                     let entry = encrypt_secret(&session_key, fake.clone(), matched_slice)?;
                     let idx = entries.len();
                     entries.push(entry);
@@ -149,7 +126,7 @@ pub fn swap(payload: &[u8], patterns: &[Pattern]) -> Result<SwapResult, SwapErro
 
                 // INV-1: replace secret with fake
                 output.extend_from_slice(&fake);
-                pos = m.end;
+                pos = capture.end;
             }
         }
     }
@@ -244,27 +221,6 @@ mod tests {
                 "INV-9: entry ciphertext must not contain plaintext secret"
             );
         }
-    }
-
-    #[test]
-    fn test_swap_registered_hmac_failure_passthrough() {
-        // INV-16: registered structural match + HMAC failure → pass through
-        use rand::{SeedableRng, rngs::StdRng};
-        let real_secret = b"my-registered-secret-value-here";
-        let pat =
-            crate::secrets::register_with_rng(real_secret, &mut StdRng::seed_from_u64(42)).unwrap();
-        let mut fake_secret = real_secret.to_vec();
-        fake_secret[10] ^= 0xFF;
-        let payload = fake_secret.clone();
-        let result = swap(&payload, &[pat]).expect("swap failed");
-        assert_eq!(
-            result.payload, payload,
-            "INV-16: HMAC failure → pass through unchanged"
-        );
-        assert!(
-            result.entries.is_empty(),
-            "INV-16: no entry produced for HMAC failure"
-        );
     }
 
     #[test]

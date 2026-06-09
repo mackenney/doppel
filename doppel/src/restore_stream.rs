@@ -16,10 +16,13 @@ use crate::types::{Entry, SessionKey};
 /// Constructed via [`restore_stream`]. Applies the same sliding-window
 /// algorithm as the synchronous [`restore`] function: fakes are replaced
 /// with decrypted originals; all other bytes are forwarded unchanged.
+/// Fakes split across [`Bytes`] chunk boundaries are handled correctly.
 ///
 /// The stream terminates with [`RestoreError::AeadTagFailure`] if a fake is
 /// matched but its AEAD tag does not verify. No plaintext is emitted for a
 /// failing entry (INV-5/INV-6).
+///
+/// `RestoreStream<S>` is `Send` when `S: Send`.
 ///
 /// [`restore`]: crate::restore
 pub struct RestoreStream<S> {
@@ -42,6 +45,7 @@ pub struct RestoreStream<S> {
 /// Each [`Bytes`] chunk from `inner` is processed through a sliding-window
 /// algorithm: fakes present in `entries` are replaced with their decrypted
 /// originals using `session_key`; all other bytes are forwarded unchanged.
+/// Fakes split across chunk boundaries are handled correctly.
 ///
 /// The stream is runtime-agnostic — it only requires [`futures_core::Stream`]
 /// and makes no tokio assumptions.

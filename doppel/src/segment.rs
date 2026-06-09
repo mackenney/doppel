@@ -24,6 +24,14 @@ pub(crate) enum BuiltinSegment {
         min: usize,
         max: usize,
     },
+    /// Fixed bytes for detection, but derived (not verbatim) in fake generation.
+    /// Charset defaults to detected from value bytes; can be overridden.
+    // Built-in patterns currently use only Literal and Variable; Opaque is reserved for completeness.
+    #[allow(dead_code)]
+    Opaque {
+        value: &'static [u8],
+        charset: CharsetName,
+    },
 }
 
 /// Owned segment used at runtime by `StructuralDef`, `match_segments`, and fake derivation.
@@ -39,6 +47,12 @@ pub(crate) enum Segment {
         min: usize,
         max: usize,
     },
+    /// Fixed bytes for detection, derived bytes for fake generation.
+    /// See SPEC.md §Segment Types: opaque segment.
+    Opaque {
+        value: Vec<u8>,
+        charset: CharsetName,
+    },
 }
 
 impl From<&BuiltinSegment> for Segment {
@@ -49,6 +63,10 @@ impl From<&BuiltinSegment> for Segment {
                 charset: *charset,
                 min: *min,
                 max: *max,
+            },
+            BuiltinSegment::Opaque { value, charset } => Segment::Opaque {
+                value: value.to_vec(),
+                charset: *charset,
             },
         }
     }
@@ -73,21 +91,58 @@ impl Segment {
                     max: *max,
                 })
             }
+            SegmentDef::Opaque { value, charset } => {
+                let value_bytes = value.as_bytes().to_vec();
+                let charset_name = match charset {
+                    Some(name) => CharsetName::from_name(name).ok_or_else(|| {
+                        SegmentDefError::UnknownCharset {
+                            index: 0,
+                            name: name.clone(),
+                        }
+                    })?,
+                    None => detect_charset_name(value_bytes.as_slice()),
+                };
+                Ok(Segment::Opaque {
+                    value: value_bytes,
+                    charset: charset_name,
+                })
+            }
         }
     }
 
     /// Convert to the serializable `SegmentDef` representation.
-    pub(crate) fn to_def(&self) -> SegmentDef {
+    /// Convert to the serializable `SegmentDef` representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SegmentDefError::NonUtf8Bytes`] if a Literal or Opaque segment's
+    /// value bytes are not valid UTF-8 (SPEC §Patterns File).
+    pub(crate) fn try_to_def(&self) -> Result<SegmentDef, SegmentDefError> {
         match self {
-            Segment::Literal(bytes) => SegmentDef::Literal {
-                value: String::from_utf8_lossy(bytes).into_owned(),
-            },
-            Segment::Variable { charset, min, max } => SegmentDef::Variable {
+            Segment::Literal(bytes) => Ok(SegmentDef::Literal {
+                value: std::str::from_utf8(bytes)
+                    .map_err(|_| SegmentDefError::NonUtf8Bytes)?
+                    .to_owned(),
+            }),
+            Segment::Variable { charset, min, max } => Ok(SegmentDef::Variable {
                 charset: charset.as_str().to_string(),
                 min: *min,
                 max: *max,
-            },
+            }),
+            Segment::Opaque { value, charset } => Ok(SegmentDef::Opaque {
+                value: std::str::from_utf8(value)
+                    .map_err(|_| SegmentDefError::NonUtf8Bytes)?
+                    .to_owned(),
+                charset: Some(charset.as_str().to_owned()),
+            }),
         }
+    }
+
+    /// Convert to `SegmentDef`, panicking on non-UTF-8 bytes.
+    /// Only for built-in patterns whose bytes are guaranteed ASCII.
+    pub(crate) fn to_def(&self) -> SegmentDef {
+        self.try_to_def()
+            .expect("built-in segment bytes are always ASCII")
     }
 }
 
@@ -102,8 +157,8 @@ pub(crate) struct MatchCapture {
 
 /// Named character set for Variable segments.
 ///
-/// Maps 1:1 to the charset names in SPEC.md §Patterns File line 90:
-/// `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`.
+/// Maps 1:1 to the charset names in SPEC.md §Patterns File:
+/// `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CharsetName {
@@ -112,6 +167,7 @@ pub(crate) enum CharsetName {
     UppercaseAlphanumeric,
     Digits,
     HexLower,
+    Wide,
 }
 
 impl CharsetName {
@@ -123,6 +179,7 @@ impl CharsetName {
             CharsetName::UppercaseAlphanumeric => crate::fake::uppercase_alphanumeric_ref(),
             CharsetName::Digits => crate::fake::digits_ref(),
             CharsetName::HexLower => crate::fake::hex_lower_ref(),
+            CharsetName::Wide => crate::fake::wide_ref(),
         }
     }
 
@@ -134,6 +191,7 @@ impl CharsetName {
             "uppercase_alphanumeric" => Some(CharsetName::UppercaseAlphanumeric),
             "digits" => Some(CharsetName::Digits),
             "hex_lower" => Some(CharsetName::HexLower),
+            "wide" => Some(CharsetName::Wide),
             _ => None,
         }
     }
@@ -146,6 +204,7 @@ impl CharsetName {
             CharsetName::UppercaseAlphanumeric => "uppercase_alphanumeric",
             CharsetName::Digits => "digits",
             CharsetName::HexLower => "hex_lower",
+            CharsetName::Wide => "wide",
         }
     }
 }
@@ -172,42 +231,106 @@ pub enum SegmentDef {
         /// Maximum number of bytes in this segment (inclusive).
         max: usize,
     },
+    /// Opaque segment: exact detection, charset-derived in fake.
+    /// charset is optional; default is detected from value bytes.
+    Opaque {
+        /// The opaque byte string as a UTF-8 string (used for exact detection).
+        value: String,
+        /// Charset for fake generation. `None` defaults to the minimal charset detected from the value bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        charset: Option<String>,
+    },
 }
 
 /// Validate a list of segment definitions per SPEC.md §Behavioral Invariants.
 ///
 /// Returns `Ok(())` if all constraints are satisfied:
 /// - At least one Variable segment (INV-30)
+/// - First segment is Literal or Opaque with value >= 2 bytes (INV-30, AC pre-filter)
 /// - All charset names are recognised
 /// - All Variable segments have min <= max
 /// - All Variable segments have min >= 1
 pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDefError> {
     let mut has_variable = false;
+    match defs.first() {
+        Some(SegmentDef::Literal { value }) | Some(SegmentDef::Opaque { value, .. }) => {
+            if value.len() < 2 {
+                return Err(SegmentDefError::FirstSegmentTooShort { len: value.len() });
+            }
+        }
+        Some(SegmentDef::Variable { .. }) => {
+            return Err(SegmentDefError::FirstSegmentVariable);
+        }
+        None => {
+            return Err(SegmentDefError::EmptySegmentList);
+        }
+    }
     for (i, def) in defs.iter().enumerate() {
-        if let SegmentDef::Variable { charset, min, max } = def {
-            has_variable = true;
-            if CharsetName::from_name(charset).is_none() {
+        match def {
+            SegmentDef::Variable { charset, min, max } => {
+                has_variable = true;
+                if CharsetName::from_name(charset).is_none() {
+                    return Err(SegmentDefError::UnknownCharset {
+                        index: i,
+                        name: charset.clone(),
+                    });
+                }
+                if min > max {
+                    return Err(SegmentDefError::MinExceedsMax {
+                        index: i,
+                        min: *min,
+                        max: *max,
+                    });
+                }
+                if *min < 1 {
+                    return Err(SegmentDefError::MinTooSmall { index: i });
+                }
+            }
+            SegmentDef::Opaque {
+                charset: Some(name),
+                ..
+            } if CharsetName::from_name(name).is_none() => {
                 return Err(SegmentDefError::UnknownCharset {
                     index: i,
-                    name: charset.clone(),
+                    name: name.clone(),
                 });
             }
-            if min > max {
-                return Err(SegmentDefError::MinExceedsMax {
-                    index: i,
-                    min: *min,
-                    max: *max,
-                });
-            }
-            if *min < 1 {
-                return Err(SegmentDefError::MinTooSmall { index: i });
-            }
+            _ => {}
         }
     }
     if !has_variable {
         return Err(SegmentDefError::NoVariableSegment);
     }
     Ok(())
+}
+
+/// Detect the most appropriate `CharsetName` for a byte sequence.
+///
+/// Returns the minimal named charset that covers all bytes: Digits, HexLower,
+/// UppercaseAlphanumeric, Alphanumeric, UrlSafeBase64, or Wide.
+pub(crate) fn detect_charset_name(bytes: &[u8]) -> CharsetName {
+    if bytes.iter().all(|&b| b.is_ascii_digit()) {
+        CharsetName::Digits
+    } else if bytes
+        .iter()
+        .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        CharsetName::HexLower
+    } else if bytes
+        .iter()
+        .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
+        CharsetName::UppercaseAlphanumeric
+    } else if bytes.iter().all(|&b| b.is_ascii_alphanumeric()) {
+        CharsetName::Alphanumeric
+    } else if bytes
+        .iter()
+        .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        CharsetName::UrlSafeBase64
+    } else {
+        CharsetName::Wide
+    }
 }
 
 /// Errors returned by `validate_segment_defs` and `Segment::from_def`.
@@ -220,7 +343,7 @@ pub enum SegmentDefError {
 
     /// A `Variable` segment references an unrecognised charset name.
     #[error(
-        "unknown charset \"{name}\" in segment {index}; valid: alphanumeric, url_safe_base64, uppercase_alphanumeric, digits, hex_lower"
+        "unknown charset \"{name}\" in segment {index}; valid: alphanumeric, url_safe_base64, uppercase_alphanumeric, digits, hex_lower, wide (variable and opaque segments)"
     )]
     UnknownCharset {
         /// Zero-based index of the offending segment.
@@ -246,6 +369,29 @@ pub enum SegmentDefError {
         /// Zero-based index of the offending segment.
         index: usize,
     },
+
+    /// The first segment is a Variable segment (must be Literal or Opaque; INV-30).
+    #[error("first segment must be literal or opaque, not variable")]
+    FirstSegmentVariable,
+
+    /// The segment list is empty.
+    #[error("segment list must not be empty")]
+    EmptySegmentList,
+
+    /// The first segment value is too short to anchor Aho-Corasick detection.
+    /// Minimum 2 bytes required; 4+ bytes recommended.
+    #[error(
+        "first segment value is {len} byte(s); minimum 2 bytes to avoid excessive false-positive AC hits"
+    )]
+    FirstSegmentTooShort {
+        /// Actual byte length of the first segment's value.
+        len: usize,
+    },
+
+    /// A Literal or Opaque segment value contains non-UTF-8 bytes.
+    /// SPEC §Patterns File: all segment `value` fields MUST be valid UTF-8.
+    #[error("segment value contains non-UTF-8 bytes")]
+    NonUtf8Bytes,
 }
 
 #[cfg(test)]
@@ -306,11 +452,16 @@ mod tests {
 
     #[test]
     fn validate_segment_defs_rejects_unknown_charset() {
-        let defs = vec![SegmentDef::Variable {
-            charset: "bogus".into(),
-            min: 1,
-            max: 10,
-        }];
+        let defs = vec![
+            SegmentDef::Literal {
+                value: "prefix_".into(),
+            },
+            SegmentDef::Variable {
+                charset: "bogus".into(),
+                min: 1,
+                max: 10,
+            },
+        ];
         let err = validate_segment_defs(&defs).unwrap_err();
         assert!(err.to_string().contains("unknown charset \"bogus\""));
     }
@@ -338,5 +489,56 @@ mod tests {
             }
             _ => panic!("expected Variable"),
         }
+    }
+
+    #[test]
+    fn validate_segment_defs_rejects_empty_first_literal() {
+        let defs = vec![
+            SegmentDef::Literal {
+                value: String::new(),
+            },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 8,
+                max: 8,
+            },
+        ];
+        let err = validate_segment_defs(&defs).unwrap_err();
+        assert!(matches!(
+            err,
+            SegmentDefError::FirstSegmentTooShort { len: 0 }
+        ));
+        assert!(err.to_string().contains("0 byte"));
+    }
+
+    #[test]
+    fn validate_segment_defs_rejects_one_byte_first_literal() {
+        let defs = vec![
+            SegmentDef::Literal { value: "A".into() },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 8,
+                max: 8,
+            },
+        ];
+        let err = validate_segment_defs(&defs).unwrap_err();
+        assert!(matches!(
+            err,
+            SegmentDefError::FirstSegmentTooShort { len: 1 }
+        ));
+    }
+
+    #[test]
+    fn validate_segment_defs_accepts_two_byte_first_literal() {
+        // 2 bytes is the hard-fail threshold; must succeed (warning is CLI-only).
+        let defs = vec![
+            SegmentDef::Literal { value: "sk".into() },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 8,
+                max: 8,
+            },
+        ];
+        assert!(validate_segment_defs(&defs).is_ok());
     }
 }

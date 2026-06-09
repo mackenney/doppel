@@ -21,101 +21,242 @@
 
 The library's surface area is defined by three operations and three data abstractions:
 
-**Pattern** is an opaque detection descriptor. It encapsulates everything needed to find a specific secret or secret class in an arbitrary payload and replace it with a structurally-equivalent fake: the detection mechanism, character set, and the stable fake mapping — a per-secret fake deterministically derived from a stable salt embedded in the Pattern on each detection. Built-in pattern constructors generate a fresh ephemeral salt on each call; fakes are stable for the lifetime of one Pattern instance but differ across calls. For persistent cross-call and cross-process stability, load patterns from a patterns file. Both structural patterns and registered secrets produce Pattern values; `swap` treats them identically and is not aware of which kind produced each Pattern.
+**Pattern** is a detection descriptor. It encapsulates everything needed to find a specific secret or secret class in an arbitrary payload and replace it with a structurally-equivalent fake. A Pattern is defined by three fields: an ordered segment list that describes what bytes to look for, a stable salt that drives deterministic fake derivation, and an optional list of HMAC digests that constrains detection to a specific set of secret instances. The segment list and salt are mandatory. The digest list is optional: an empty list means the Pattern matches any byte sequence that satisfies the segment structure (a _family_ pattern); a non-empty list means the Pattern additionally requires that the candidate's HMAC matches one of the stored digests (an _instance_ or _group_ pattern).
+
+Both built-in structural patterns (Anthropic, OpenAI, etc.) and user-registered secrets produce Pattern values. `swap` treats all Patterns uniformly — it is not aware of which kind produced each Pattern.
 
 **`swap`** receives a complete payload and a set of Patterns. It scans for secrets left-to-right, replaces each detected secret with the fake prescribed by the matching Pattern, and returns three things: the swapped payload, a set of substitution **entries**, and a **session key**. `swap` MUST NOT modify bytes outside the detected secrets. `swap` accepts a single complete payload buffer; streaming input is not part of the API.
 
-**Entries** are the set of substitution records produced by one `swap` call — one record per distinct secret detected. Each entry holds the fake bytes and the ciphertext of the original secret, encrypted under the session key. Entries are not confidentiality-sensitive on their own: without the session key, the ciphertext is opaque. An observer who sees the entries learns the exact byte length of each detected secret and, for registered-secret entries, can infer the approximate character class of the fake (which by default is drawn from a wide standard charset unrelated to the secret's content). No plaintext secret bytes appear in entries. The session key remains the sole decryption gate.
+**Entries** are the set of substitution records produced by one `swap` call — one record per distinct secret detected. Each entry holds the fake bytes and the ciphertext of the original secret, encrypted under the session key. Entries are not confidentiality-sensitive on their own: without the session key, the ciphertext is opaque. An observer who sees the entries learns the exact byte length of each detected secret. No plaintext secret bytes appear in entries. The session key remains the sole decryption gate.
 
 **Session key** is a 32-byte random value generated fresh at `swap` time. It is the sole decryption gate for the entries produced in that call. The session key is sensitive and ephemeral: it exists in process memory for one swap/restore cycle only, MUST NOT be written to disk, and MUST NOT appear in logs or any serialized form. Entries and session key are explicitly separate values with separate sensitivity levels and separate lifetimes.
 
 **`restore`** receives a response stream, the entries from the corresponding `swap` call, and the session key. It performs exact multi-string matching using only the fake byte strings in the entries — no pattern detection, no charset scanning. Every match triggers decryption of the corresponding entry; the original bytes are emitted in place of the fake. Bytes that do not match any fake are forwarded unchanged. `restore` MUST NOT require the full response to be buffered before emitting output.
 
-**Registration** is a preparatory operation that takes a secret value and produces a Pattern for a registered secret. The secret is consumed during registration and immediately discarded; the library has no persistent store. The produced Pattern is an opaque value the caller holds and passes to future `swap` calls. Registration is described in detail under Detection Tiers.
+**Registration** is a preparatory operation that takes a secret value and produces an instance Pattern. The secret is consumed during registration and immediately discarded; the library has no persistent store. The produced Pattern is an opaque value the caller holds and passes to future `swap` calls.
 
-These operations and data abstractions are the complete public surface. The only caller-visible configuration beyond Patterns is the registration options object, which controls opt-in prefix/suffix preservation, charset restriction, and detection fragment lengths for registered-secret patterns.
+**`Detector`** is a pre-built detection context. It encapsulates a set of Patterns and the Aho-Corasick automaton derived from their first segments, built once at construction. `Detector::swap` has identical semantics to the free `swap` function but reuses the pre-built automaton across calls. `Detector` is `Send + Sync` and intended for use in long-running processes where the pattern set is fixed at startup.
 
-## Detection Tiers
+These operations and data abstractions are the complete public surface.
 
-### Structural Patterns
+## Pattern Detection
 
-Structural patterns cover secrets whose format is structurally well-known. Each structural pattern is defined as an ordered sequence of structural segments. A segment is either a **Literal** — a fixed byte sequence that must appear exactly at the current position — or a **Variable** — a character set with a minimum and maximum length, where every byte must belong to that set.
+### Segment Types
 
-Detection is structural: at each byte position, walk the segment sequence against the payload. A Literal segment must match its fixed bytes exactly. A Variable segment consumes bytes that all belong to the segment's character set, within the segment's length range; when a Variable segment is followed by a Literal, the boundary is found by searching for that Literal within the valid range — this handles embedded fixed markers within an otherwise variable payload. No full regular expression engine is used; detection is a bounded linear scan with no backtracking. Detection records how many bytes each Variable segment consumed; that per-segment length drives fake generation.
+A Pattern's detection structure is an ordered sequence of segments. Each segment is one of three types:
 
-The fake for a structural match reproduces every Literal segment verbatim and fills each Variable segment with the same number of bytes drawn from that segment's character set, derived deterministically from the Pattern's salt. The fake has the same total byte length as the original.
+**`literal`** — a fixed byte sequence. At detection time, the payload bytes at the current position must exactly equal the segment's value. In fake generation, the literal bytes are reproduced verbatim at the corresponding position. Use `literal` for bytes that are structurally required by the external system (e.g., the `sk-ant-api03-` prefix of an Anthropic key) or for bytes that the caller explicitly declares non-secret and wants preserved in the fake.
 
-The library MUST ship built-in structural pattern definitions covering at minimum: Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys. Additional definitions MAY be added; the built-in set is not closed.
+**`opaque`** — a fixed byte sequence used as a detection anchor. At detection time, the payload bytes at the current position must exactly equal the segment's value — identical to `literal`. In fake generation, the opaque segment's bytes are _derived_ rather than reproduced verbatim: the fake bytes at those positions are drawn from the segment's charset (default: the minimal charset detected from the segment's own value bytes). Use `opaque` for bytes that the caller wants to anchor detection to but does not want to expose in the fake — typically the leading bytes of a secret that should appear opaque to the upstream system.
 
-Each built-in pattern constructor generates a new Pattern with an ephemeral random salt. Reusing the same Pattern instance across `swap` calls produces stable fakes for that session; constructing a new Pattern generates a distinct salt and therefore different fakes. For stable fakes across process restarts and across calls, load patterns from a patterns file.
+**`variable`** — a constrained variable-length region. At detection time, the bytes at the current position must all belong to the segment's charset, and the consumed byte count must fall within `[min, max]`. When a `variable` segment is followed by a `literal` or `opaque` segment, the boundary is found by searching for the next segment's value within the valid length range — this handles embedded fixed markers within an otherwise variable region. In fake generation, the fake bytes are drawn from the segment's charset, derived deterministically from the Pattern's salt and the matched candidate.
 
-### Registered Secrets
+### First-Segment Invariant
 
-Registered secrets cover secrets that do not conform to any known structural class. The caller performs a **registration** operation (described below) that produces a Pattern. That Pattern is then passed to `swap` exactly like a structural Pattern; `swap` applies all Patterns uniformly.
+The first segment of every Pattern MUST be either a `literal` or an `opaque` segment. Patterns whose first segment is `variable` MUST be rejected at load and registration time with a clear error. This invariant ensures that every Pattern contributes a fixed byte anchor to the combined Aho-Corasick automaton used during `swap`, eliminating the need for byte-by-byte fallback scanning.
 
-Detection: when a start fragment matches, the candidate is confirmed by verifying the end fragment at the expected offset and then computing the HMAC and comparing it against the token stored in the Pattern. A structural match that fails HMAC verification MUST be passed through unchanged; no replacement occurs. HMAC verification is internal to the Pattern's detection logic and does not appear in `swap`'s output. The detection fragments (start and end bytes of the registered secret) live exclusively in the caller-held Pattern; they are never written to the entries file.
+### Family vs Instance Patterns
 
-### Registration
+A Pattern with an empty `digests` list is a **family pattern**: it detects every byte sequence that satisfies the segment structure, regardless of content. Family patterns are appropriate for well-known secret formats where any key of that format should be protected (e.g., any Anthropic API key, any GitHub PAT).
 
-Registration is a distinct, preparatory operation that precedes the swap→restore cycle. It takes a secret value and an optional `SecretOptions` and returns either a Pattern on success or a `SecretError` on failure. The secret value is consumed during registration and immediately discarded; the registration operation MUST NOT store the original secret anywhere.
+A Pattern with a non-empty `digests` list is an **instance or group pattern**: after the segment structure is satisfied, detection additionally requires that `HMAC(salt, candidate)` matches at least one digest in the list. If no digest matches, the candidate is passed through unchanged — no replacement occurs. Instance patterns are appropriate for protecting specific known secret values without protecting all secrets of the same format.
 
-Registration options control five opt-in behaviours:
+All digests in a single Pattern share the same salt. This allows a single HMAC computation per candidate to be compared against all digests in the list, regardless of group size. Each digest corresponds to one registered secret; distinct secrets produce distinct digests under the same salt.
 
-- **preserve-prefix** (non-negative integer, default 0). The first N bytes of the secret are declared non-secret by the caller and will be reproduced verbatim at the start of every fake. These bytes MUST appear exactly in every occurrence of the secret in the payload for detection to fire; they serve as the structural anchor and are explicitly not part of the confidential value. Setting this is appropriate when the secret has a well-known, non-secret prefix (e.g., `MY_ORG_`). Misuse — marking actual secret bytes as prefix — weakens protection for those bytes and is the caller's responsibility.
+### Detection Algorithm in `swap`
 
-- **preserve-suffix** (non-negative integer, default 0). Symmetrically, the last M bytes of the secret are declared non-secret and reproduced verbatim at the end of every fake.
+`swap` builds a combined Aho-Corasick automaton from the leading byte values of the first segment of every Pattern (both `literal` and `opaque` first segments contribute). This automaton locates positions in the payload where any Pattern could begin. All bytes between candidate positions are bulk-copied to the output unchanged.
 
-- **restrict-charset** (boolean, default false). When false, the variable portion of the fake is drawn from the standard wide charset (`[A-Za-z0-9!@#$%^&*\-_+.~|]`, 72 chars). When true, fake bytes are drawn exclusively from the distinct byte values observed in the registered secret. Use restrict-charset only when the target system would reject a structurally implausible replacement — the trade-off is that the fake then reveals the secret's character class to any observer of the entries file.
+At each candidate position, `swap` attempts every Pattern whose first segment matches:
 
-- **start-fragment** (non-negative integer, default 2). Number of bytes taken from the start of the secret and stored as the detection anchor. The detection algorithm checks this prefix first, before computing the HMAC, as a fast pre-filter. Longer values reduce false-positive HMAC computations; shorter values store less of the secret in the Pattern.
+1. Walk the segment list against the payload at the candidate position. A `literal` or `opaque` segment must match its exact bytes. A `variable` segment must find a valid length within its range such that all bytes are in the charset and the next segment (if any) also matches.
+2. If segment matching fails, move to the next Pattern. If all Patterns fail, advance one byte.
+3. If segment matching succeeds and the Pattern has no digests (family): the candidate is accepted.
+4. If segment matching succeeds and the Pattern has digests (instance/group): compute `HMAC(salt, candidate)` once and compare against each digest using constant-time equality. If any digest matches, the candidate is accepted. If none match, the candidate is rejected and passed through unchanged.
+5. Among all Patterns that accept the candidate, the one producing the longest match wins (leftmost-longest). If two Patterns match with the same length, the `literal`-first Pattern takes precedence over the `opaque`-first Pattern.
 
-- **end-fragment** (non-negative integer, default 2). Number of bytes taken from the end of the secret and stored as a secondary anchor. Verified before HMAC when the start fragment matches and the length matches exactly.
+### Built-in Family Patterns
 
-The **variable portion** of a registration is the subsequence of secret bytes between the preserved prefix and preserved suffix — from byte preserve-prefix up to but not including the last preserve-suffix bytes. Registration MUST fail with a 'no variable bytes' error if the variable portion is empty. Registration MUST fail with a 'secret too short' error if the secret is empty. If fake generation exhausts the collision-avoidance retry limit, registration MUST fail with a 'collision limit' error.
+The library MUST ship built-in family pattern definitions covering at minimum: Anthropic API keys, OpenAI API keys (classic, project, service account), AWS IAM access key IDs (AKIA and ASIA prefixes), GitHub personal access tokens (classic, fine-grained, OAuth, app server, app user, refresh), GCP API keys, OpenRouter keys, Google OAuth client secrets, Slack bot tokens, Linear API keys, Groq, Perplexity, Cerebras, Stripe, Clerk, Svix, and Chromatic. Additional definitions MAY be added; the built-in set is not closed.
 
-Registration MUST emit a warning-level diagnostic if the variable portion is shorter than 14 bytes. Registration MUST emit a warning-level diagnostic if the secret's observed byte set is a subset of the alphanumeric characters (`[A-Za-z0-9]`) and restrict-charset is false — this combination produces a fake that looks structurally different from the original, which may be unexpected.
+Each built-in pattern constructor generates a new Pattern with an ephemeral random salt. For stable fakes across process restarts, load patterns from a patterns file.
 
-The produced Pattern encapsulates:
-- **Detection fingerprint:** start fragment (start-fragment bytes from the start of the secret, default 2), end fragment (end-fragment bytes from the end of the secret, default 2), exact byte length, and an HMAC verification token (salt + digest). _(Domain constraint: HMAC provides confirmation that a structural candidate is the registered secret without requiring the full secret to be stored; the unique salt prevents precomputed lookup attacks against the stored digest.)_
-- **Preserved prefix/suffix lengths:** the byte counts declared non-secret by the caller.
-- **Fake derivation parameters:** the HMAC salt, preserved prefix/suffix lengths, and the resolved charset. The fake is derived deterministically at detection time by seeding a PRNG from `HMAC(salt, candidate || counter)` starting at counter zero. No fake is pre-computed at registration time; no fake bytes are stored in the Pattern.
+## Registration
 
-The salt MUST be unique per registration; salt reuse is prohibited.
+Registration is a distinct, preparatory operation that precedes the swap→restore cycle. It takes a secret value and optional registration options, infers or accepts a segment structure, and returns either a Pattern on success or an error on failure. The secret is consumed during registration and immediately discarded; the registration operation MUST NOT store the original secret anywhere.
 
-The Pattern produced by registration is an opaque value the caller receives and holds. Whether the caller persists it is the caller's concern; the library has no persistent store. The Pattern contains detection fragments (the first start-fragment and last end-fragment bytes of the secret, defaulting to 2 each); treating a serialized Pattern with the same sensitivity as the secret is advisable. At no point after registration does the library have access to the original secret.
+The inferred segment structure for a registered secret is:
 
-### Patterns File
+```
+[Opaque { value: secret[..anchor_len], charset: detect(secret[..anchor_len]) },
+ Variable { charset: effective_charset, min: middle_len, max: middle_len }]
+```
 
-A **patterns file** is a TOML document that carries all data needed to reconstruct Pattern values across process restarts. It contains:
+where `anchor_len` is the number of leading secret bytes used as the detection anchor (registration option, default 3), `middle_len = secret.len() - anchor_len`, and `effective_charset` is the wide charset by default or the detected charset when `restrict-charset` is enabled. The variable portion is the region after the anchor bytes; its byte count is the variable portion for entropy assessment.
 
-- **Version field** (`version = 2`). The library MUST reject any version other than 2 with a clear error message directing the user to re-run `init`.
-- **Structural pattern entries** (`[[structural]]`): an ordered array of tables. Each table has:
-  - `identifier` (string): the class identifier, e.g. `"ANTHROPIC_KEY"`.
-  - `salt` (string): the 32-byte pattern salt encoded as 64 lowercase hex characters.
-  - `segments` (array of inline tables, optional): the ordered segment sequence defining the structural pattern. Each segment is either a **Literal** (`{ type = "literal", value = "<utf-8 string>" }`) or a **Variable** (`{ type = "variable", charset = "<name>", min = <n>, max = <n> }`). Valid charset names are: `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`.
-  - When `segments` is present, it overrides the compiled-in definition for that identifier.
-  - When `segments` is absent and the identifier matches a compiled-in definition, the compiled-in definition is used.
-  - When `segments` is absent and the identifier does not match any compiled-in definition, the library MUST return an error.
-  - An entry whose identifier does not match any compiled-in definition is a **user-defined pattern**; its `segments` field is mandatory.
-- **Registered secret entries** (`[[registered]]`): an ordered array of tables. Each table has detection fingerprints (start fragment, end fragment, exact length), an HMAC salt, an HMAC digest, and derivation parameters (preserve_prefix, preserve_suffix, optional resolved charset). All binary fields are encoded as lowercase hex strings. An optional `label` (string) field MAY be present for human identification and CLI management.
+If a non-zero tail anchor length is specified (default 0), the last `tail_anchor_len` bytes of the secret are also stored as an additional trailing `opaque` segment for secondary pre-filtering:
 
-The patterns file MUST be treated with the same sensitivity as the secrets it detects — it contains detection fragments that serve as a detection oracle. On Unix systems, the file SHOULD be written with mode 0600 (the CLI `init`, `register`, and `define` commands MUST enforce this — see §CLI Contract). The library provides serialization/deserialization functions operating on byte buffers; filesystem operations are the caller's responsibility.
+```
+[Opaque { value: secret[..anchor_len], charset: detect(...) },
+ Variable { charset: ..., min: middle_len, max: middle_len },
+ Opaque { value: secret[len-tail_anchor_len..], charset: detect(...) }]
+```
+
+The HMAC digest is computed as `HMAC(salt, full_secret)` where `salt` is a fresh random 32-byte value unique to this registration. The digest is stored in the Pattern's `digests` list alongside the salt.
+
+### Entropy Requirements
+
+The variable portion is the subsequence of secret bytes that are neither part of the anchor segments. Registration MUST fail with an `InsufficientEntropy` error (overridable with `--force` in the CLI) when the variable portion's effective entropy falls below **83 bits** — the equivalent of 14 alphanumeric bytes, the worst-case charset. Registration MUST emit a warning-level diagnostic when the effective entropy falls below **131 bits** — the equivalent of 22 alphanumeric bytes, the NIST SP 800-63B recommended minimum for machine-generated credentials.
+
+Effective entropy is computed as:
+
+```
+entropy_bits = variable_len × log₂(charset_size)
+```
+
+where `charset_size` is the cardinality of the effective charset (92 for wide, 62 for alphanumeric, or the detected charset size when restrict-charset is enabled).
+
+Registration MUST also emit a warning-level diagnostic when the secret's observed byte set is a subset of the alphanumeric character class (`[A-Za-z0-9]`) and restrict-charset is false — this combination produces a fake whose charset is visibly wider than the original's, which may be unexpected.
+
+### Registration Options
+
+- **anchor-len** (positive integer, default 3). Number of leading secret bytes stored as the detection anchor in the first `opaque` segment. Longer values reduce false-positive Aho-Corasick hits at the cost of more plaintext bytes stored in the patterns file. 3 bytes yields approximately 0.35 expected false AC hits per 8 KB of ASCII payload with 37 registered patterns; 4 bytes yields approximately 0.004. Registration MUST fail with `AnchorTooShort` if `anchor-len` is less than 2; a 0- or 1-byte anchor cannot pre-filter candidates reliably. Registration SHOULD emit a warning when `anchor-len` is exactly 2, as values below 3 (the default) are not recommended.
+
+- **tail-anchor-len** (non-negative integer, default 0). Number of trailing secret bytes stored as a secondary detection anchor in a trailing `opaque` segment. The default of 0 is recommended: with a 3-byte leading anchor the AC filter is already tight, adding a tail anchor does not improve filtering and leaks additional secret bytes.
+
+- **restrict-charset** (boolean, default false). When false, the variable segment's fake bytes are drawn from the wide charset. When true, fake bytes are drawn from the charset detected in the secret's variable bytes. Use restrict-charset only when the target system rejects structurally implausible replacements.
+
+- **group** (string, optional). Add the new digest to an existing Pattern entry identified by this label rather than creating a new entry. All group members share the same salt; the HMAC digest is computed with the existing entry's salt.
+
+- **force** (boolean, default false). Suppress the `InsufficientEntropy` hard failure; the entropy warning is still emitted.
+
+Registration MUST fail with a 'no variable bytes' error if the variable portion (after anchor bytes) is empty. Registration MUST fail with a 'secret too short' error if the secret is shorter than `anchor_len`. If fake generation exhausts the collision-avoidance retry limit, registration MUST fail with a 'collision limit' error. Registration MUST NOT panic on any input.
+
+## Patterns File
+
+A **patterns file** is a TOML document that carries all data needed to reconstruct Pattern values across process restarts.
+
+### Format (version 3)
+
+The file begins with a version field:
+
+```toml
+version = 3
+```
+
+The library MUST reject any version other than 3 with a clear error message.
+
+All patterns are stored in a single `[[pattern]]` array. Each table has:
+
+- `identifier` (string, required): a unique human-readable name for the pattern.
+- `salt` (string, required): the 32-byte pattern salt encoded as 64 lowercase hex characters. Used for both HMAC digest computation (when `digests` is non-empty) and fake derivation.
+- `digests` (array of strings, optional, default `[]`): HMAC-SHA256 digests encoded as 64 lowercase hex characters. Empty array or absent means the pattern is a family pattern (no HMAC gate). Non-empty means the pattern is an instance/group pattern — detection requires `HMAC(salt, candidate)` to match one of the listed digests.
+- `[[pattern.segments]]` (array of tables, required): the ordered segment sequence.
+
+Each segment table has a `type` field (`"literal"`, `"opaque"`, or `"variable"`) and type-specific fields:
+
+```toml
+# Literal segment — verbatim in detection and fake
+{ type = "literal", value = "<utf-8 string>" }
+
+# Opaque segment — exact detection, charset-derived in fake
+{ type = "opaque", value = "<utf-8 string>", charset = "<name>" }
+# charset is optional; default is the minimal charset detected from value bytes.
+
+# Variable segment — charset-constrained, derived in fake
+{ type = "variable", charset = "<name>", min = <n>, max = <n> }
+```
+
+Valid charset names: `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`. All segment `value` fields MUST be valid UTF-8; the library MUST reject patterns with non-UTF-8 segment values.
+
+### Example: built-in family pattern
+
+```toml
+[[pattern]]
+identifier = "anthropic"
+salt = "eb1f555ac9f9cbae02f88bf01a0eacdf7102a26f0f1c8987bbe32ebe45335c5b"
+
+[[pattern.segments]]
+type = "literal"
+value = "sk-ant-api03-"
+
+[[pattern.segments]]
+type = "variable"
+charset = "url_safe_base64"
+min = 93
+max = 93
+
+[[pattern.segments]]
+type = "literal"
+value = "AA"
+```
+
+### Example: user-defined family pattern
+
+```toml
+[[pattern]]
+identifier = "my-org-keys"
+salt = "..."
+
+[[pattern.segments]]
+type = "opaque"
+value = "sec_"
+charset = "alphanumeric"
+
+[[pattern.segments]]
+type = "variable"
+charset = "alphanumeric"
+min = 20
+max = 20
+```
+
+### Example: instance/group pattern
+
+```toml
+[[pattern]]
+identifier = "prod-credentials"
+salt = "..."
+digests = [
+  "5b233f88848ba55705fd68c4f5198c0eedcbe09cd72068bb5008534633c3ec4a",
+  "10f3d02293e11b6bea36cb4cdde05848de63b4fd137a15e7b80c163825abcef4",
+]
+
+[[pattern.segments]]
+type = "opaque"
+value = "A9i"
+
+[[pattern.segments]]
+type = "variable"
+charset = "wide"
+min = 37
+max = 37
+```
+
+### File Handling
+
+The patterns file MUST be treated with the same sensitivity as the secrets it detects — it contains detection anchors that serve as a detection oracle for registered secrets. On Unix systems, the file SHOULD be written with mode 0600; the CLI `init`, `register`, and `define` commands MUST enforce this. The library provides serialization/deserialization functions operating on byte buffers; filesystem operations are the caller's responsibility.
 
 ## Security Properties
 
-**Entries alone do not leak plaintext secret bytes (confidentiality).** Each entry contains only ciphertext and the fake bytes. Without the session key, the ciphertext is opaque. The fake, by default, is drawn from the standard wide charset with no connection to the secret's content; it reveals the exact byte length of the detected secret and nothing else. When restrict-charset is enabled, the fake also reveals the approximate character class of the secret — this is a documented trade-off the caller accepts by opting in. The entries are not confidentiality-sensitive in the default configuration.
+**Entries alone do not leak plaintext secret bytes (confidentiality).** Each entry contains only ciphertext and the fake bytes. Without the session key, the ciphertext is opaque.
 
 **Entries are integrity-protected (fake binding).** The AEAD tag covers the fake field as associated data (AAD). Replacing an entry's fake field after `swap` produces a tag mismatch at `restore` time; no plaintext is emitted. An attacker who can write the entries file but not the session key cannot redirect decryption to an arbitrary trigger.
 
 **Swapped payload alone does not leak secrets.** The swapped output contains only structurally-equivalent fakes. There are no tokens, markers, indices, or side-channels in the swapped payload that reference the original bytes.
 
-**Session key is the trust gate.** The session key is generated fresh at the start of each `swap` call. It lives in process memory only, for the duration of one swap/restore cycle. It MUST NOT be written to disk. It MUST NOT appear in logs or any serialized form. When the cycle ends, no secret material remains anywhere — not in the entries, not on disk, not in the payload.
+**Session key is the trust gate.** The session key is generated fresh at the start of each `swap` call. It lives in process memory only, for the duration of one swap/restore cycle. It MUST NOT be written to disk. It MUST NOT appear in logs or any serialized form.
 
-**Per-entry AEAD encryption.** Each substitution entry is independently encrypted with its own AEAD tag under the session key. `restore` decrypts entries one by one as their corresponding fakes are matched in the response stream — it does NOT decrypt the entire entries set upfront. _(Domain constraint: the 192-bit nonce eliminates birthday-bound collision risk for randomly-generated nonces; the AEAD construction provides both confidentiality and ciphertext integrity in a single pass. Cipher agility is deliberately absent — algorithm negotiation introduces downgrade risk and implementation complexity with no benefit in a single-purpose library.)_ Restored plaintext MUST NOT be emitted before the AEAD tag of the matching entry passes verification. A tag failure MUST produce an error; the stream MUST NOT continue with the raw fake or any partially-decrypted bytes in place.
+**Per-entry AEAD encryption.** Each substitution entry is independently encrypted with its own AEAD tag under the session key. `restore` decrypts entries one by one as their corresponding fakes are matched in the response stream — it does NOT decrypt the entire entries set upfront. The AEAD construction provides both confidentiality and ciphertext integrity in a single pass. Restored plaintext MUST NOT be emitted before the AEAD tag of the matching entry passes verification. A tag failure MUST produce an error; the stream MUST NOT continue.
 
-**Structural fake plausibility does not compromise security of the credential value.** Structural fakes reproduce every Literal segment's fixed bytes verbatim at the corresponding positions (e.g., the `sk-ant-api03-` prefix and the `AA` terminal marker of an Anthropic key) and fill each Variable segment with bytes derived from the Pattern's salt. The literal bytes are visible in the fake by design — this is what enables the model to reason about format — but the variable bytes are derived via keyed HMAC and carry no information about the original.
+**Literal segment bytes are visible in the fake by design.** Literal segments reproduce their bytes verbatim in every fake; this enables structural plausibility (an Anthropic fake begins with `sk-ant-api03-` so the upstream API treats it as a structurally valid key). The literal bytes carry no information about the variable portion of the secret.
 
-**Registered-secret detection fragments are confined to the Pattern.** Reliable detection of unstructured secrets requires storing enough of the secret to find it quickly. The start and end fragments live exclusively in the caller-held Pattern and never appear in the entries file. The cost of detection is borne by the Pattern (which may be persisted and should be treated as sensitive), not by the entries.
+**Opaque segment bytes do not appear in the fake.** Opaque segments serve as detection anchors only. Their bytes are stored in the patterns file (not the entries file) and are visible to anyone who reads the patterns file. They are derived anew in fake generation; the external system sees derived bytes, not the original anchor bytes.
+
+**Detection anchors are confined to the patterns file.** The leading bytes of registered secrets (stored in `opaque` segment values) live in the patterns file and never appear in the entries file. The patterns file should be treated with the same sensitivity as the secrets it detects.
+
+**Instance pattern HMAC gate prevents false swaps.** A candidate that passes segment matching but fails HMAC verification is passed through unchanged. The HMAC is computed with the Pattern's salt; the digest is stored in the patterns file. An attacker cannot forge a match without knowing the preimage of a stored digest under the specific salt.
+
+**Shared salt within a group is safe.** All digests within a single instance/group Pattern share one salt. Distinct secrets produce distinct digests under the same salt (HMAC collision resistance). Knowing one group member's secret and its digest does not help recover any other member's secret.
 
 ## Streaming Invariants
 
@@ -136,45 +277,37 @@ When no fake from the entries appears anywhere in the response, the stream MUST 
 All fakes MUST satisfy:
 
 - **Same length:** the fake has the same total byte count as the original secret.
-- **No collision with original:** if the derived fake equals the original secret, the implementation MUST increment the derivation counter and re-derive. A fake that equals the original is not a fake. In practice this case is unreachable given cryptographic hash properties; the counter mechanism provides a deterministic fallback guarantee.
+- **No collision with original:** if the derived fake equals the original secret, the implementation MUST increment the derivation counter and re-derive. In practice this case is unreachable given cryptographic hash properties; the counter mechanism provides a deterministic fallback guarantee.
 
-**Structural fakes** additionally MUST satisfy:
+**Fake generation by segment type:**
 
-- **Same Literal segments:** the fake reproduces every Literal segment's fixed bytes verbatim at the corresponding byte positions.
-- **Same charset per Variable segment:** every byte in a Variable segment of the fake is drawn exclusively from that segment's own character set.
+- **`literal` segment:** the fake bytes at these positions are the segment's fixed value, reproduced verbatim.
+- **`opaque` segment:** the fake bytes at these positions are derived deterministically from the Pattern's salt, the full matched candidate bytes, and the segment's charset. They are never equal to the original anchor bytes (ensured by the no-collision guarantee over the full fake).
+- **`variable` segment:** the fake bytes at these positions are derived deterministically from the Pattern's salt and drawn from the segment's charset. The count equals the number of bytes consumed during detection.
 
-**Registered fakes** are structured as:
+All derived bytes (opaque and variable segments) are produced by seeding a PRNG from `HMAC(salt, candidate || counter)` and drawing bytes from the respective charset. The counter starts at zero and increments only if the full fake equals the original.
 
-```
-fake = declared_prefix || derived_variable_bytes || declared_suffix
-```
+**Stability:** every detection of the same secret under the same Pattern MUST produce the same fake. Deterministic derivation ensures this without caching — re-derivation at each detection is equivalent.
 
-where `declared_prefix` and `declared_suffix` are the non-secret bytes the caller opted into preserving (zero length by default), and `derived_variable_bytes` fills the remaining positions — total secret length minus the preserved prefix and suffix lengths — drawn from the effective charset (wide by default, secret-detected when restrict-charset is enabled). No byte from the secret's variable portion appears in the fake. The variable bytes are derived deterministically from the Pattern's HMAC salt and the matched candidate bytes.
-
-The behavioral guarantee is stability: every detection of the same secret under the same Pattern MUST produce the same fake. This applies equally to structural and registered Patterns. Stability is achieved by deterministic derivation: the fake is produced by seeding a PRNG from `HMAC(salt, secret || counter)` where the counter starts at zero and increments only if the derived fake equals the original. Because the derivation is deterministic, the same (salt, secret) always produces the same fake; re-derivation at each detection is equivalent to caching.
 ## CLI Contract
 
 The CLI exposes `swap`, `restore`, `init`, `register`, `define`, `list`, `inspect`, and `remove` at the process boundary.
 
-**`swap`:** reads the complete payload from stdin; writes the swapped payload to stdout; writes the entries to a caller-specified path; writes the session key to a caller-specified path. The session key output file MUST be created with mode 0600. No other file permission is acceptable.
+**`swap`:** reads the complete payload from stdin; writes the swapped payload to stdout; writes the entries to a caller-specified path; writes the session key to a caller-specified path. The session key output file MUST be created with mode 0600. No other file permission is acceptable. The `swap` subcommand MUST accept a `--patterns <FILE>` argument specifying the patterns file; this argument is required.
 
-**`restore`:** reads the response stream from stdin incrementally and writes output to stdout as each chunk resolves. It MUST NOT buffer stdin to completion before writing to stdout. The session key MUST be supplied via the `DOPPEL_KEY` environment variable. A `--key` command-line flag MUST NOT exist. _(Domain constraint: command-line arguments are visible in process listings, `/proc`, and shell history; the environment variable is the only acceptable delivery mechanism.)_
+**`restore`:** reads the response stream from stdin incrementally and writes output to stdout as each chunk resolves. It MUST NOT buffer stdin to completion before writing to stdout. The session key MUST be supplied via the `DOPPEL_KEY` environment variable. A `--key` command-line flag MUST NOT exist. _(Domain constraint: command-line arguments are visible in process listings, `/proc`, and shell history.)_
 
-The entries file written by `swap` contains ciphertext only and is not confidentiality-sensitive on its own. It is integrity-protected: the AEAD tag binds each entry's fake field to its ciphertext, so a tampered entries file produces a decryption error rather than silent secret exfiltration. Deletion of the session key file after `restore` completes is the caller's responsibility; the CLI `restore` command has no mechanism to locate the file and does not perform this deletion. See Known Limitations.
+**`init`:** creates a new TOML patterns file (version 3) at the caller-specified path. The file includes all built-in family pattern definitions with freshly generated stable salts and an empty `digests` list; the file is self-describing and directly editable. The command MUST fail if the file already exists unless `--force` is specified. When `--force` is used, all salts are regenerated — existing fakes produced from the old salts become invalid. The patterns file MUST be written with mode 0600 on Unix.
 
-**`init`:** creates a new TOML patterns file (version 2) at the caller-specified path. The file includes all built-in structural pattern definitions with their full segment sequences and freshly generated stable salts; the registered secrets list is empty. Because segment definitions are embedded in the output, the file is self-describing and directly editable. The generated file includes a fully-commented block at the end illustrating: (a) an annotated registered-secret entry template with per-field derivation explanations, and (b) the CLI commands available to extend the file (`register`, `define`). The command MUST fail if the file already exists unless `--force` is specified. When `--force` is used, all salts are regenerated — existing fakes produced from the old salts become invalid. The patterns file MUST be written with mode 0600 on Unix.
+**`register`:** reads a secret value from stdin (raw bytes, no trimming), loads the patterns file, registers the secret as an instance pattern, appends the new entry (or extends an existing group entry with `--group <identifier>`), and writes the file back. Options: `--identifier <id>` (required for new entries), `--anchor-len <n>` (default 3), `--tail-anchor-len <n>` (default 0), `--restrict-charset` (default false), `--group <identifier>` (add to existing group), `--force` (suppress entropy failure). The secret MUST NOT appear in command-line arguments. Existing comments in the patterns file MUST be preserved.
 
-**`register`:** reads a secret value from stdin (raw bytes, no trimming), loads the patterns file from the caller-specified path, registers the secret as a registered-secret Pattern, appends the new entry to the patterns file, and writes it back. Options `--preserve-prefix`, `--preserve-suffix`, `--restrict-charset`, `--start-fragment`, and `--end-fragment` map to the corresponding registration options (defaults: 0, 0, false, 2, 2). The secret MUST NOT appear in command-line arguments. Existing comments in the patterns file MUST be preserved across write operations.
+**`define`:** adds a user-defined family pattern to the patterns file. The caller supplies an identifier, one or more segment specifications, and the patterns file path. A fresh stable salt is generated. `define` MUST fail if the identifier already exists. `define` MUST fail if the segment list is empty, if any segment specifies an unrecognised charset name, if any `variable` segment has `min > max`, if the first segment is not a `literal` or `opaque` segment, if the segment list contains no `variable` segment, or if the first segment's value is shorter than 2 bytes. `define` SHOULD emit a warning when the first segment value is shorter than 4 bytes, as a short anchor generates many false Aho-Corasick hits. The patterns file MUST be written back atomically with mode 0600.
 
-**`define`:** adds a user-defined structural pattern to the patterns file. The caller supplies an identifier, one or more segment specifications, and the patterns file path. A fresh stable salt is generated for the new entry. `define` MUST fail if the identifier already exists in the file. `define` MUST fail if the segment list is empty, if any segment specifies an unrecognised charset name, if any Variable segment has `min > max`, or if the segment list contains no Variable segment (a pure-Literal pattern has no variable bytes and cannot produce a structural fake). The patterns file MUST be written back atomically with mode 0600 on Unix. Existing comments in the patterns file MUST be preserved.
+**`list`:** reads the patterns file and writes a human-readable summary to stdout: each pattern entry with its identifier, segment description, digest count, and charset summary. `list` MUST NOT modify the patterns file.
 
-**`list`:** reads the patterns file and writes a human-readable summary to stdout: each structural pattern entry with its identifier and a human-readable segment description; each registered-secret entry with its label (if present), exact length, and charset summary. `list` MUST NOT modify the patterns file.
+**`inspect`:** reads the patterns file and writes full detail for a single pattern to stdout, located by identifier. Outputs all segments, digest count, entropy estimate for variable portions, and the salt fingerprint (first 8 hex characters only). `inspect` MUST NOT modify the patterns file.
 
-**`inspect`:** reads the patterns file and writes full detail for a single pattern to stdout, located by identifier (structural) or label (registered). For a structural entry: all segments and the salt fingerprint (first 8 hex characters of the salt — not the full salt value). For a registered-secret entry: all fields with derivation annotations. `inspect` MUST NOT modify the patterns file.
-
-**`remove`:** removes a pattern from the patterns file by identifier (structural) or label (registered) and writes the updated file back atomically (temporary file plus rename) with mode 0600. `remove` MUST fail if the specified identifier or label is not found. `remove` MUST emit a warning to stderr, but MUST NOT fail, when the target identifier matches a built-in structural pattern — fakes for that pattern class will no longer be produced by `swap`. Existing comments in the patterns file MUST be preserved.
-
-**`swap` `--patterns`:** the `swap` subcommand MUST accept a `--patterns <FILE>` argument specifying the patterns file. This argument is required; `swap` MUST NOT fall back to ephemeral patterns when it is absent. The patterns file is loaded before swapping.
+**`remove`:** removes a pattern from the patterns file by identifier and writes the updated file back atomically with mode 0600. `remove` MUST fail if the identifier is not found. `remove` MUST emit a warning to stderr (but MUST NOT fail) when the target identifier matches a built-in family pattern. Existing comments in the patterns file MUST be preserved.
 
 ## Behavioral Invariants
 
@@ -186,62 +319,69 @@ The entries file written by `swap` contains ciphertext only and is not confident
 6. An AEAD tag failure MUST produce an error; the stream MUST NOT continue with a raw fake or any partially-decrypted content in its place.
 7. `restore` MUST forward all bytes unchanged when no fake from the entries appears in the stream; it MUST NOT produce an error in this case.
 8. `restore` MUST NOT hold more than `max { |fake_i| : fake_i ∈ entries }` bytes unemitted at any point during processing.
-9. The entries MUST NOT contain plaintext bytes from the variable portion of any registered secret in any field or serialized form. Bytes declared non-secret via the preserved prefix and suffix MAY appear in the fake field; their presence is an explicit, caller-acknowledged trade-off. The session key MUST NOT be serialized together with or embedded within the entries.
+9. The entries MUST NOT contain plaintext bytes from any secret's variable or opaque portions in any field or serialized form. The session key MUST NOT be serialized together with or embedded within the entries.
 10. The session key MUST NOT be written to disk, appear in logs, or be included in any serialized form.
 11. The session key MUST NOT be retained after the swap/restore cycle ends. The entries MUST NOT be retained after the swap/restore cycle ends.
-12. All key material MUST be destroyed (overwritten with zeros or equivalent) when the swap/restore cycle ends; key material MUST NOT remain accessible after the cycle terminates.
-13. The same secret detected under the same Pattern MUST produce the same fake. This applies to both structural and registered Patterns: within any context where the same Pattern and the same secret appear, the resulting fake is identical.
+12. All key material MUST be destroyed (overwritten with zeros or equivalent) when the swap/restore cycle ends.
+13. The same secret detected under the same Pattern MUST produce the same fake. Stability applies to all Pattern types.
 14. Multiple occurrences of the same secret within a single `swap` call each produce the same fake in the swapped output; all occurrences share a single entry.
 15. A fake MUST NOT equal the original secret; if derivation at counter zero produces a fake equal to the original, the implementation MUST increment the counter and re-derive. If all attempts produce a collision, the operation MUST fail with an error rather than emitting the original as a fake.
-16. A registered-secret candidate that matches structurally but fails HMAC verification MUST be passed through unchanged; no replacement occurs.
-17. Each registration MUST use a unique HMAC salt; salt reuse is prohibited.
-18. Detection MUST produce leftmost-longest matches; overlapping matches MUST NOT be produced. This guarantee applies across all Patterns: when two Patterns both match at the same byte position, the longer match takes precedence. If a structural Pattern and a registered Pattern both match at the same byte position with the same byte length, the structural Pattern takes precedence.
+16. An instance/group pattern candidate that passes segment matching but fails HMAC verification against all digests MUST be passed through unchanged; no replacement occurs.
+17. Each Pattern MUST use a unique salt; salt reuse across distinct Pattern entries is prohibited. Digests within the same Pattern entry share one salt by design.
+18. Detection MUST produce leftmost-longest matches; overlapping matches MUST NOT be produced. When two Patterns both match at the same byte position with the same byte length, the Pattern whose first segment is `literal` takes precedence over the Pattern whose first segment is `opaque`.
 19. `restore` MUST perform only exact matching against fake byte strings from the entries; it MUST NOT run pattern detection of any kind.
 20. The CLI `restore` command MUST accept the session key only via the `DOPPEL_KEY` environment variable; no other delivery mechanism is provided or accepted.
 21. The CLI `swap` command MUST create the session key output file with permission mode 0600.
-22. The built-in structural pattern set MUST cover Anthropic API keys, OpenAI API keys, AWS IAM access key IDs, GitHub personal access tokens (classic and fine-grained), and GCP API keys.
+22. The built-in family pattern set MUST cover Anthropic, OpenAI, AWS IAM, GitHub PATs, and GCP API keys at minimum.
 23. `swap` called on a payload containing no detectable secrets MUST return the payload bytes unchanged and an empty entries set.
-24. The AEAD tag for each entry MUST cover the entry's fake field as associated data (AAD). Replacing an entry's fake field after encryption MUST cause `restore` to return an error; no original secret bytes MUST be emitted.
-25. `register` MUST fail with a 'secret too short' error for empty secrets, a 'no variable bytes' error when the sum of the preserved prefix and suffix lengths is greater than or equal to the total secret length, and a 'collision limit' error when fake generation exhausts retries. It MUST NOT panic on any input.
-26. `register` MUST emit a warning-level diagnostic when the variable portion of the registered secret is shorter than 14 bytes.
-27. `register` MUST emit a warning-level diagnostic when the secret's observed byte set is a subset of the alphanumeric character class (`[A-Za-z0-9]`) and restrict-charset is false.
-28. Every Literal segment in a matched structural Pattern MUST appear verbatim at the corresponding byte positions of the fake.
-29. Every Variable segment in a structural fake MUST contain only bytes drawn from that segment's own character set.
-30. A user-defined structural pattern MUST specify at least one Variable segment; the `define` command MUST reject a segment list that contains no Variable segment.
-31. A user-defined structural pattern identifier MUST be unique within the patterns file; the `define` command MUST fail if the identifier already exists.
-32. Removing a built-in structural pattern identifier from the patterns file is permitted and MUST NOT produce an error; `swap` will not apply that pattern class when the identifier is absent from the file.
-33. The patterns file version MUST be 2; the library MUST reject any file whose version field is not 2.
-34. `list` and `inspect` MUST NOT modify the patterns file.
-35. `remove` MUST write the updated patterns file atomically; no partial write MUST be observable by concurrent readers.
-36. The `register`, `define`, and `remove` commands MUST preserve all comments present in the patterns file when writing it back; no comment MUST be lost as a side-effect of a write operation.
-37. The CLI `swap` command MUST successfully create the session key output file before writing any bytes to stdout or the entries file; if key file creation fails, no output MUST be produced.
+24. The AEAD tag for each entry MUST cover the entry's fake field as associated data (AAD). Replacing an entry's fake field after encryption MUST cause `restore` to return an error.
+25. `register` MUST fail with `InsufficientEntropy` when the variable portion's effective entropy is below 83 bits and `--force` is not specified. `register` MUST emit a warning when effective entropy is below 131 bits.
+26. `register` MUST emit a warning-level diagnostic when the secret's observed byte set is a subset of the alphanumeric character class and restrict-charset is false.
+27. Every `literal` segment in a matched Pattern MUST appear verbatim at the corresponding byte positions of the fake.
+28. Every `opaque` segment in a matched Pattern MUST produce derived bytes (drawn from the segment's charset via HMAC-seeded PRNG) at the corresponding byte positions of the fake. The original opaque segment value MUST NOT appear verbatim in the fake.
+29. Every `variable` segment in a fake MUST contain only bytes drawn from that segment's charset.
+30. The first segment of every Pattern MUST be a `literal` or `opaque` segment. `define` and `register` MUST reject patterns whose first segment is `variable`.
+31. When a Pattern's `digests` list is non-empty, all `variable` segments in that Pattern MUST have `min == max`. A variable-length instance pattern has no defined candidate length for HMAC computation.
+32. A user-defined pattern identifier MUST be unique within the patterns file; `define` and `register` (for new entries) MUST fail if the identifier already exists.
+33. Removing a built-in family pattern identifier from the patterns file is permitted; `swap` will not apply that pattern class when the identifier is absent.
+34. The patterns file version MUST be 3; the library MUST reject any file whose version field is not 3.
+35. `list` and `inspect` MUST NOT modify the patterns file.
+36. `remove` MUST write the updated patterns file atomically; no partial write MUST be observable by concurrent readers.
+37. The `register`, `define`, and `remove` commands MUST preserve all comments present in the patterns file when writing it back.
+38. The CLI `swap` command MUST successfully create the session key output file before writing any bytes to stdout or the entries file; if key file creation fails, no output MUST be produced.
+39. `Detector::swap` called on the same payload with the same Patterns MUST produce fakes identical to those produced by the free `swap` function. "Same Patterns" means the same Pattern values including their salts — not merely the same pattern class.
+40. `Detector` MUST implement `Send + Sync`. It MUST be safe to share a `Detector` across threads without external synchronization.
+41. The Aho-Corasick automaton MUST NOT be rebuilt on `Detector::swap` calls. The automaton is built exactly once in `Detector::new`.
+42. `register` MUST fail with `AnchorTooShort` when `anchor_len` is 0 or 1. `register` SHOULD emit a warning when `anchor_len` is 2. The default of 3 is the minimum recommended value.
+43. `define` MUST fail when the first segment value is shorter than 2 bytes. `define` SHOULD emit a warning when the first segment value is shorter than 4 bytes.
 
 ## Verifiable Conditions
 
-1. Given a payload containing a secret matching a structural pattern, the swapped output contains no byte subsequence equal to the original secret.
+1. Given a payload containing a secret matching a family pattern, the swapped output contains no byte subsequence equal to the original secret.
 2. Given a swapped payload, the corresponding entries, and the session key, passing the swapped payload through `restore` produces bytes that exactly equal the original payload.
 3. Two `swap` calls on the same secret under the same Pattern produce identical fake bytes in the output.
 4. Given a response where a fake straddles a chunk boundary, `restore` restores the original secret correctly.
 5. Given a response that contains no fake from the entries, `restore` produces output byte-for-byte identical to the input and returns no error.
 6. Given an entries set where one entry's AEAD tag has been tampered with, `restore` returns an error and emits no partially-restored output.
-7. The entries produced by `swap` contain no byte sequence from the variable portion of any registered secret, regardless of serialization. Bytes declared non-secret via the preserved prefix and suffix MAY appear in the fake field by design.
+7. The entries produced by `swap` contain no byte sequence from the variable or opaque portions of any detected secret, regardless of serialization.
 8. The session key file created by the CLI `swap` command has permission mode 0600.
 9. The CLI `restore` command begins writing to stdout before stdin reaches EOF when the input is a streaming byte source.
 10. Multiple occurrences of the same secret within a single payload each produce the same fake bytes in the swapped output.
-11. A registered-secret candidate that shares start and end fragments with a registered secret but does not match the HMAC passes through the swapped payload unchanged.
+11. A candidate that shares an opaque segment's bytes and exact length with a registered secret but does not match any HMAC digest passes through the swapped payload unchanged.
 12. Given an empty set of patterns, `swap` returns the payload unchanged and an empty entries set.
-13. Given a secret whose pattern contains a Literal segment that is not the leading element (e.g., a fixed suffix or an embedded marker), the fake produced by `swap` reproduces that Literal segment verbatim at the correct byte position.
-14. A user-defined structural pattern defined with identifier `x` and segments `[{ type = "literal", value = "prefix_" }, { type = "variable", charset = "alphanumeric", min = 32, max = 32 }]` detects and replaces a payload containing `prefix_` followed by exactly 32 alphanumeric characters such that no byte of that variable portion appears in the swapped output.
-15. `list` output contains the identifier of every structural pattern entry and an identifying label or positional marker for every registered-secret entry present in the patterns file.
-16. After `remove` succeeds on an existing identifier or label, the resulting patterns file MUST NOT contain any entry with that identifier or label.
+13. Given a secret whose pattern contains a trailing `literal` segment (e.g., a fixed suffix or an embedded marker), the fake produced by `swap` reproduces that literal segment verbatim at the correct byte position.
+14. A family pattern defined with `[opaque("sec_"), variable(alphanumeric, 20, 20)]` detects and replaces a payload containing `sec_` followed by exactly 20 alphanumeric characters such that the fake begins with 4 derived bytes (not `sec_`) and the variable portion differs from the original.
+15. `list` output contains the identifier of every pattern entry present in the patterns file.
+16. After `remove` succeeds on an existing identifier, the resulting patterns file MUST NOT contain any entry with that identifier.
+17. Given a group pattern with two digests for secrets A and B sharing salt S, `swap` correctly detects and replaces both A and B, producing distinct fakes, using a single HMAC computation per candidate position.
 
 ## Known Limitations / Accepted Trade-offs
 
-- **Coverage of transformed secrets.** Detection is exact and deterministic for any byte sequence matching a declared pattern. Coverage is limited in the sense that secrets split across positions, base64-encoded, obfuscated, or otherwise transformed before the payload is formed are not matched. Entropy-based heuristic detection is excluded: false-positive avoidance takes priority over recall.
-- **Registered-secret detection fragments in Pattern.** Reliable detection of unstructured secrets requires storing enough of the secret to locate it. The first start-fragment and last end-fragment bytes of the registered secret (default 2 each) are stored in the caller-held Pattern and never written to the entries file. Callers who persist Patterns should treat them with the same sensitivity as the secret itself.
-- **Cross-request correlation.** Because fakes are stable for the lifetime of a Pattern, an observer with access to multiple swapped payloads can correlate any two payloads that used the same Pattern — they will share the same fake. This applies equally to structural and registered Patterns. This is the accepted cost of fake stability.
-- **Body bytes only.** Header inspection is out of scope. The deployment target is local developer tooling, not a TLS-terminating proxy with visibility into all traffic metadata.
+- **Coverage of transformed secrets.** Detection is exact and deterministic for any byte sequence matching a declared pattern. Coverage is limited in the sense that secrets split across positions, base64-encoded, obfuscated, or otherwise transformed before the payload is formed are not matched.
+- **Opaque segment bytes in patterns file.** Reliable detection of unstructured secrets requires storing enough of the secret to anchor detection. The leading bytes of registered secrets (stored in `opaque` segment values, default 3 bytes) are plaintext in the patterns file. Callers who persist pattern files should treat them with the same sensitivity as the secrets they detect.
+- **Cross-request correlation.** Because fakes are stable for the lifetime of a Pattern, an observer with access to multiple swapped payloads can correlate any two payloads that used the same Pattern — they will share the same fake. This is the accepted cost of fake stability.
+- **Body bytes only.** Header inspection is out of scope.
 - **Compressed and binary payloads.** Matching operates on raw bytes. Payloads that are compressed, encrypted, or encoded before reaching this library are not covered.
-- **Single-cycle entries.** The entries and session key are designed for exactly one swap/restore cycle. They are not sharable across processes and are not valid after the cycle ends. The session key is intentionally ephemeral.
-- **Session key file deletion is caller responsibility.** The CLI `restore` command receives the session key value via environment variable but has no specified mechanism to locate the key file. Deletion of the key file after `restore` completes is an operational step the caller must perform.
-- **Pre-Aug-2024 OpenAI project key format not detected.** The original `sk-proj-` format (56 chars total, no embedded `T3BlbkFJ` marker, issued before August 2024) is not matched by `OPENAI_PROJECT_DEF`. These keys required only `sk-proj-<48 url_safe_b64>` — structurally indistinguishable from arbitrary base64 without the marker. Keys of this age are expected to have been rotated; best-effort coverage is the explicit contract.
+- **Single-cycle entries.** The entries and session key are designed for exactly one swap/restore cycle. They are not sharable across processes and are not valid after the cycle ends.
+- **Session key file deletion is caller responsibility.** The CLI `restore` command receives the session key value via environment variable but has no specified mechanism to locate the key file.
+- **Pre-Aug-2024 OpenAI project key format not detected.** The original `sk-proj-` format (56 chars total, no embedded `T3BlbkFJ` marker) is not matched. These keys required only `sk-proj-<48 url_safe_b64>` — structurally indistinguishable from arbitrary base64 without the marker.

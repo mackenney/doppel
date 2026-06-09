@@ -552,8 +552,7 @@ fn test_inv19_restore_exact_matching_only() {
 
 #[test]
 fn test_inv22_all_structural_built_in_classes_present() {
-    // INV-22: built-in structural MUST cover Anthropic, OpenAI (classic + project),
-    //         AWS IAM (AKIA + ASIA), GitHub PAT (classic + fine-grained), and GCP API keys.
+    // INV-22: built-in structural patterns MUST cover all 27 built-in classes.
     //
     // Validates behaviorally: swap a synthetic key of each class and assert detection.
     let cases: &[(&str, &[u8])] = &[
@@ -605,6 +604,86 @@ fn test_inv22_all_structural_built_in_classes_present() {
             "OpenAI svcacct",
             b"sk-svcacct-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBT3BlbkFJBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
             // "sk-svcacct-" (11) + 58 B's + "T3BlbkFJ" (8) + 58 B's = 135 chars
+        ),
+        // Anthropic Admin01: sk-ant-admin01- + 93 url_safe_base64 + AA
+        (
+            "Anthropic Admin01",
+            b"sk-ant-admin01-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA",
+        ),
+        // Anthropic Admin03: sk-ant-admin03- + 93 url_safe_base64 + AA
+        (
+            "Anthropic Admin03",
+            b"sk-ant-admin03-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA",
+        ),
+        // Linear: lin_api_ + 40 alphanumeric
+        (
+            "Linear",
+            b"lin_api_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Groq: gsk_ + 52 alphanumeric
+        (
+            "Groq",
+            b"gsk_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Perplexity: pplx- + 48 hex_lower
+        (
+            "Perplexity",
+            b"pplx-abcdef0123456789abcdef0123456789abcdef0123456789",
+        ),
+        // Cerebras: csk- + 48 alphanumeric
+        (
+            "Cerebras",
+            b"csk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Stripe live: sk_live_ + 24 alphanumeric
+        (
+            "Stripe live",
+            b"sk_live_AAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Stripe test: sk_test_ + 24 alphanumeric
+        (
+            "Stripe test",
+            b"sk_test_AAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Clerk live: sk_live_ + 45 alphanumeric (distinct from Stripe by length)
+        (
+            "Clerk",
+            b"sk_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Svix: svix_ + 30 alphanumeric
+        (
+            "Svix",
+            b"svix_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Chromatic: chpt_ + 30 alphanumeric
+        (
+            "Chromatic",
+            b"chpt_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // Google OAuth Secret: GOCSPX- + 28 url_safe_base64
+        (
+            "Google OAuth Secret",
+            b"GOCSPX-AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub OAuth: gho_ + 36 alphanumeric
+        (
+            "GitHub OAuth",
+            b"gho_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub App Server: ghs_ + 36 alphanumeric
+        (
+            "GitHub App Server",
+            b"ghs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub App User: ghu_ + 36 alphanumeric
+        (
+            "GitHub App User",
+            b"ghu_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        // GitHub Refresh: ghr_ + 36 alphanumeric (min:36, max:76; use min)
+        (
+            "GitHub Refresh",
+            b"ghr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ),
     ];
     let all = patterns::all();
@@ -832,7 +911,8 @@ fn test_inv13_cross_serialization_fake_stability() {
 
     let mut pf = SecretsFile::new();
     pf.generate_missing_structural_salts();
-    pf.add_secret_pattern(&pat, None).unwrap();
+    pf.add_secret_pattern("my-custom-secret".to_string(), &pat)
+        .unwrap();
 
     let payload = [b"token: ".as_slice(), secret].concat();
     let result1 = swap(&payload, std::slice::from_ref(&pat)).unwrap();
@@ -862,52 +942,51 @@ fn test_inv25_register_empty_secret_returns_tooshort() {
 
 #[test]
 fn test_inv25_register_no_variable_bytes_returns_error() {
-    // INV-25: preserve_prefix + preserve_suffix >= secret.len() → NoVariableBytes.
+    // INV-25: anchor_len + tail_anchor_len >= secret.len() → NoVariableBytes.
     use doppel::{SecretError, SecretOptions, register_with_options};
     let secret = b"abcdefgh"; // 8 bytes
     let opts = SecretOptions {
-        preserve_prefix: 5,
-        preserve_suffix: 3,
+        anchor_len: 5,
+        tail_anchor_len: 3,
         restrict_charset: false,
         ..Default::default()
     };
     let result = register_with_options(secret, &opts);
     assert!(
         matches!(result, Err(SecretError::NoVariableBytes { .. })),
-        "INV-25: fully-preserved secret must yield NoVariableBytes"
+        "INV-25: fully-anchored secret must yield NoVariableBytes"
     );
 }
 
 #[test]
-fn test_inv26_register_short_variable_portion_succeeds() {
-    // INV-26: variable portion < 14 bytes → MUST emit log::warn diagnostic.
+fn test_inv26_register_low_entropy_warns_but_succeeds() {
+    // INV-26: 83 <= entropy < 131 bits → MUST emit log::warn diagnostic.
     // This test verifies the function succeeds; log capture not yet wired.
     // TODO: add log-capture assertion when a test logger harness is available.
     use doppel::{SecretOptions, register_with_options};
-    let secret = b"PREFIX_secret"; // 13 bytes, preserve_prefix=7 → variable=6 < 14
+    // 17-byte secret, anchor_len=3 → 14 middle bytes
+    // entropy = 14 * log2(92) ≈ 91.3 bits (83 <= 91.3 < 131) → warns but succeeds.
+    let secret = b"abc01234567890123"; // 17 bytes
     let opts = SecretOptions {
-        preserve_prefix: 7,
-        preserve_suffix: 0,
+        anchor_len: 3,
         restrict_charset: false,
         ..Default::default()
     };
     let result = register_with_options(secret, &opts);
     assert!(
         result.is_ok(),
-        "INV-26: registration with short variable portion must succeed (got warning)"
+        "INV-26: registration with entropy in [83, 131) must succeed (got warning)"
     );
 }
 
 #[test]
 fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
-    // INV-27: alphanumeric secret + restrict_charset=false → MUST emit log::warn.
-    // This test verifies the function succeeds; log capture not yet wired.
-    // TODO: add log-capture assertion when a test logger harness is available.
+    // INV-26/INV-27: alphanumeric secret + restrict_charset=false → MUST emit log::warn.
+    // The warning is now implemented (INV-26 guard added to register_with_options_rng).
+    // This test verifies the function succeeds; log capture not yet wired in the test harness.
     use doppel::{SecretOptions, register_with_options};
     let secret = b"myAlphaNumericSecret123";
     let opts = SecretOptions {
-        preserve_prefix: 0,
-        preserve_suffix: 0,
         restrict_charset: false,
         ..Default::default()
     };
@@ -915,6 +994,64 @@ fn test_inv27_register_alphanumeric_secret_wide_charset_succeeds() {
     assert!(
         result.is_ok(),
         "INV-27: registration must succeed (got warning)"
+    );
+}
+
+#[test]
+fn test_fix2_restrict_charset_uses_detected_charset() {
+    // FIX-2: when restrict_charset=true, fakes must be drawn from the detected charset.
+    // Behavioral test: register a hex-lowercase secret; verify the fake contains only
+    // hex-lowercase chars (0-9 a-f) — i.e. not drawn from the wide charset.
+    use doppel::{SecretOptions, register_with_options, swap};
+    // anchor=3 ("sk-"), variable=16 hex-lower bytes; 16*4=64 bits < 83 threshold, force=true
+    let secret = b"sk-abcdef01234567"; // anchor "sk-" + 16 hex-lower bytes
+    let opts = SecretOptions {
+        anchor_len: 3,
+        restrict_charset: true,
+        force: true, // 64 bits < 83 threshold; force to test charset, not entropy
+        ..Default::default()
+    };
+    let pattern = register_with_options(secret, &opts).expect("registration must succeed");
+    let result = swap(secret, &[pattern]).expect("swap must succeed");
+    assert_eq!(result.entries.len(), 1, "must detect the secret");
+    let fake = &result.entries[0].fake;
+    // Variable portion of the fake (skip 3-byte anchor prefix)
+    let var_fake = &fake[3..];
+    let all_hex = var_fake
+        .iter()
+        .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    assert!(
+        all_hex,
+        "restrict_charset=true with hex-lower secret: fake variable bytes must be hex-lower, got: {:?}",
+        var_fake
+    );
+}
+
+#[test]
+fn test_fix1_hmac_all_digests_evaluated_no_early_exit() {
+    // FIX-1: HMAC is computed once and all digests compared CT with no early exit.
+    // Behavioral test: two registered secrets share the same structural shape but
+    // different HMAC digests. A third payload that matches the shape but is neither
+    // secret must not be swapped (HMAC fails for both digests).
+    use doppel::{SecretOptions, register_with_options, swap};
+    let secret1 = b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 42 bytes
+    let secret2 = b"sk-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"; // 42 bytes
+    let neither = b"sk-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"; // 42 bytes, same shape
+    let opts = SecretOptions {
+        anchor_len: 3,
+        ..Default::default()
+    };
+    let p1 = register_with_options(secret1, &opts).unwrap();
+    let p2 = register_with_options(secret2, &opts).unwrap();
+    // secret1 matches p1's HMAC: exactly one entry.
+    let r1 = swap(secret1, &[p1.clone(), p2.clone()]).unwrap();
+    assert_eq!(r1.entries.len(), 1, "secret1 must match p1");
+    // neither matches no HMAC: zero entries.
+    let r_none = swap(neither, &[p1, p2]).unwrap();
+    assert_eq!(
+        r_none.entries.len(),
+        0,
+        "structurally matching non-registered secret must not be swapped"
     );
 }
 
@@ -947,11 +1084,16 @@ fn test_inv31_duplicate_identifier_rejected() {
     use doppel::{SecretsFile, segment::SegmentDef};
     let mut pf = SecretsFile::new();
     pf.generate_missing_structural_salts();
-    let segs = vec![SegmentDef::Variable {
-        charset: "alphanumeric".into(),
-        min: 10,
-        max: 10,
-    }];
+    let segs = vec![
+        SegmentDef::Literal {
+            value: "prefix_".into(),
+        },
+        SegmentDef::Variable {
+            charset: "alphanumeric".into(),
+            min: 10,
+            max: 10,
+        },
+    ];
     pf.add_structural_entry("my_custom".into(), segs.clone(), [1u8; 32])
         .unwrap();
     let err = pf
@@ -968,34 +1110,33 @@ fn test_inv32_missing_builtin_is_allowed() {
     // INV-32: "Removing a built-in structural identifier from the patterns file is permitted"
     use doppel::SecretsFile;
     let pf = SecretsFile {
-        version: 2,
-        structural: vec![],
-        registered: vec![],
+        version: 3,
+        pattern: vec![],
     };
     let patterns = pf.to_patterns().unwrap();
     assert_eq!(
         patterns.len(),
         0,
-        "INV-32: empty structural list must produce zero patterns"
+        "INV-32: empty pattern list must produce zero patterns"
     );
 }
 
 #[test]
-fn test_inv33_version_must_be_2() {
-    // INV-33: "The patterns file version MUST be 2"
+fn test_inv33_version_must_be_3() {
+    // INV-33: "The patterns file version MUST be 3"
     use doppel::SecretsFile;
-    let data = b"version = 1\nstructural = []\nregistered = []\n";
+    let data = b"version = 1\npattern = []\n";
     let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),
         "INV-33: version 1 must be rejected"
     );
 
-    let data = b"version = 3\nstructural = []\nregistered = []\n";
+    let data = b"version = 2\npattern = []\n";
     let err = SecretsFile::deserialize(data).unwrap_err();
     assert!(
         err.to_string().contains("unsupported"),
-        "INV-33: version 3 must be rejected"
+        "INV-33: version 2 must be rejected"
     );
 }
 
@@ -1012,16 +1153,10 @@ fn test_inv25_collision_limit_path_exists() {
     //
     // A synthetic collision test would require reverse-engineering the HMAC-based
     // derivation to find a secret that maps to itself — not feasible.
-    use doppel::{SecretError, SecretOptions, register_with_options};
+    use doppel::{SecretError, register_with_options};
     let secret = b"short-but-valid-secret-value";
-    let opts = SecretOptions {
-        preserve_prefix: 0,
-        preserve_suffix: 0,
-        restrict_charset: false,
-        ..Default::default()
-    };
     // Succeeds because no collision occurs for this secret.
-    let _ = register_with_options(secret, &opts).unwrap();
+    let _ = register_with_options(secret, &Default::default()).unwrap();
     // Verify the CollisionLimit variant is discriminable (not dead code).
     let err: SecretError = SecretError::CollisionLimit { attempts: 1 };
     assert!(
@@ -1071,4 +1206,493 @@ fn test_inv_empty_fake_async_rejected() {
     );
     // No output check: constructor failure prevents stream creation,
     // so zero bytes can ever be emitted (no stream object → no I/O).
+}
+
+#[test]
+fn test_inv28_opaque_fake_bytes_differ_from_anchor() {
+    // INV-28: Every Opaque segment MUST produce derived (not verbatim) bytes in the fake.
+    // For registered patterns the anchor is an Opaque segment; its fake bytes must
+    // differ from the original anchor bytes.
+    use doppel::{SecretOptions, register_with_options, swap};
+
+    let secret = b"ABC_secret_value_here_12345678";
+    let opts = SecretOptions {
+        anchor_len: 4,
+        ..Default::default()
+    };
+    let pattern = register_with_options(secret, &opts).unwrap();
+    let result = swap(secret, &[pattern]).unwrap();
+    assert_eq!(result.entries.len(), 1);
+    assert_ne!(
+        &result.payload[0..4],
+        b"ABC_",
+        "INV-28: opaque anchor segment must not appear verbatim in the fake"
+    );
+    assert_eq!(result.payload.len(), secret.len());
+}
+
+#[test]
+fn test_inv31_instance_pattern_variable_must_be_fixed_len() {
+    // INV-31: When a Pattern's digests list is non-empty, all variable segments
+    // in that Pattern MUST have min == max.
+    use doppel::SecretsFile;
+
+    let toml_bad = concat!(
+        "version = 3\n",
+        "[[pattern]]\n",
+        "identifier = \"test-instance\"\n",
+        "salt = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n",
+        "digests = [\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"]\n",
+        "[[pattern.segments]]\n",
+        "type = \"opaque\"\n",
+        "value = \"prefix_\"\n",
+        "[[pattern.segments]]\n",
+        "type = \"variable\"\n",
+        "charset = \"alphanumeric\"\n",
+        "min = 10\n",
+        "max = 20\n",
+    );
+
+    let result = SecretsFile::deserialize(toml_bad.as_bytes());
+    assert!(
+        result.is_err(),
+        "INV-31: instance pattern with variable-range segment must be rejected"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("min") || err_msg.contains("max") || err_msg.contains("instance"),
+        "INV-31: error must describe the min/max constraint: {err_msg}"
+    );
+}
+
+#[test]
+fn test_inv25_register_insufficient_entropy_hard_fail() {
+    // INV-25: entropy < 83 bits and force=false -> InsufficientEntropy.
+    // anchor_len=3, secret=11 bytes -> variable=8 bytes,
+    // 8 * log2(92) ≈ 52.2 bits < 83.
+    use doppel::{SecretError, SecretOptions, register_with_options};
+
+    let short_secret = b"ABC12345678";
+    let opts = SecretOptions {
+        anchor_len: 3,
+        force: false,
+        ..Default::default()
+    };
+    let result = register_with_options(short_secret, &opts);
+    assert!(
+        matches!(result, Err(SecretError::InsufficientEntropy { .. })),
+        "INV-25: low-entropy secret with force=false must yield InsufficientEntropy"
+    );
+}
+
+#[test]
+fn test_inv18_literal_first_beats_opaque_first() {
+    // INV-18: A structural pattern with a leading literal segment fires correctly
+    // even when a registered pattern's opaque anchor shares the same prefix.
+    // The registered pattern's HMAC gate rejects the mismatch and the structural
+    // literal match takes precedence.
+    use doppel::patterns;
+    use doppel::{SecretOptions, register_with_options, swap};
+
+    // Register a secret whose anchor prefix overlaps with the Anthropic literal prefix.
+    let registered_secret = b"sk-ant-test-fake-secret-123456789";
+    let opts = SecretOptions {
+        anchor_len: 7,
+        ..Default::default()
+    };
+    let reg_pattern = register_with_options(registered_secret, &opts).unwrap();
+
+    // Payload contains the real synthetic Anthropic key (matches structural literal).
+    let payload = [b"key: ".as_slice(), SYNTH_ANTHROPIC].concat();
+    let result = swap(&payload, &[patterns::anthropic(), reg_pattern]).unwrap();
+
+    // Only the structural (literal-leading) match should fire.
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "INV-18: only the structural literal match should fire"
+    );
+    assert!(
+        !result
+            .payload
+            .windows(SYNTH_ANTHROPIC.len())
+            .any(|w| w == SYNTH_ANTHROPIC),
+        "INV-18: structural match must replace the original secret"
+    );
+}
+
+#[test]
+fn test_vc11_registered_hmac_mismatch_passthrough() {
+    // VC-11: A candidate that shares an opaque segment's bytes and exact length
+    // with a registered secret but does not match any HMAC digest passes through
+    // the swapped payload unchanged.
+    use doppel::{register, swap};
+
+    let real = b"my-registered-secret-value-12345";
+    let pat = register(real).unwrap();
+    let mut similar = real.to_vec();
+    similar[12] ^= 0xFF;
+
+    let result = swap(&similar, &[pat]).unwrap();
+    assert_eq!(
+        result.payload.as_slice(),
+        similar.as_slice(),
+        "VC-11: HMAC mismatch must pass through unchanged"
+    );
+    assert!(
+        result.entries.is_empty(),
+        "VC-11: no entry produced for HMAC mismatch"
+    );
+}
+
+#[test]
+fn test_wide_charset_entropy_uses_92_not_72() {
+    // Regression: wide charset size was hardcoded as 72 (should be 92).
+    // With 72: 13 * log2(72) ≈ 80.2 bits < 83 → InsufficientEntropy (wrong).
+    // With 92: 13 * log2(92) ≈ 84.8 bits > 83 → succeeds (correct).
+    use doppel::{SecretOptions, register_with_options};
+    // 16-byte secret: anchor=3 bytes, variable=13 bytes, Wide charset, force=false
+    let secret = b"abc!@#$%^&*()-+=";
+    let opts = SecretOptions {
+        anchor_len: 3,
+        restrict_charset: false,
+        ..Default::default()
+    };
+    let result = register_with_options(secret, &opts);
+    assert!(
+        result.is_ok(),
+        "13-byte wide-charset variable portion (84.8 bits) must pass entropy gate"
+    );
+}
+
+#[test]
+fn test_vc17_group_pattern_detects_both_members() {
+    // VC-17: a group pattern (single Pattern, 2 digests) detects both A and B,
+    // producing distinct fakes, leaving non-member C unchanged.
+    use doppel::{SecretOptions, SecretsFile, register_with_options, swap};
+
+    let secret_a = b"my-secret-alpha-value-for-vc17-test";
+    let secret_b = b"my-secret-beta-values-for-vc17-test";
+    let secret_c = b"my-secret-gamma-value-for-vc17-test";
+
+    let opts = SecretOptions::default();
+    let pat_a = register_with_options(secret_a, &opts).unwrap();
+
+    let mut pf = SecretsFile::new();
+    pf.add_secret_pattern("group-key".to_string(), &pat_a)
+        .unwrap();
+    pf.add_secret_to_group("group-key", secret_b).unwrap();
+
+    let patterns = pf.to_patterns().unwrap();
+    assert_eq!(patterns.len(), 1, "group produces one Pattern");
+    // Verify two digests via the SecretsFile API (Pattern::digests is pub(crate)).
+    assert_eq!(
+        pf.pattern[0].digests.len(),
+        2,
+        "group entry has two digests"
+    );
+
+    let payload_a = [b"header: ".as_slice(), secret_a].concat();
+    let r_a = swap(&payload_a, &patterns).unwrap();
+    assert_eq!(r_a.entries.len(), 1, "secret_a detected");
+    assert!(
+        !r_a.payload.windows(secret_a.len()).any(|w| w == secret_a),
+        "VC-17: secret_a must be replaced in output"
+    );
+
+    let payload_b = [b"header: ".as_slice(), secret_b].concat();
+    let r_b = swap(&payload_b, &patterns).unwrap();
+    assert_eq!(r_b.entries.len(), 1, "secret_b detected");
+    assert!(
+        !r_b.payload.windows(secret_b.len()).any(|w| w == secret_b),
+        "VC-17: secret_b must be replaced in output"
+    );
+
+    assert_ne!(
+        r_a.entries[0].fake, r_b.entries[0].fake,
+        "VC-17: distinct fakes for A and B"
+    );
+
+    let payload_c = [b"header: ".as_slice(), secret_c].concat();
+    let r_c = swap(&payload_c, &patterns).unwrap();
+    assert_eq!(r_c.entries.len(), 0, "VC-17: non-member C not detected");
+    assert_eq!(r_c.payload, payload_c, "VC-17: C passes through unchanged");
+}
+
+// Spec: SPEC.md §Behavioral Invariants 39, 40, 41
+
+#[test]
+fn test_inv39_detector_swap_semantics_identical_to_free_swap() {
+    // "Detector::swap called on the same payload with the same Patterns MUST
+    //  produce fakes identical to those produced by the free swap function."
+    //  — SPEC.md INV-39. "Same Patterns" means same Pattern value including salt.
+    use doppel::{Detector, patterns, swap};
+
+    let pat = patterns::anthropic();
+    // NOT real credentials — synthetic key matching the Anthropic structural pattern
+    let payload = b"key: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    let detector = Detector::new(vec![pat.clone()]);
+    let r_detector = detector.swap(payload).unwrap();
+    let r_free = swap(payload, &[pat]).unwrap();
+
+    assert_eq!(
+        r_detector.entries[0].fake, r_free.entries[0].fake,
+        "INV-39: Detector::swap and free swap must produce identical fakes"
+    );
+    assert_eq!(
+        r_detector.payload, r_free.payload,
+        "INV-39: swapped payloads must match"
+    );
+}
+
+#[test]
+fn test_inv40_detector_is_send_sync() {
+    // "Detector MUST implement Send + Sync." — SPEC.md INV-40
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+    assert_send_sync::<doppel::Detector>();
+}
+
+#[test]
+fn test_inv41_detector_shared_automaton_produces_correct_results_across_calls() {
+    // "The Aho-Corasick automaton MUST NOT be rebuilt on Detector::swap calls."
+    // — SPEC.md INV-41
+    // INV-41 is a structural guarantee: `ac` is a plain field of `Detector`,
+    // `swap_with_ac` receives `&self.ac` (an immutable reference), so no rebuild
+    // can occur. This test verifies that multiple sequential calls on the same
+    // Detector produce correct results, which would fail if the shared automaton
+    // were corrupted or invalidated between calls.
+    use doppel::{Detector, patterns};
+
+    let detector = Detector::new(patterns::all());
+    // NOT real credentials — synthetic key matching the Anthropic structural pattern
+    let key = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let payload_a = [b"token: ".as_slice(), key].concat();
+    let payload_b = b"no secrets here".as_ref();
+
+    // Both calls must succeed and produce correct results, proving the shared
+    // AC automaton remains valid across independent swap calls.
+    let r_a = detector.swap(&payload_a).unwrap();
+    let r_b = detector.swap(payload_b).unwrap();
+
+    assert_eq!(
+        r_a.entries.len(),
+        1,
+        "INV-41: secret detected on first call"
+    );
+    assert_eq!(
+        r_b.entries.len(),
+        0,
+        "INV-41: no secret detected on second call"
+    );
+    assert_eq!(r_b.payload, payload_b, "INV-41: payload_b unchanged");
+}
+
+#[test]
+fn test_inv39_detector_swap_semantics_identical_for_registered_pattern() {
+    // INV-39: "Detector::swap called on the same payload with the same Patterns MUST
+    //  produce fakes identical to those produced by the free swap function."
+    //  This variant tests with a registered (instance) pattern, not just a family pattern.
+    use doppel::{Detector, register, swap};
+
+    let secret = b"inv39-registered-secret-value-check-0001";
+    let pat = register(secret).unwrap();
+    let payload = [b"token: ".as_slice(), secret].concat();
+
+    let detector = Detector::new(vec![pat.clone()]);
+    let r_detector = detector.swap(&payload).unwrap();
+    let r_free = swap(&payload, &[pat]).unwrap();
+
+    assert_eq!(
+        r_detector.entries.len(),
+        1,
+        "INV-39: Detector must detect the registered secret"
+    );
+    assert_eq!(
+        r_detector.entries[0].fake, r_free.entries[0].fake,
+        "INV-39: Detector::swap and free swap must produce identical fakes for registered pattern"
+    );
+    assert_eq!(
+        r_detector.payload, r_free.payload,
+        "INV-39: swapped payloads must match for registered pattern"
+    );
+}
+
+#[test]
+fn test_add_secret_to_group_rejects_family_pattern() {
+    // add_secret_to_group must reject family (structural) patterns with WrongPatternType,
+    // not silently convert them to instance patterns.
+    use doppel::{SecretsFile, SecretsFileError, segment::SegmentDef};
+    let mut pf = SecretsFile::new();
+    pf.add_structural_entry(
+        "my-family".to_string(),
+        vec![
+            SegmentDef::Literal {
+                value: "prefix_".into(),
+            },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 10,
+                max: 20,
+            },
+        ],
+        [0u8; 32],
+    )
+    .unwrap();
+    let result = pf.add_secret_to_group("my-family", b"some-secret-value-here-here-12345");
+    assert!(
+        matches!(result, Err(SecretsFileError::WrongPatternType)),
+        "add_secret_to_group must return WrongPatternType for family patterns, got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_vc14_family_pattern_opaque_first_detection_and_fake() {
+    // VC-14: A family pattern defined with [opaque("sec_"), variable(alphanumeric, 20, 20)]
+    // detects a payload containing "sec_" + 20 alphanumeric chars and produces a fake
+    // whose opaque portion (first 4 bytes) differs from "sec_" (derived, not verbatim),
+    // and whose variable portion also differs from the original.
+    use doppel::{SecretsFile, swap};
+
+    let toml = concat!(
+        "version = 3\n",
+        "[[pattern]]\n",
+        "identifier = \"vc14-family\"\n",
+        "salt = \"0000000000000000000000000000000000000000000000000000000000000001\"\n",
+        "digests = []\n",
+        "[[pattern.segments]]\n",
+        "type = \"opaque\"\n",
+        "value = \"sec_\"\n",
+        "[[pattern.segments]]\n",
+        "type = \"variable\"\n",
+        "charset = \"alphanumeric\"\n",
+        "min = 20\n",
+        "max = 20\n",
+    );
+    let pf = SecretsFile::deserialize(toml.as_bytes()).unwrap();
+    let patterns = pf.to_patterns().unwrap();
+
+    // Payload: opaque anchor "sec_" + 20 alphanumeric chars
+    let secret = b"sec_AAAABBBBCCCCDDDDEEEE";
+    assert_eq!(secret.len(), 24);
+
+    let result = swap(secret, &patterns).unwrap();
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "VC-14: family pattern must detect the secret"
+    );
+
+    let fake = &result.entries[0].fake;
+    assert_eq!(
+        fake.len(),
+        secret.len(),
+        "VC-14: fake must be same length as original"
+    );
+    // Opaque portion must be derived (not verbatim "sec_")
+    assert_ne!(
+        &fake[..4],
+        b"sec_",
+        "VC-14: opaque segment fake bytes must not equal original anchor"
+    );
+    // Variable portion must differ from original
+    assert_ne!(
+        &fake[4..],
+        b"AAAABBBBCCCCDDDDEEEE",
+        "VC-14: variable segment fake bytes must differ from original"
+    );
+}
+
+#[test]
+fn test_stripe_clerk_sk_live_gap_behavior() {
+    // Documents the detection gap for sk_live_ tokens with 33-44 variable chars.
+    // stripe_live covers [24,32]; clerk covers [45,55]. A 36-char variable payload
+    // is partially matched by stripe_live (max=32): the first 40 bytes are replaced
+    // with a fake, and the remaining 4 chars pass through unchanged.
+    //
+    // This test documents and pins current behavior so that any change to the
+    // Stripe/Clerk ranges is immediately visible.
+    let payload = b"sk_live_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 8 + 36 = 44 bytes
+    assert_eq!(payload.len(), 44);
+
+    let result = swap(payload, &patterns::all()).unwrap();
+
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "Stripe pattern fires for first 32 variable chars"
+    );
+    // The fake covers bytes 0..40 (sk_live_ prefix + 32 variable chars).
+    // Bytes 40..44 (the last 4 chars) pass through unchanged.
+    assert_eq!(
+        &result.payload[40..],
+        b"AAAA",
+        "trailing chars beyond stripe_live max=32 must pass through unchanged"
+    );
+    assert_ne!(
+        result.payload[..40].to_vec(),
+        payload[..40].to_vec(),
+        "first 40 bytes must be replaced with a fake"
+    );
+}
+
+// Spec: SPEC.md §Behavioral Invariants 42, 43
+
+#[test]
+fn test_inv42_register_rejects_anchor_len_zero_or_one() {
+    // "register MUST fail with AnchorTooShort when anchor_len is 0 or 1."
+    // — SPEC.md INV-42
+    use doppel::{SecretError, SecretOptions, register_with_options};
+
+    let secret = b"my-secret-api-key-long-enough";
+
+    for bad_len in [0usize, 1usize] {
+        let opts = SecretOptions {
+            anchor_len: bad_len,
+            ..SecretOptions::default()
+        };
+        let err = match register_with_options(secret, &opts) {
+            Err(e) => e,
+            Ok(_) => panic!("INV-42: anchor_len={bad_len} must be rejected, but succeeded"),
+        };
+        assert!(
+            matches!(err, SecretError::AnchorTooShort { anchor_len } if anchor_len == bad_len),
+            "INV-42: expected AnchorTooShort for anchor_len={bad_len}, got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn test_inv43_define_rejects_first_segment_shorter_than_two_bytes() {
+    // "define MUST fail when the first segment value is shorter than 2 bytes."
+    // — SPEC.md INV-43
+    // Tested through SecretsFile::add_structural_entry, which calls validate_segment_defs.
+    use doppel::{SecretsFile, SecretsFileError, segment::SegmentDef};
+
+    for bad_value in ["", "x"] {
+        let mut pf = SecretsFile::default();
+        let segments = vec![
+            SegmentDef::Literal {
+                value: bad_value.to_string(),
+            },
+            SegmentDef::Variable {
+                charset: "alphanumeric".to_string(),
+                min: 10,
+                max: 10,
+            },
+        ];
+        let err = pf
+            .add_structural_entry("test-id".to_string(), segments, [0u8; 32])
+            .unwrap_err();
+        assert!(
+            matches!(err, SecretsFileError::InvalidSegment { .. }),
+            "INV-43: expected InvalidSegment for first segment value {:?}, got {err:?}",
+            bad_value
+        );
+        assert!(
+            err.to_string().contains("first segment") || err.to_string().contains("byte"),
+            "INV-43: error message should describe the constraint; got: {err}"
+        );
+    }
 }

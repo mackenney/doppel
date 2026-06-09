@@ -1,73 +1,40 @@
-//! Patterns file serialization and deserialization (TOML, version 2).
+//! Patterns file serialization and deserialization (TOML, version 3).
 //!
-//! The [`SecretsFile`] type is the on-disk representation of structural patterns
-//! and registered secrets. Use [`SecretsFile::deserialize`] to load and
-//! [`SecretsFile::to_patterns`] to obtain [`Pattern`] values for [`crate::swap`].
-
-use std::sync::Arc;
+//! The [`SecretsFile`] type is the on-disk representation of unified patterns.
+//! Use [`SecretsFile::deserialize`] to load and [`SecretsFile::to_patterns`]
+//! to obtain [`Pattern`] values for [`crate::swap`].
 
 use serde::{Deserialize, Serialize};
 
-use crate::patterns::{self, Pattern, StructuralDef};
-use crate::secrets::RegisteredPat;
-use crate::segment::SegmentDef;
-use crate::serde_helpers::{hex_32, hex_vec, hex_vec_option};
+use crate::patterns::{self, Pattern};
+use crate::segment::{Segment, SegmentDef};
+use crate::serde_helpers::{hex_32, hex_vec_32};
 
-/// Top-level patterns file structure.
+/// Top-level patterns file structure (version 3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretsFile {
-    /// File format version. Must be `2`; other values are rejected by [`SecretsFile::deserialize`].
+    /// File format version. Must be `3`; other values are rejected by [`SecretsFile::deserialize`].
     pub version: u64,
-    /// Structural pattern entries, one per detected secret class.
-    pub structural: Vec<PatternEntry>,
-    /// Registered secret entries, one per registered secret.
-    pub registered: Vec<SecretEntry>,
+    /// Unified pattern entries (family and instance patterns).
+    #[serde(default)]
+    pub pattern: Vec<PatternEntry>,
 }
 
-/// A structural pattern entry: identifier, salt, and optional user-defined segments.
+/// On-disk TOML (version 3) serialization form for a single pattern entry.
+/// Holds an identifier, 32-byte salt, optional HMAC digests, and ordered segment definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatternEntry {
-    /// Unique string identifier for this pattern class (e.g. `"anthropic"`).
+    /// Unique string identifier for this pattern (e.g. `"anthropic"`, `"prod-db-password"`).
     pub identifier: String,
-    /// 32-byte salt used for fake derivation; must be unique per pattern.
+    /// 32-byte salt for HMAC computation and fake derivation; hex-encoded.
     #[serde(with = "hex_32")]
     pub salt: [u8; 32],
-    /// Optional segment definitions; overrides built-in segments when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub segments: Option<Vec<SegmentDef>>,
-}
-
-/// A registered secret entry: detection fingerprint + derivation parameters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecretEntry {
-    /// Optional human-readable label, unique within the file.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    /// First bytes of the original secret used as a detection anchor.
-    #[serde(with = "hex_vec")]
-    pub start_fragment: Vec<u8>,
-    /// Last bytes of the original secret used as a detection anchor.
-    #[serde(with = "hex_vec")]
-    pub end_fragment: Vec<u8>,
-    /// Exact byte length of the original secret.
-    pub exact_length: usize,
-    /// Unique random salt used for HMAC-SHA256 verification.
-    #[serde(with = "hex_32")]
-    pub hmac_salt: [u8; 32],
-    /// HMAC-SHA256 digest of the original secret under `hmac_salt`.
-    #[serde(with = "hex_32")]
-    pub hmac_digest: [u8; 32],
-    /// Number of leading bytes preserved verbatim in the fake.
-    pub preserve_prefix: usize,
-    /// Number of trailing bytes preserved verbatim in the fake.
-    pub preserve_suffix: usize,
-    /// Optional byte set for fake variable bytes; `None` means the wide default.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "hex_vec_option"
-    )]
-    pub charset: Option<Vec<u8>>,
+    /// HMAC digests; empty/absent = family pattern, non-empty = instance/group pattern.
+    /// Each digest is 64 lowercase hex characters (32 bytes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "hex_vec_32")]
+    pub digests: Vec<[u8; 32]>,
+    /// Ordered segment definitions defining detection structure and fake generation.
+    pub segments: Vec<SegmentDef>,
 }
 
 /// Errors returned by [`SecretsFile`] operations.
@@ -82,70 +49,51 @@ pub enum SecretsFileError {
     #[error("invalid UTF-8 in patterns file")]
     InvalidUtf8,
 
-    /// The `version` field is not `2`.
-    #[error("unsupported patterns file version: {found} (expected 2)")]
+    /// The `version` field is not `3`.
+    #[error("unsupported patterns file version: {found} (expected 3)")]
     UnsupportedVersion {
         /// The version value that was found.
         found: u64,
     },
 
-    /// A structural pattern class referenced in the file is missing.
-    #[error("missing structural pattern class: {class}")]
-    MissingStructuralClass {
-        /// The identifier that was not found.
-        class: String,
-    },
-
-    /// A registered secret entry contains an invalid field value.
-    #[error("invalid registered secret entry at index {index}: {reason}")]
-    InvalidRegistered {
-        /// Zero-based index of the invalid entry.
-        index: usize,
-        /// Description of the invalid field.
-        reason: String,
-    },
-
-    /// The supplied `Pattern` was not a registered secret.
-    #[error("wrong pattern type: expected registered secret")]
-    WrongPatternType,
-
-    /// Two structural pattern entries share the same identifier.
-    #[error("duplicate structural pattern identifier: {identifier}")]
+    /// Two pattern entries share the same identifier.
+    #[error("duplicate pattern identifier: {identifier}")]
     DuplicateIdentifier {
         /// The duplicated identifier.
         identifier: String,
     },
 
-    /// Two registered secret entries share the same label.
-    #[error("duplicate registered secret label: {label}")]
-    DuplicateLabel {
-        /// The duplicated label.
-        label: String,
+    /// A segment definition in a pattern is malformed.
+    #[error("invalid segment in pattern '{identifier}': {reason}")]
+    InvalidSegment {
+        /// The pattern identifier.
+        identifier: String,
+        /// Description of the problem.
+        reason: String,
     },
 
-    /// A segment definition in a structural pattern is malformed.
-    #[error("invalid segment definition: {0}")]
-    InvalidSegment(#[from] crate::segment::SegmentDefError),
+    /// The supplied `Pattern` was not an instance pattern (digests were empty).
+    #[error("wrong pattern type: expected instance pattern with non-empty digests")]
+    WrongPatternType,
 
-    /// A user-defined structural pattern entry is missing its `segments` field.
-    #[error("user-defined structural pattern \"{identifier}\" requires a segments field")]
-    MissingSegments {
-        /// The identifier of the entry missing segments.
+    /// No pattern with the given identifier was found.
+    #[error("no pattern with identifier '{identifier}'")]
+    NotFound {
+        /// The identifier that was looked up.
         identifier: String,
     },
 }
 
 impl SecretsFile {
-    /// Create an empty patterns file (version 2, no entries).
+    /// Create an empty patterns file (version 3, no entries).
     pub fn new() -> Self {
         Self {
-            version: 2,
-            structural: Vec::new(),
-            registered: Vec::new(),
+            version: 3,
+            pattern: Vec::new(),
         }
     }
 
-    /// Serialize to TOML bytes.
+    /// Serialize to TOML version 3 bytes.
     ///
     /// # Errors
     ///
@@ -155,213 +103,197 @@ impl SecretsFile {
         Ok(s.into_bytes())
     }
 
-    /// Deserialize from TOML bytes with validation.
+    /// Deserialize from TOML version 3 bytes with validation.
     ///
     /// # Errors
     ///
     /// - [`SecretsFileError::InvalidUtf8`] if `data` is not valid UTF-8.
     /// - [`SecretsFileError::Toml`] if TOML parsing fails.
-    /// - [`SecretsFileError::UnsupportedVersion`] if `version` is not `2`.
-    /// - [`SecretsFileError::DuplicateIdentifier`] if two structural entries share an identifier.
-    /// - [`SecretsFileError::DuplicateLabel`] if two registered entries share a label.
-    /// - [`SecretsFileError::InvalidRegistered`] if a registered entry has an invalid field.
+    /// - [`SecretsFileError::UnsupportedVersion`] if `version` is not `3`.
+    /// - [`SecretsFileError::DuplicateIdentifier`] if two entries share an identifier.
     /// - [`SecretsFileError::InvalidSegment`] if a segment definition is malformed.
     pub fn deserialize(data: &[u8]) -> Result<Self, SecretsFileError> {
         let s = std::str::from_utf8(data).map_err(|_| SecretsFileError::InvalidUtf8)?;
         let file: SecretsFile =
             toml::from_str(s).map_err(|e| SecretsFileError::Toml(e.to_string()))?;
-        file.validate()?;
-        Ok(file)
-    }
 
-    fn validate(&self) -> Result<(), SecretsFileError> {
-        if self.version != 2 {
+        if file.version != 3 {
             return Err(SecretsFileError::UnsupportedVersion {
-                found: self.version,
+                found: file.version,
             });
         }
 
         let mut seen_ids = std::collections::HashSet::new();
-        for entry in &self.structural {
+        for entry in &file.pattern {
             if !seen_ids.insert(&entry.identifier) {
                 return Err(SecretsFileError::DuplicateIdentifier {
                     identifier: entry.identifier.clone(),
                 });
             }
-
-            if let Some(ref segments) = entry.segments {
-                crate::segment::validate_segment_defs(segments)?;
-            }
         }
 
-        let mut seen_labels = std::collections::HashSet::new();
-        for (index, entry) in self.registered.iter().enumerate() {
-            if let Some(ref label) = entry.label {
-                if !seen_labels.insert(label) {
-                    return Err(SecretsFileError::DuplicateLabel {
-                        label: label.clone(),
-                    });
+        for entry in &file.pattern {
+            crate::segment::validate_segment_defs(&entry.segments).map_err(|e| {
+                SecretsFileError::InvalidSegment {
+                    identifier: entry.identifier.clone(),
+                    reason: e.to_string(),
                 }
-            }
+            })?;
 
-            if entry.exact_length == 0 {
-                return Err(SecretsFileError::InvalidRegistered {
-                    index,
-                    reason: "exact_length must not be zero".into(),
-                });
-            }
-            if entry.start_fragment.is_empty() {
-                return Err(SecretsFileError::InvalidRegistered {
-                    index,
-                    reason: "start_fragment must not be empty".into(),
-                });
-            }
-            if entry.end_fragment.is_empty() {
-                return Err(SecretsFileError::InvalidRegistered {
-                    index,
-                    reason: "end_fragment must not be empty".into(),
-                });
-            }
-            if let Some(ref cs) = entry.charset {
-                if cs.is_empty() {
-                    return Err(SecretsFileError::InvalidRegistered {
-                        index,
-                        reason: "charset must not be empty when present".into(),
-                    });
+            // INV-31: instance patterns must have fixed-length variable segments.
+            if !entry.digests.is_empty() {
+                for (i, seg) in entry.segments.iter().enumerate() {
+                    if let SegmentDef::Variable { min, max, .. } = seg {
+                        if min != max {
+                            return Err(SecretsFileError::InvalidSegment {
+                                identifier: entry.identifier.clone(),
+                                reason: format!(
+                                    "instance pattern variable segment at index {} has min ({}) != max ({})",
+                                    i, min, max
+                                ),
+                            });
+                        }
+                    }
                 }
             }
         }
 
-        Ok(())
+        Ok(file)
     }
 
-    /// Reconstruct `Vec<Pattern>` from this patterns file.
+    /// Convert to runtime [`Pattern`] values.
     ///
-    /// For each structural pattern entry:
-    /// - If `segments` is present, use them (overrides any compiled-in definition).
-    /// - If `segments` is absent and the identifier matches a built-in, use the compiled-in
-    ///   definition.
-    /// - If `segments` is absent and the identifier is not a built-in, return
-    ///   `MissingSegments`.
-    ///
-    /// Built-in identifiers absent from the file are silently skipped (INV-32).
+    /// Salts are read from the file entries and remain stable across process restarts.
+    /// This differs from [`patterns::all`] which generates a fresh ephemeral salt each
+    /// time — important when you need the same secret to produce the same fake across runs.
     ///
     /// # Errors
     ///
-    /// - [`SecretsFileError::UnsupportedVersion`] if the version field is not `2`.
-    /// - [`SecretsFileError::DuplicateIdentifier`] if any identifier appears more than once.
-    /// - [`SecretsFileError::MissingSegments`] if a non-built-in identifier has no `segments` field.
-    /// - [`SecretsFileError::InvalidSegment`] if a segment definition is malformed.
+    /// Returns [`SecretsFileError::InvalidSegment`] if a segment definition is malformed.
     pub fn to_patterns(&self) -> Result<Vec<Pattern>, SecretsFileError> {
-        self.validate()?;
-        use crate::segment::Segment;
-
-        let builtin_defs = patterns::all_defs();
-        let mut patterns = Vec::new();
-
-        for entry in &self.structural {
-            let builtin = builtin_defs
-                .iter()
-                .find(|d| d.identifier == entry.identifier);
-
-            let segments: Arc<[Segment]> = match (&entry.segments, builtin) {
-                (Some(seg_defs), _) => {
-                    let segs: Result<Vec<Segment>, _> =
-                        seg_defs.iter().map(Segment::from_def).collect();
-                    segs?.into()
-                }
-                (None, Some(def)) => def.segments.clone(),
-                (None, None) => {
-                    return Err(SecretsFileError::MissingSegments {
+        self.pattern
+            .iter()
+            .map(|entry| {
+                // Validate segment structure (defense-in-depth for programmatically
+                // constructed SecretsFile values that bypass deserialize/add_structural_entry).
+                crate::segment::validate_segment_defs(&entry.segments).map_err(|e| {
+                    SecretsFileError::InvalidSegment {
                         identifier: entry.identifier.clone(),
-                    });
-                }
-            };
+                        reason: e.to_string(),
+                    }
+                })?;
+                let segments: Result<Vec<Segment>, _> = entry
+                    .segments
+                    .iter()
+                    .map(|def| {
+                        Segment::from_def(def).map_err(|e| SecretsFileError::InvalidSegment {
+                            identifier: entry.identifier.clone(),
+                            reason: e.to_string(),
+                        })
+                    })
+                    .collect();
+                let segments = segments?;
 
-            patterns.push(Pattern::Structural(StructuralDef {
-                identifier: entry.identifier.clone(),
-                segments,
-                salt: entry.salt,
-            }));
-        }
-
-        for entry in &self.registered {
-            let charset = match &entry.charset {
-                Some(cs) => cs.clone(),
-                None => crate::fake::charsets::wide(),
-            };
-
-            let pat = RegisteredPat {
-                start_fragment: entry.start_fragment.clone(),
-                end_fragment: entry.end_fragment.clone(),
-                exact_length: entry.exact_length,
-                hmac_salt: entry.hmac_salt,
-                hmac_digest: entry.hmac_digest,
-                preserve_prefix: entry.preserve_prefix,
-                preserve_suffix: entry.preserve_suffix,
-                charset,
-            };
-
-            patterns.push(Pattern::Registered(Arc::new(pat)));
-        }
-
-        Ok(patterns)
-    }
-
-    /// Extract a registered secret entry from a Pattern and append it to this file.
-    /// Returns error if the pattern is not a registered secret or if the label is a duplicate.
-    ///
-    /// # Errors
-    ///
-    /// - [`SecretsFileError::WrongPatternType`] if `pattern` is not a registered secret.
-    /// - [`SecretsFileError::DuplicateLabel`] if `label` is already present in the file.
-    pub fn add_secret_pattern(
-        &mut self,
-        pattern: &Pattern,
-        label: Option<String>,
-    ) -> Result<(), SecretsFileError> {
-        match pattern {
-            Pattern::Registered(arc) => {
-                if let Some(ref l) = label {
-                    let duplicate = self
-                        .registered
-                        .iter()
-                        .any(|e| e.label.as_deref() == Some(l));
-                    if duplicate {
-                        return Err(SecretsFileError::DuplicateLabel { label: l.clone() });
+                // INV-31: instance patterns must have fixed-length variable segments.
+                if !entry.digests.is_empty() {
+                    for (i, seg) in entry.segments.iter().enumerate() {
+                        if let crate::segment::SegmentDef::Variable { min, max, .. } = seg {
+                            if min != max {
+                                return Err(SecretsFileError::InvalidSegment {
+                                    identifier: entry.identifier.clone(),
+                                    reason: format!(
+                                        "instance pattern variable segment at index {} has min ({}) != max ({})",
+                                        i, min, max
+                                    ),
+                                });
+                            }
+                        }
                     }
                 }
 
-                let p = arc.as_ref();
-                let charset = if p.charset == crate::fake::charsets::wide() {
-                    None
-                } else {
-                    Some(p.charset.clone())
-                };
-
-                self.registered.push(SecretEntry {
-                    label,
-                    start_fragment: p.start_fragment.clone(),
-                    end_fragment: p.end_fragment.clone(),
-                    exact_length: p.exact_length,
-                    hmac_salt: p.hmac_salt,
-                    hmac_digest: p.hmac_digest,
-                    preserve_prefix: p.preserve_prefix,
-                    preserve_suffix: p.preserve_suffix,
-                    charset,
-                });
-
-                Ok(())
-            }
-            _ => Err(SecretsFileError::WrongPatternType),
-        }
+                Ok(Pattern {
+                    identifier: entry.identifier.clone(),
+                    segments: segments.into(),
+                    salt: entry.salt,
+                    digests: entry.digests.clone(),
+                })
+            })
+            .collect()
     }
 
-    /// Add a user-defined structural pattern to this patterns file.
+    /// Add an instance pattern (registered secret) to this patterns file.
+    ///
+    /// # Errors
+    ///
+    /// - [`SecretsFileError::WrongPatternType`] if `pattern` has no HMAC digests.
+    /// - [`SecretsFileError::DuplicateIdentifier`] if `identifier` already exists.
+    pub fn add_secret_pattern(
+        &mut self,
+        identifier: String,
+        pattern: &Pattern,
+    ) -> Result<(), SecretsFileError> {
+        if pattern.digests.is_empty() {
+            return Err(SecretsFileError::WrongPatternType);
+        }
+        let duplicate = self.pattern.iter().any(|e| e.identifier == identifier);
+        if duplicate {
+            return Err(SecretsFileError::DuplicateIdentifier { identifier });
+        }
+        let seg_defs: Result<Vec<_>, _> = pattern
+            .segments
+            .iter()
+            .map(|s| {
+                s.try_to_def()
+                    .map_err(|e| SecretsFileError::InvalidSegment {
+                        identifier: identifier.clone(),
+                        reason: e.to_string(),
+                    })
+            })
+            .collect();
+        let seg_defs = seg_defs?;
+        self.pattern.push(PatternEntry {
+            identifier: identifier.clone(),
+            salt: pattern.salt,
+            digests: pattern.digests.clone(),
+            segments: seg_defs,
+        });
+        Ok(())
+    }
+
+    /// Append an HMAC digest for `secret` to an existing instance/group pattern.
+    ///
+    /// Computes `HMAC-SHA256(entry.salt, secret)` and pushes it to the entry's digest list,
+    /// allowing multiple secrets to share one detection pattern.
+    ///
+    /// # Errors
+    ///
+    /// - [`SecretsFileError::WrongPatternType`] if the target entry is a family pattern (has no digests).
+    /// - [`SecretsFileError::NotFound`] if no entry with `group_id` exists.
+    pub fn add_secret_to_group(
+        &mut self,
+        group_id: &str,
+        secret: &[u8],
+    ) -> Result<(), SecretsFileError> {
+        let entry = self
+            .pattern
+            .iter_mut()
+            .find(|e| e.identifier == group_id)
+            .ok_or_else(|| SecretsFileError::NotFound {
+                identifier: group_id.to_string(),
+            })?;
+        if entry.digests.is_empty() {
+            return Err(SecretsFileError::WrongPatternType);
+        }
+        let digest = crate::crypto::hmac_sha256(&entry.salt, secret);
+        entry.digests.push(digest);
+        Ok(())
+    }
+
+    /// Add a user-defined pattern to this patterns file.
     ///
     /// The caller provides a pre-generated salt. Validates:
-    /// - Identifier uniqueness (INV-31)
-    /// - Segment list validity (INV-30: at least one Variable, valid charsets, min <= max)
+    /// - Identifier uniqueness
+    /// - Segment list validity (at least one Variable, valid charsets, min <= max)
     ///
     /// # Errors
     ///
@@ -373,68 +305,55 @@ impl SecretsFile {
         segments: Vec<SegmentDef>,
         salt: [u8; 32],
     ) -> Result<(), SecretsFileError> {
-        let duplicate = self.structural.iter().any(|e| e.identifier == identifier);
+        let duplicate = self.pattern.iter().any(|e| e.identifier == identifier);
         if duplicate {
             return Err(SecretsFileError::DuplicateIdentifier { identifier });
         }
 
-        crate::segment::validate_segment_defs(&segments)?;
+        crate::segment::validate_segment_defs(&segments).map_err(|e| {
+            SecretsFileError::InvalidSegment {
+                identifier: identifier.clone(),
+                reason: e.to_string(),
+            }
+        })?;
 
-        self.structural.push(PatternEntry {
+        self.pattern.push(PatternEntry {
             identifier,
             salt,
-            segments: Some(segments),
+            digests: vec![],
+            segments,
         });
 
         Ok(())
     }
 
-    /// Fill in salts for any built-in structural pattern classes not already in the file.
-    /// Uses OsRng for fresh salt generation.
+    /// Fill in all built-in family patterns not already present in the file.
+    ///
+    /// Generates random salts and embeds compiled-in segment definitions.
     pub fn generate_missing_structural_salts(&mut self) {
         use rand::RngCore;
 
         for def in patterns::all_defs() {
-            let already_present = self
-                .structural
-                .iter()
-                .any(|e| e.identifier == def.identifier);
+            let already_present = self.pattern.iter().any(|e| e.identifier == def.identifier);
             if !already_present {
                 let mut salt = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut salt);
-                self.structural.push(PatternEntry {
+                let seg_defs: Vec<SegmentDef> = def.segments.iter().map(|s| s.to_def()).collect();
+                self.pattern.push(PatternEntry {
                     identifier: def.identifier.clone(),
                     salt,
-                    segments: None,
+                    digests: vec![],
+                    segments: seg_defs,
                 });
             }
         }
     }
 
-    /// Fill in salts and segment definitions for any built-in structural pattern classes not in the file.
-    /// Unlike `generate_missing_structural_salts`, this also embeds the compiled-in segment
-    /// definitions so the output file is self-describing (used by `init`).
+    /// Fill in all built-in family patterns not already present, embedding segment definitions.
+    ///
+    /// Equivalent to [`Self::generate_missing_structural_salts`] in v3 (segments always required).
     pub fn generate_missing_structural_salts_with_segments(&mut self) {
-        use rand::RngCore;
-
-        for def in patterns::all_defs() {
-            let already_present = self
-                .structural
-                .iter()
-                .any(|e| e.identifier == def.identifier);
-            if !already_present {
-                let mut salt = [0u8; 32];
-                rand::rngs::OsRng.fill_bytes(&mut salt);
-
-                let seg_defs: Vec<SegmentDef> = def.segments.iter().map(|s| s.to_def()).collect();
-
-                self.structural.push(PatternEntry {
-                    identifier: def.identifier.clone(),
-                    salt,
-                    segments: Some(seg_defs),
-                });
-            }
-        }
+        self.generate_missing_structural_salts();
     }
 
     /// Check if an identifier matches a compiled-in structural pattern definition.
@@ -461,16 +380,16 @@ mod tests {
         pf.generate_missing_structural_salts();
         let bytes = pf.serialize().unwrap();
         let pf2 = SecretsFile::deserialize(&bytes).unwrap();
-        assert_eq!(pf2.version, 2);
-        assert_eq!(pf2.structural.len(), 15);
+        assert_eq!(pf2.version, 3);
+        assert_eq!(pf2.pattern.len(), 27);
         let orig_salt = pf
-            .structural
+            .pattern
             .iter()
             .find(|e| e.identifier == "anthropic")
             .unwrap()
             .salt;
         let deser_salt = pf2
-            .structural
+            .pattern
             .iter()
             .find(|e| e.identifier == "anthropic")
             .unwrap()
@@ -480,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_version_rejection() {
-        let data = b"version = 1\nstructural = []\nregistered = []\n";
+        let data = b"version = 1\n";
         let err = SecretsFile::deserialize(data).unwrap_err();
         assert!(matches!(
             err,
@@ -489,38 +408,49 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_structural_into_patterns_succeeds() {
+    fn test_empty_pattern_into_patterns_succeeds() {
         let pf = SecretsFile {
-            version: 2,
-            structural: vec![],
-            registered: vec![],
+            version: 3,
+            pattern: vec![],
         };
         let patterns = pf.to_patterns().unwrap();
         assert_eq!(patterns.len(), 0);
     }
 
     #[test]
-    fn test_generate_missing_fills_all_fifteen() {
+    fn test_generate_missing_fills_all_builtins() {
         let mut pf = SecretsFile::new();
         pf.generate_missing_structural_salts();
-        assert_eq!(pf.structural.len(), 15);
+        assert_eq!(pf.pattern.len(), 27);
         for def in crate::patterns::all_defs() {
-            assert!(pf.structural.iter().any(|e| e.identifier == def.identifier));
+            assert!(pf.pattern.iter().any(|e| e.identifier == def.identifier));
         }
     }
 
     #[test]
     fn test_generate_missing_does_not_overwrite() {
+        use crate::segment::SegmentDef;
         let custom_salt = [0xAB; 32];
         let mut pf = SecretsFile::new();
-        pf.structural.push(PatternEntry {
+        pf.pattern.push(PatternEntry {
             identifier: "anthropic".into(),
             salt: custom_salt,
-            segments: None,
+            digests: vec![],
+            segments: vec![
+                SegmentDef::Literal {
+                    value: "sk-ant-api03-".into(),
+                },
+                SegmentDef::Variable {
+                    charset: "url_safe_base64".into(),
+                    min: 93,
+                    max: 93,
+                },
+                SegmentDef::Literal { value: "AA".into() },
+            ],
         });
         pf.generate_missing_structural_salts();
         let entry = pf
-            .structural
+            .pattern
             .iter()
             .find(|e| e.identifier == "anthropic")
             .unwrap();
@@ -528,147 +458,46 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_registered_exact_length_zero() {
-        let data = br#"
-version = 2
-structural = []
-
-[[registered]]
-start_fragment = "aabb"
-end_fragment = "ccdd"
-exact_length = 0
-hmac_salt = "0000000000000000000000000000000000000000000000000000000000000000"
-hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
-preserve_prefix = 0
-preserve_suffix = 0
-"#;
-        let err = SecretsFile::deserialize(data).unwrap_err();
-        assert!(err.to_string().contains("exact_length"), "error: {err}");
-    }
-
-    #[test]
-    fn test_invalid_registered_empty_start_fragment() {
-        let data = br#"
-version = 2
-structural = []
-
-[[registered]]
-start_fragment = ""
-end_fragment = "ccdd"
-exact_length = 32
-hmac_salt = "0000000000000000000000000000000000000000000000000000000000000000"
-hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
-preserve_prefix = 0
-preserve_suffix = 0
-"#;
-        let err = SecretsFile::deserialize(data).unwrap_err();
-        assert!(err.to_string().contains("start_fragment"), "error: {err}");
-    }
-
-    #[test]
-    fn test_registered_with_charset_round_trips() {
-        use crate::{SecretOptions, register_with_options};
-        let secret = b"my-custom-api-token-round-trip-test";
-        let opts = SecretOptions {
-            preserve_prefix: 3,
-            preserve_suffix: 0,
-            restrict_charset: false,
-            ..Default::default()
-        };
-        let pat = register_with_options(secret, &opts).unwrap();
-        let mut pf = SecretsFile::new();
-        pf.add_secret_pattern(&pat, None).unwrap();
-        let bytes = pf.serialize().unwrap();
-        let pf2 = SecretsFile::deserialize(&bytes).unwrap();
-        assert_eq!(pf2.registered.len(), 1);
-    }
-
-    #[test]
-    fn test_registered_without_charset_uses_wide() {
-        use crate::{SecretOptions, register_with_options};
-        let secret = b"my-custom-api-token-wide-charset-test";
-        let opts = SecretOptions::default();
-        let pat = register_with_options(secret, &opts).unwrap();
-        let mut pf = SecretsFile::new();
-        pf.add_secret_pattern(&pat, None).unwrap();
-        assert!(pf.registered[0].charset.is_none());
-    }
-
-    #[test]
     fn test_duplicate_identifier_rejected() {
-        // registered sections must come before [[structural]] sections in TOML
         let pf_data = br#"
-version = 2
-registered = []
+version = 3
 
-[[structural]]
+[[pattern]]
 identifier = "my_pattern"
 salt = "0000000000000000000000000000000000000000000000000000000000000001"
 segments = [{ type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
 
-[[structural]]
+[[pattern]]
 identifier = "my_pattern"
 salt = "0000000000000000000000000000000000000000000000000000000000000002"
 segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
 "#;
         let err = SecretsFile::deserialize(pf_data).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("duplicate structural pattern identifier")
+            err.to_string().contains("duplicate pattern identifier"),
+            "error: {err}"
         );
     }
 
     #[test]
-    fn test_duplicate_label_rejected() {
-        let pf_data = br#"
-version = 2
-structural = []
-
-[[registered]]
-label = "my-secret"
-start_fragment = "aabbccdd"
-end_fragment = "eeff0011"
-exact_length = 32
-hmac_salt = "0000000000000000000000000000000000000000000000000000000000000000"
-hmac_digest = "0000000000000000000000000000000000000000000000000000000000000000"
-preserve_prefix = 0
-preserve_suffix = 0
-
-[[registered]]
-label = "my-secret"
-start_fragment = "11223344"
-end_fragment = "55667788"
-exact_length = 16
-hmac_salt = "0000000000000000000000000000000000000000000000000000000000000001"
-hmac_digest = "0000000000000000000000000000000000000000000000000000000000000001"
-preserve_prefix = 0
-preserve_suffix = 0
-"#;
-        let err = SecretsFile::deserialize(pf_data).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("duplicate registered secret label")
-        );
-    }
-
-    #[test]
-    fn test_version_1_error_message() {
-        let data = b"version = 1\nstructural = []\nregistered = []\n";
+    fn test_version_3_error_message() {
+        let data = b"version = 1\n";
         let err = SecretsFile::deserialize(data).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unsupported"), "error: {msg}");
-        assert!(msg.contains("expected 2"), "error: {msg}");
+        assert!(msg.contains("expected 3"), "error: {msg}");
     }
 
     #[test]
-    fn test_user_defined_structural_into_patterns() {
+    fn test_user_defined_pattern_into_patterns() {
         use crate::segment::SegmentDef;
         let pf = SecretsFile {
-            version: 2,
-            structural: vec![PatternEntry {
+            version: 3,
+            pattern: vec![PatternEntry {
                 identifier: "custom".into(),
                 salt: [0xAA; 32],
-                segments: Some(vec![
+                digests: vec![],
+                segments: vec![
                     SegmentDef::Literal {
                         value: "tok_".into(),
                     },
@@ -677,29 +506,39 @@ preserve_suffix = 0
                         min: 20,
                         max: 20,
                     },
-                ]),
+                ],
             }],
-            registered: vec![],
         };
         let patterns = pf.to_patterns().unwrap();
         assert_eq!(patterns.len(), 1);
     }
 
     #[test]
-    fn test_user_defined_without_segments_errors() {
+    fn test_instance_pattern_round_trip() {
+        // An instance pattern entry (non-empty digests) survives serialize/deserialize.
+        let digest = [0xBBu8; 32];
         let pf = SecretsFile {
-            version: 2,
-            structural: vec![PatternEntry {
-                identifier: "unknown_thing".into(),
-                salt: [0u8; 32],
-                segments: None,
+            version: 3,
+            pattern: vec![PatternEntry {
+                identifier: "my-instance".into(),
+                salt: [0xCC; 32],
+                digests: vec![digest],
+                segments: vec![
+                    SegmentDef::Literal {
+                        value: "pfx_".into(),
+                    },
+                    SegmentDef::Variable {
+                        charset: "alphanumeric".into(),
+                        min: 16,
+                        max: 16,
+                    },
+                ],
             }],
-            registered: vec![],
         };
-        let err = pf
-            .to_patterns()
-            .err()
-            .expect("expected MissingSegments error");
-        assert!(err.to_string().contains("requires a segments field"));
+        let bytes = pf.serialize().unwrap();
+        let pf2 = SecretsFile::deserialize(&bytes).unwrap();
+        assert_eq!(pf2.pattern.len(), 1);
+        assert_eq!(pf2.pattern[0].digests.len(), 1);
+        assert_eq!(pf2.pattern[0].digests[0], digest);
     }
 }

@@ -14,6 +14,10 @@
 //! 3. **[`restore`]** — stream the response through the restore function, which
 //!    replaces fakes with originals using the session key and entries.
 //!
+//! For repeated swap calls against the same fixed pattern set, use [`Detector`] to
+//! pre-build the Aho-Corasick automaton once and reuse it across calls; this avoids
+//! rebuilding the automaton on every request.
+//!
 //! # Quick start
 //!
 //! ```rust
@@ -23,8 +27,10 @@
 //! let payload = b"Authorization: sk-ant-api03-w8bVJRHra9S96i3ios_XhbLgzEBjS6qjPUEgiPrWjN2OeICCY1lwhK3Z35Z_jM89STjqSOxHh6GWGkG2R7uv-AohQLmK9AA";
 //!
 //! // 1. Swap: detect and replace the key before sending to an external service
-//! // Note: `patterns::all()` uses ephemeral salts — fakes differ across process restarts.
-//! // For persistent fake stability, use `SecretsFile::to_patterns()`.
+//! // Note: `patterns::all()` uses ephemeral salts — two separate calls to `swap` with
+//! // the same secret will produce different fakes. For stable fakes across calls,
+//! // use `SecretsFile::to_patterns()`. The `restore` call always works correctly because
+//! // fakes are embedded in the encrypted entries, independent of pattern salts.
 //! let result = swap(payload, &patterns::all()).unwrap();
 //! assert_eq!(result.entries.len(), 1); // one secret detected
 //! assert_ne!(result.payload.as_slice(), payload as &[u8]); // key replaced with a fake
@@ -47,6 +53,7 @@
 //! ```
 
 pub(crate) mod crypto;
+pub mod detector;
 pub(crate) mod fake;
 pub mod patterns;
 pub(crate) mod restore;
@@ -60,11 +67,12 @@ pub(crate) mod serde_helpers;
 pub(crate) mod swap;
 pub mod types;
 
+pub use detector::Detector;
 pub use patterns::Pattern;
 pub use restore::{RestoreError, restore};
 #[cfg(feature = "async")]
 pub use restore_stream::{RestoreStream, restore_stream};
 pub use secrets::{SecretError, SecretOptions, register, register_with_options};
-pub use secrets_file::{PatternEntry, SecretEntry, SecretsFile, SecretsFileError};
+pub use secrets_file::{PatternEntry, SecretsFile, SecretsFileError};
 pub use swap::swap;
 pub use types::{Entry, SessionKey, SwapError, SwapResult};
