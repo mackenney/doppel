@@ -1,6 +1,11 @@
 <!-- next-header -->
 ## [Unreleased]
 
+### Added
+
+- `SecretError::AnchorTooShort`: `register` now hard-fails when `anchor_len` is 0 or 1; emits a warning at 2 (INV-42).
+- `SegmentDefError::FirstSegmentTooShort`: `define` now hard-fails when the first segment value is shorter than 2 bytes; emits a warning below 4 bytes (INV-43).
+
 ### Fixed
 
 - Constant-time HMAC comparison: replaced `==` with `ct_eq` for HMAC verification to eliminate timing side-channel (CT fold).

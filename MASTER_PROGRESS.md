@@ -2,8 +2,7 @@
 
 ## Status
 
-In Progress
-
+Active
 
 ## Objective
 
@@ -33,6 +32,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 - `test-cleanup` — nonce consistency (24-byte), output.is_empty() assertion, explicit break in None branch; commit 54201f0
 - `restore-fixes` — empty-fake guard, cursor O(n) refactor, zeroize plaintext, AEAD log, #[must_use], async tests; commit 35dfb76
 - `spec-unified-pattern` — unified Pattern model (literal/opaque/variable segments), v3 patterns file, anchor_len registration, entropy enforcement, 28 built-ins, 130 tests; commit 38168b3
+- `doc-fixes` — Rust source doc fixes, secrets-example.toml, CHANGELOG.md, README v3 rewrite, for-the-paranoid v3 rewrite, INV-42/43 anchor enforcement; commit 7b37fd6
 ## Known Gaps
 
 - No CI configuration (out of scope for initial-implementation plan)

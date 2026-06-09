@@ -1636,3 +1636,63 @@ fn test_stripe_clerk_sk_live_gap_behavior() {
         "first 40 bytes must be replaced with a fake"
     );
 }
+
+// Spec: SPEC.md §Behavioral Invariants 42, 43
+
+#[test]
+fn test_inv42_register_rejects_anchor_len_zero_or_one() {
+    // "register MUST fail with AnchorTooShort when anchor_len is 0 or 1."
+    // — SPEC.md INV-42
+    use doppel::{SecretError, SecretOptions, register_with_options};
+
+    let secret = b"my-secret-api-key-long-enough";
+
+    for bad_len in [0usize, 1usize] {
+        let opts = SecretOptions {
+            anchor_len: bad_len,
+            ..SecretOptions::default()
+        };
+        let err = match register_with_options(secret, &opts) {
+            Err(e) => e,
+            Ok(_) => panic!("INV-42: anchor_len={bad_len} must be rejected, but succeeded"),
+        };
+        assert!(
+            matches!(err, SecretError::AnchorTooShort { anchor_len } if anchor_len == bad_len),
+            "INV-42: expected AnchorTooShort for anchor_len={bad_len}, got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn test_inv43_define_rejects_first_segment_shorter_than_two_bytes() {
+    // "define MUST fail when the first segment value is shorter than 2 bytes."
+    // — SPEC.md INV-43
+    // Tested through SecretsFile::add_structural_entry, which calls validate_segment_defs.
+    use doppel::{SecretsFile, SecretsFileError, segment::SegmentDef};
+
+    for bad_value in ["", "x"] {
+        let mut pf = SecretsFile::default();
+        let segments = vec![
+            SegmentDef::Literal {
+                value: bad_value.to_string(),
+            },
+            SegmentDef::Variable {
+                charset: "alphanumeric".to_string(),
+                min: 10,
+                max: 10,
+            },
+        ];
+        let err = pf
+            .add_structural_entry("test-id".to_string(), segments, [0u8; 32])
+            .unwrap_err();
+        assert!(
+            matches!(err, SecretsFileError::InvalidSegment { .. }),
+            "INV-43: expected InvalidSegment for first segment value {:?}, got {err:?}",
+            bad_value
+        );
+        assert!(
+            err.to_string().contains("first segment") || err.to_string().contains("byte"),
+            "INV-43: error message should describe the constraint; got: {err}"
+        );
+    }
+}
