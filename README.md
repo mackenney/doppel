@@ -120,18 +120,39 @@ let result = swap(&payload, &patterns)?;
 ```
 
 
-For high-throughput use — many `swap` calls against the same pattern set — use
-[`Detector`](https://docs.rs/doppel/latest/doppel/struct.Detector.html) to pre-build
-the Aho-Corasick automaton once:
+For long-running processes that call `swap` on every incoming request, use
+[`Detector`](https://docs.rs/doppel/latest/doppel/struct.Detector.html). The free
+`swap` function rebuilds an internal multi-pattern search structure on every call;
+`Detector` builds it once at startup and reuses it across all requests, which makes
+a measurable difference at hundreds of requests per second.
+
+`Detector` is `Send + Sync`, so you can store it in an `Arc` and share it across
+threads or async tasks. The full swap→restore cycle with `Detector`:
 
 ```rust
-use doppel::{Detector, SecretsFile};
+use doppel::{Detector, SecretsFile, restore};
+use std::sync::Arc;
 
+// At startup — build once:
 let data = std::fs::read("secrets.toml")?;
-let sf = SecretsFile::deserialize(&data)?;
-let patterns = sf.to_patterns()?;
-let detector = Detector::new(&patterns);
-// reuse `detector` across many requests
+let patterns = SecretsFile::deserialize(&data)?.to_patterns()?;
+let detector = Arc::new(Detector::new(patterns));
+
+// Per request — swap outgoing payload:
+let result = detector.swap(&outgoing_payload)?;
+// result.payload      — send to external service (secrets replaced with fakes)
+// result.entries      — keep locally
+// result.session_key  — keep locally
+
+// Per response — restore incoming stream:
+let mut restored = Vec::new();
+restore(
+    &mut response_stream,
+    &mut restored,
+    &result.entries,
+    &result.session_key,
+)?;
+// restored now contains the original secret bytes
 ```
 
 **Create a new patterns file:**
