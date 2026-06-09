@@ -1,0 +1,14 @@
+# cargo-release workspace configuration.
+# Dry-run (default): cargo release patch --workspace
+# Execute:           cargo release patch --workspace --execute
+
+allow-branch = ["main"]
+
+# All crates move together; one commit covers the whole workspace.
+shared-version = true
+consolidate-commits = true
+pre-release-commit-message = "chore: release v{{version}}"
+
+# Tags and CHANGELOG stamping are owned by the `doppel` crate (package.metadata.release).
+# Disabling here prevents duplicate tags from doppel-cli.
+tag = false
