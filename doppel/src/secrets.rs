@@ -19,8 +19,12 @@ fn calculate_entropy(variable_len: usize, charset_size: usize) -> f64 {
 /// Options for registered secret registration.
 #[derive(Debug, Clone)]
 pub struct SecretOptions {
-    /// Number of leading secret bytes stored as the detection anchor.
-    /// SPEC: default 3; longer values reduce false-positive AC hits.
+    /// Number of leading secret bytes stored as the detection anchor (default 3).
+    ///
+    /// Must be at least 2; values of 0 or 1 are rejected with [`SecretError::AnchorTooShort`].
+    /// Values below 3 emit a warning — 3 (the default) is the recommended minimum.
+    /// Longer anchors reduce false-positive Aho-Corasick hits at the cost of more
+    /// plaintext bytes stored in the patterns file.
     pub anchor_len: usize,
 
     /// Number of trailing secret bytes stored as secondary anchor.
@@ -55,11 +59,20 @@ pub enum SecretError {
     #[error("secret too short for the given anchor_len")]
     TooShort,
 
+    /// `anchor_len` is 0 or 1 — too short to serve as a reliable Aho-Corasick anchor.
+    /// Use at least 2; the default and recommended value is 3.
+    #[error(
+        "anchor_len {anchor_len} is too short (minimum 2, recommended 3+); a 0- or 1-byte anchor cannot pre-filter candidates reliably"
+    )]
+    AnchorTooShort {
+        /// The `anchor_len` value that was rejected.
+        anchor_len: usize,
+    },
+
     /// `anchor_len + tail_anchor_len` covers the entire secret, leaving no variable bytes.
     /// A fake with zero variable bytes cannot differ from the original.
     #[error(
-        "anchor_len ({anchor_len}) + tail_anchor_len ({tail_anchor_len}) \
-         >= secret length ({secret_len}); no variable bytes remain"
+        "anchor_len ({anchor_len}) + tail_anchor_len ({tail_anchor_len}) >= secret length ({secret_len}); no variable bytes remain"
     )]
     NoVariableBytes {
         /// The `anchor_len` value passed to registration.
@@ -81,8 +94,7 @@ pub enum SecretError {
     /// Registration rejected due to insufficient entropy in variable portion.
     /// Use `force: true` in `SecretOptions` to override.
     #[error(
-        "insufficient entropy: {bits:.1} bits < {threshold:.1} bit minimum \
-         (use --force to override)"
+        "insufficient entropy: {bits:.1} bits < {threshold:.1} bit minimum (use --force to override)"
     )]
     InsufficientEntropy {
         /// Computed entropy in bits.
@@ -121,6 +133,7 @@ pub fn register(secret: &[u8]) -> Result<Pattern, SecretError> {
 ///
 /// # Errors
 ///
+/// - [`SecretError::AnchorTooShort`] if `anchor_len` < 2.
 /// - [`SecretError::TooShort`] if `secret` is empty or shorter than `anchor_len`.
 /// - [`SecretError::NoVariableBytes`] if `anchor_len + tail_anchor_len >= secret.len()`.
 /// - [`SecretError::InsufficientEntropy`] if entropy < 83 bits and `!opts.force`.
@@ -144,11 +157,22 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
     opts: &SecretOptions,
     rng: &mut R,
 ) -> Result<Pattern, SecretError> {
+    if opts.anchor_len < 2 {
+        return Err(SecretError::AnchorTooShort {
+            anchor_len: opts.anchor_len,
+        });
+    }
     if secret.is_empty() {
         return Err(SecretError::TooShort);
     }
     if secret.len() < opts.anchor_len {
         return Err(SecretError::TooShort);
+    }
+    if opts.anchor_len < 3 {
+        log::warn!(
+            "doppel: anchor_len {} is below the recommended minimum of 3; short anchors generate more false Aho-Corasick candidates",
+            opts.anchor_len
+        );
     }
 
     let anchor_len = opts.anchor_len;
@@ -280,5 +304,45 @@ mod tests {
             pat_a.digests, pat_b.digests,
             "same seed must produce same digest"
         );
+    }
+
+    #[test]
+    fn test_anchor_too_short_rejects_zero() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            anchor_len: 0,
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(1);
+        assert!(matches!(
+            register_with_options_rng(secret, &opts, &mut rng),
+            Err(SecretError::AnchorTooShort { anchor_len: 0 })
+        ));
+    }
+
+    #[test]
+    fn test_anchor_too_short_rejects_one() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            anchor_len: 1,
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(2);
+        assert!(matches!(
+            register_with_options_rng(secret, &opts, &mut rng),
+            Err(SecretError::AnchorTooShort { anchor_len: 1 })
+        ));
+    }
+
+    #[test]
+    fn test_anchor_len_two_succeeds() {
+        // anchor_len=2 is above the hard-fail threshold; registration must succeed.
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            anchor_len: 2,
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(3);
+        assert!(register_with_options_rng(secret, &opts, &mut rng).is_ok());
     }
 }

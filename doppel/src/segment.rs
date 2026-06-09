@@ -246,13 +246,18 @@ pub enum SegmentDef {
 ///
 /// Returns `Ok(())` if all constraints are satisfied:
 /// - At least one Variable segment (INV-30)
+/// - First segment is Literal or Opaque with value >= 2 bytes (INV-30, AC pre-filter)
 /// - All charset names are recognised
 /// - All Variable segments have min <= max
 /// - All Variable segments have min >= 1
 pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDefError> {
     let mut has_variable = false;
     match defs.first() {
-        Some(SegmentDef::Literal { .. }) | Some(SegmentDef::Opaque { .. }) => {}
+        Some(SegmentDef::Literal { value }) | Some(SegmentDef::Opaque { value, .. }) => {
+            if value.len() < 2 {
+                return Err(SegmentDefError::FirstSegmentTooShort { len: value.len() });
+            }
+        }
         Some(SegmentDef::Variable { .. }) => {
             return Err(SegmentDefError::FirstSegmentVariable);
         }
@@ -373,6 +378,16 @@ pub enum SegmentDefError {
     #[error("segment list must not be empty")]
     EmptySegmentList,
 
+    /// The first segment value is too short to anchor Aho-Corasick detection.
+    /// Minimum 2 bytes required; 4+ bytes recommended.
+    #[error(
+        "first segment value is {len} byte(s); minimum 2 bytes to avoid excessive false-positive AC hits"
+    )]
+    FirstSegmentTooShort {
+        /// Actual byte length of the first segment's value.
+        len: usize,
+    },
+
     /// A Literal or Opaque segment value contains non-UTF-8 bytes.
     /// SPEC §Patterns File: all segment `value` fields MUST be valid UTF-8.
     #[error("segment value contains non-UTF-8 bytes")]
@@ -474,5 +489,56 @@ mod tests {
             }
             _ => panic!("expected Variable"),
         }
+    }
+
+    #[test]
+    fn validate_segment_defs_rejects_empty_first_literal() {
+        let defs = vec![
+            SegmentDef::Literal {
+                value: String::new(),
+            },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 8,
+                max: 8,
+            },
+        ];
+        let err = validate_segment_defs(&defs).unwrap_err();
+        assert!(matches!(
+            err,
+            SegmentDefError::FirstSegmentTooShort { len: 0 }
+        ));
+        assert!(err.to_string().contains("0 byte"));
+    }
+
+    #[test]
+    fn validate_segment_defs_rejects_one_byte_first_literal() {
+        let defs = vec![
+            SegmentDef::Literal { value: "A".into() },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 8,
+                max: 8,
+            },
+        ];
+        let err = validate_segment_defs(&defs).unwrap_err();
+        assert!(matches!(
+            err,
+            SegmentDefError::FirstSegmentTooShort { len: 1 }
+        ));
+    }
+
+    #[test]
+    fn validate_segment_defs_accepts_two_byte_first_literal() {
+        // 2 bytes is the hard-fail threshold; must succeed (warning is CLI-only).
+        let defs = vec![
+            SegmentDef::Literal { value: "sk".into() },
+            SegmentDef::Variable {
+                charset: "alphanumeric".into(),
+                min: 8,
+                max: 8,
+            },
+        ];
+        assert!(validate_segment_defs(&defs).is_ok());
     }
 }

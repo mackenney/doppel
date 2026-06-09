@@ -394,7 +394,25 @@ fn run_define(
     let mut salt = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut salt);
 
+    // Capture first-segment length before ownership transfer for the advisory warning.
+    let first_seg_anchor_len = seg_defs
+        .first()
+        .map(|s| match s {
+            doppel::segment::SegmentDef::Literal { value } => value.len(),
+            doppel::segment::SegmentDef::Opaque { value, .. } => value.len(),
+            _ => 0,
+        })
+        .unwrap_or(0);
+
     pf.add_structural_entry(identifier.to_string(), seg_defs, salt)?;
+
+    // Warn when the first-segment anchor is short but above the hard-fail threshold.
+    if (2..4).contains(&first_seg_anchor_len) {
+        log::warn!(
+            "doppel: first segment is {} byte(s); patterns with fewer than 4 anchor bytes may generate many false Aho-Corasick candidates in high-throughput contexts",
+            first_seg_anchor_len
+        );
+    }
 
     let new_entry = pf.pattern.last().expect("entry just added");
     let item = toml_edit::ser::to_document(new_entry)

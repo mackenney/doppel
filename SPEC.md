@@ -120,7 +120,7 @@ Registration MUST also emit a warning-level diagnostic when the secret's observe
 
 ### Registration Options
 
-- **anchor-len** (positive integer, default 3). Number of leading secret bytes stored as the detection anchor in the first `opaque` segment. Longer values reduce false-positive Aho-Corasick hits at the cost of more plaintext bytes stored in the patterns file. 3 bytes yields approximately 0.35 expected false AC hits per 8 KB of ASCII payload with 37 registered patterns; 4 bytes yields approximately 0.004.
+- **anchor-len** (positive integer, default 3). Number of leading secret bytes stored as the detection anchor in the first `opaque` segment. Longer values reduce false-positive Aho-Corasick hits at the cost of more plaintext bytes stored in the patterns file. 3 bytes yields approximately 0.35 expected false AC hits per 8 KB of ASCII payload with 37 registered patterns; 4 bytes yields approximately 0.004. Registration MUST fail with `AnchorTooShort` if `anchor-len` is less than 2; a 0- or 1-byte anchor cannot pre-filter candidates reliably. Registration SHOULD emit a warning when `anchor-len` is exactly 2, as values below 3 (the default) are not recommended.
 
 - **tail-anchor-len** (non-negative integer, default 0). Number of trailing secret bytes stored as a secondary detection anchor in a trailing `opaque` segment. The default of 0 is recommended: with a 3-byte leading anchor the AC filter is already tight, adding a tail anchor does not improve filtering and leaks additional secret bytes.
 
@@ -301,7 +301,7 @@ The CLI exposes `swap`, `restore`, `init`, `register`, `define`, `list`, `inspec
 
 **`register`:** reads a secret value from stdin (raw bytes, no trimming), loads the patterns file, registers the secret as an instance pattern, appends the new entry (or extends an existing group entry with `--group <identifier>`), and writes the file back. Options: `--identifier <id>` (required for new entries), `--anchor-len <n>` (default 3), `--tail-anchor-len <n>` (default 0), `--restrict-charset` (default false), `--group <identifier>` (add to existing group), `--force` (suppress entropy failure). The secret MUST NOT appear in command-line arguments. Existing comments in the patterns file MUST be preserved.
 
-**`define`:** adds a user-defined family pattern to the patterns file. The caller supplies an identifier, one or more segment specifications, and the patterns file path. A fresh stable salt is generated. `define` MUST fail if the identifier already exists. `define` MUST fail if the segment list is empty, if any segment specifies an unrecognised charset name, if any `variable` segment has `min > max`, if the first segment is not a `literal` or `opaque` segment, or if the segment list contains no `variable` segment. The patterns file MUST be written back atomically with mode 0600.
+**`define`:** adds a user-defined family pattern to the patterns file. The caller supplies an identifier, one or more segment specifications, and the patterns file path. A fresh stable salt is generated. `define` MUST fail if the identifier already exists. `define` MUST fail if the segment list is empty, if any segment specifies an unrecognised charset name, if any `variable` segment has `min > max`, if the first segment is not a `literal` or `opaque` segment, if the segment list contains no `variable` segment, or if the first segment's value is shorter than 2 bytes. `define` SHOULD emit a warning when the first segment value is shorter than 4 bytes, as a short anchor generates many false Aho-Corasick hits. The patterns file MUST be written back atomically with mode 0600.
 
 **`list`:** reads the patterns file and writes a human-readable summary to stdout: each pattern entry with its identifier, segment description, digest count, and charset summary. `list` MUST NOT modify the patterns file.
 
@@ -352,6 +352,8 @@ The CLI exposes `swap`, `restore`, `init`, `register`, `define`, `list`, `inspec
 39. `Detector::swap` called on the same payload with the same Patterns MUST produce fakes identical to those produced by the free `swap` function. "Same Patterns" means the same Pattern values including their salts — not merely the same pattern class.
 40. `Detector` MUST implement `Send + Sync`. It MUST be safe to share a `Detector` across threads without external synchronization.
 41. The Aho-Corasick automaton MUST NOT be rebuilt on `Detector::swap` calls. The automaton is built exactly once in `Detector::new`.
+42. `register` MUST fail with `AnchorTooShort` when `anchor_len` is 0 or 1. `register` SHOULD emit a warning when `anchor_len` is 2. The default of 3 is the minimum recommended value.
+43. `define` MUST fail when the first segment value is shorter than 2 bytes. `define` SHOULD emit a warning when the first segment value is shorter than 4 bytes.
 
 ## Verifiable Conditions
 

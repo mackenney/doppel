@@ -272,6 +272,10 @@ Reads the secret from stdin (raw bytes, no trimming), appends a new instance-pat
 entry to the patterns file, and writes it back atomically. The secret never appears in
 command-line arguments. `--identifier` is required and must be unique within the file.
 
+`--anchor-len` controls how many leading bytes of the secret become the detection anchor.
+Minimum 2 (hard fail for 0 or 1); default 3 is recommended. Values below 3 emit a
+warning — shorter anchors generate more false Aho-Corasick candidates per payload byte.
+
 Alternatively, use `--group <id>` instead of `--identifier` to add this secret as an
 additional digest to an existing group pattern (for grouping multiple secrets under one
 detection rule).
@@ -297,7 +301,8 @@ Valid charset names: `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`
 `digits`, `hex_lower`, `wide`.
 
 At least one Variable segment is required. The identifier must be unique in the
-file.
+file. The first segment value must be at least 2 bytes (hard fail for shorter); values
+below 4 bytes emit a warning — short prefixes match too many positions in the payload.
 
 ### `list` — list all patterns
 
