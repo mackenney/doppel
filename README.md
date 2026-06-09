@@ -73,10 +73,10 @@ let pat = register(b"my-super-secret-api-token")?;
 
 // With options: longer anchor for lower false-positive rate
 let pat = register_with_options(b"my-super-secret-api-token", &SecretOptions {
-    anchor_len: 6,          // store 6 leading bytes as the detection anchor
-    tail_anchor_len: 0,     // no trailing anchor
+    anchor_len: 6,           // store 6 leading bytes as the detection anchor
+    tail_anchor_len: 0,      // no trailing anchor
     restrict_charset: false, // fake uses wide charset by default
-    force: false,           // reject secrets below 83-bit entropy
+    force: false,            // reject secrets below 83-bit entropy
 })?
 ```
 
