@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "doppel"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aho-corasick",
  "base64",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "doppel-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "doppel",
