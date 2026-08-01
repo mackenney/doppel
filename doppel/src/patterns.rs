@@ -16,6 +16,9 @@ pub(crate) struct StructuralDef {
     /// Ordered sequence of structural segments for this secret class.
     /// See SPEC.md §Structural Patterns.
     pub(crate) segments: Arc<[Segment]>,
+    /// Optional trailing run guard threshold in bytes (SPEC §Trailing Run Guard).
+    /// `None` = unconditional detection (Behavioral Invariants item 48).
+    pub(crate) trailing_run_guard: Option<usize>,
 }
 
 #[cfg(test)]
@@ -88,6 +91,17 @@ fn match_segments(
     }
 }
 
+/// Charset of the last Variable segment in `segs`. `None` if none exists.
+// Used by `Pattern::last_variable_charset` and by a guard-validity test; not yet
+// wired into detection (a later step consumes it for the trailing-run guard).
+#[allow(dead_code)] // used by Pattern::last_variable_charset (test-only for now) and unit tests
+fn last_variable_charset(segs: &[Segment]) -> Option<CharsetName> {
+    segs.iter().rev().find_map(|s| match s {
+        Segment::Variable { charset, .. } => Some(*charset),
+        _ => None,
+    })
+}
+
 // Note on sk-proj- vs sk-: at a "sk-proj-..." position, OPENAI_PROJECT_DEF produces a longer
 // match because it finds T3BlbkFJ at the correct offset; OPENAI_CLASSIC_DEF fails because
 // 'proj-' contains '-' which is not alphanumeric. The swap engine picks the longest match (INV-18).
@@ -110,6 +124,7 @@ static ANTHROPIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const OPENAI_CLASSIC_SEGS: [BuiltinSegment; 2] = [
@@ -128,6 +143,7 @@ static OPENAI_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const OPENAI_PROJECT_SEGS: [BuiltinSegment; 4] = [
@@ -156,6 +172,7 @@ static OPENAI_PROJECT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const AWS_AKIA_SEGS: [BuiltinSegment; 2] = [
@@ -174,6 +191,7 @@ static AWS_AKIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
@@ -192,6 +210,7 @@ static AWS_ASIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
@@ -210,6 +229,7 @@ static GITHUB_CLASSIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GITHUB_FG_SEGS: [BuiltinSegment; 4] = [
@@ -235,7 +255,18 @@ static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
+
+/// GCP guard threshold: a genuine standalone key is delimited by structural
+/// context (quote, whitespace, punctuation) within tens of bytes of its end;
+/// base64-encoded binary blobs (the false-positive source) run uninterrupted
+/// for far longer — real-world screenshot uploads observed at 15–400 KB.
+/// 2048 is a deliberately coarse point in the wide gap between those two
+/// regimes: ~2 orders of magnitude above real-key trailing contexts, well
+/// below observed blob sizes, and it bounds probe cost at 2KB per candidate
+/// (candidates occur ~once per 16.7MB of uniform base64).
+pub(crate) const GCP_TRAILING_RUN_GUARD: usize = 2048;
 
 const GCP_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"AIza"),
@@ -253,6 +284,7 @@ static GCP_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: Some(GCP_TRAILING_RUN_GUARD),
 });
 
 const OPENROUTER_SEGS: [BuiltinSegment; 2] = [
@@ -273,6 +305,7 @@ static OPENROUTER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef 
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const OPENAI_SVCACCT_SEGS: [BuiltinSegment; 4] = [
@@ -298,6 +331,7 @@ static OPENAI_SVCACCT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GOOGLE_OAUTH_SEGS: [BuiltinSegment; 2] = [
@@ -317,6 +351,7 @@ static GOOGLE_OAUTH_SECRET_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Struc
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const SLACK_BOT_SEGS: [BuiltinSegment; 6] = [
@@ -348,6 +383,7 @@ static SLACK_BOT_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const ANTHROPIC_ADMIN01_SEGS: [BuiltinSegment; 3] = [
@@ -368,6 +404,7 @@ static ANTHROPIC_ADMIN01_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const ANTHROPIC_ADMIN03_SEGS: [BuiltinSegment; 3] = [
@@ -388,6 +425,7 @@ static ANTHROPIC_ADMIN03_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const LINEAR_SEGS: [BuiltinSegment; 2] = [
@@ -407,6 +445,7 @@ static LINEAR_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GROQ_SEGS: [BuiltinSegment; 2] = [
@@ -426,6 +465,7 @@ static GROQ_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const PERPLEXITY_SEGS: [BuiltinSegment; 2] = [
@@ -444,6 +484,7 @@ static PERPLEXITY_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef 
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const CEREBRAS_SEGS: [BuiltinSegment; 2] = [
@@ -462,6 +503,7 @@ static CEREBRAS_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const STRIPE_LIVE_SEGS: [BuiltinSegment; 2] = [
@@ -481,6 +523,7 @@ static STRIPE_LIVE_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const STRIPE_TEST_SEGS: [BuiltinSegment; 2] = [
@@ -499,6 +542,7 @@ static STRIPE_TEST_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const CLERK_SEGS: [BuiltinSegment; 2] = [
@@ -519,6 +563,7 @@ static CLERK_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const SVIX_SEGS: [BuiltinSegment; 2] = [
@@ -537,6 +582,7 @@ static SVIX_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const CHROMATIC_SEGS: [BuiltinSegment; 2] = [
@@ -555,6 +601,7 @@ static CHROMATIC_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GITHUB_OAUTH_SEGS: [BuiltinSegment; 2] = [
@@ -574,6 +621,7 @@ static GITHUB_OAUTH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDe
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GITHUB_APP_SERVER_SEGS: [BuiltinSegment; 2] = [
@@ -593,6 +641,7 @@ static GITHUB_APP_SERVER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structu
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GITHUB_APP_USER_SEGS: [BuiltinSegment; 2] = [
@@ -612,6 +661,7 @@ static GITHUB_APP_USER_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structura
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 
 const GITHUB_REFRESH_SEGS: [BuiltinSegment; 2] = [
@@ -631,6 +681,7 @@ static GITHUB_REFRESH_DEF: LazyLock<StructuralDef> = LazyLock::new(|| Structural
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
+    trailing_run_guard: None,
 });
 static ALL_STRUCTURAL_DEFS: LazyLock<Vec<&'static StructuralDef>> = LazyLock::new(|| {
     vec![
@@ -702,6 +753,10 @@ pub struct Pattern {
     pub(crate) salt: [u8; 32],
     /// HMAC digests; empty = family pattern, non-empty = instance/group pattern.
     pub(crate) digests: Vec<[u8; 32]>,
+    /// Optional trailing run guard threshold in bytes (SPEC §Trailing Run Guard).
+    /// `None` = unconditional detection (Behavioral Invariants item 48).
+    #[allow(dead_code)] // read by a later step's detection-time guard check
+    pub(crate) trailing_run_guard: Option<usize>,
 }
 
 impl Pattern {
@@ -723,6 +778,13 @@ impl Pattern {
             Some(Segment::Opaque { value, .. }) => Some(value),
             _ => None,
         }
+    }
+
+    /// Charset of the last Variable segment — the guard charset per
+    /// Behavioral Invariants item 45. `None` if no Variable segment exists.
+    #[allow(dead_code)] // consumed by later step wiring the guard into detection
+    pub(crate) fn last_variable_charset(&self) -> Option<CharsetName> {
+        last_variable_charset(&self.segments)
     }
 
     /// Attempt to match this pattern against the payload at the given position.
@@ -778,6 +840,7 @@ pub fn anthropic() -> Pattern {
         segments: ANTHROPIC_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: ANTHROPIC_DEF.trailing_run_guard,
     }
 }
 
@@ -790,6 +853,7 @@ pub fn anthropic_admin01() -> Pattern {
         segments: ANTHROPIC_ADMIN01_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: ANTHROPIC_ADMIN01_DEF.trailing_run_guard,
     }
 }
 
@@ -802,6 +866,7 @@ pub fn anthropic_admin03() -> Pattern {
         segments: ANTHROPIC_ADMIN03_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: ANTHROPIC_ADMIN03_DEF.trailing_run_guard,
     }
 }
 
@@ -814,6 +879,7 @@ pub fn openai_classic() -> Pattern {
         segments: OPENAI_CLASSIC_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: OPENAI_CLASSIC_DEF.trailing_run_guard,
     }
 }
 
@@ -826,6 +892,7 @@ pub fn openai_project() -> Pattern {
         segments: OPENAI_PROJECT_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: OPENAI_PROJECT_DEF.trailing_run_guard,
     }
 }
 
@@ -838,6 +905,7 @@ pub fn openai_svcacct() -> Pattern {
         segments: OPENAI_SVCACCT_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: OPENAI_SVCACCT_DEF.trailing_run_guard,
     }
 }
 
@@ -850,6 +918,7 @@ pub fn aws_akia() -> Pattern {
         segments: AWS_AKIA_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: AWS_AKIA_DEF.trailing_run_guard,
     }
 }
 
@@ -862,6 +931,7 @@ pub fn aws_asia() -> Pattern {
         segments: AWS_ASIA_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: AWS_ASIA_DEF.trailing_run_guard,
     }
 }
 
@@ -874,6 +944,7 @@ pub fn github_classic() -> Pattern {
         segments: GITHUB_CLASSIC_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GITHUB_CLASSIC_DEF.trailing_run_guard,
     }
 }
 
@@ -886,6 +957,7 @@ pub fn github_fine_grained() -> Pattern {
         segments: GITHUB_FG_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GITHUB_FG_DEF.trailing_run_guard,
     }
 }
 
@@ -898,6 +970,7 @@ pub fn gcp() -> Pattern {
         segments: GCP_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GCP_DEF.trailing_run_guard,
     }
 }
 
@@ -910,6 +983,7 @@ pub fn openrouter() -> Pattern {
         segments: OPENROUTER_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: OPENROUTER_DEF.trailing_run_guard,
     }
 }
 
@@ -922,6 +996,7 @@ pub fn google_oauth_secret() -> Pattern {
         segments: GOOGLE_OAUTH_SECRET_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GOOGLE_OAUTH_SECRET_DEF.trailing_run_guard,
     }
 }
 
@@ -934,6 +1009,7 @@ pub fn slack_bot() -> Pattern {
         segments: SLACK_BOT_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: SLACK_BOT_DEF.trailing_run_guard,
     }
 }
 
@@ -946,6 +1022,7 @@ pub fn linear() -> Pattern {
         segments: LINEAR_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: LINEAR_DEF.trailing_run_guard,
     }
 }
 
@@ -958,6 +1035,7 @@ pub fn groq() -> Pattern {
         segments: GROQ_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GROQ_DEF.trailing_run_guard,
     }
 }
 
@@ -970,6 +1048,7 @@ pub fn perplexity() -> Pattern {
         segments: PERPLEXITY_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: PERPLEXITY_DEF.trailing_run_guard,
     }
 }
 
@@ -982,6 +1061,7 @@ pub fn cerebras() -> Pattern {
         segments: CEREBRAS_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: CEREBRAS_DEF.trailing_run_guard,
     }
 }
 
@@ -994,6 +1074,7 @@ pub fn stripe_live() -> Pattern {
         segments: STRIPE_LIVE_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: STRIPE_LIVE_DEF.trailing_run_guard,
     }
 }
 
@@ -1006,6 +1087,7 @@ pub fn stripe_test() -> Pattern {
         segments: STRIPE_TEST_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: STRIPE_TEST_DEF.trailing_run_guard,
     }
 }
 
@@ -1020,6 +1102,7 @@ pub fn clerk() -> Pattern {
         segments: CLERK_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: CLERK_DEF.trailing_run_guard,
     }
 }
 
@@ -1032,6 +1115,7 @@ pub fn svix() -> Pattern {
         segments: SVIX_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: SVIX_DEF.trailing_run_guard,
     }
 }
 
@@ -1044,6 +1128,7 @@ pub fn chromatic() -> Pattern {
         segments: CHROMATIC_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: CHROMATIC_DEF.trailing_run_guard,
     }
 }
 
@@ -1056,6 +1141,7 @@ pub fn github_oauth() -> Pattern {
         segments: GITHUB_OAUTH_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GITHUB_OAUTH_DEF.trailing_run_guard,
     }
 }
 
@@ -1068,6 +1154,7 @@ pub fn github_app_server() -> Pattern {
         segments: GITHUB_APP_SERVER_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GITHUB_APP_SERVER_DEF.trailing_run_guard,
     }
 }
 
@@ -1080,6 +1167,7 @@ pub fn github_app_user() -> Pattern {
         segments: GITHUB_APP_USER_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GITHUB_APP_USER_DEF.trailing_run_guard,
     }
 }
 
@@ -1092,6 +1180,7 @@ pub fn github_refresh() -> Pattern {
         segments: GITHUB_REFRESH_DEF.segments.clone(),
         salt: random_salt(),
         digests: vec![],
+        trailing_run_guard: GITHUB_REFRESH_DEF.trailing_run_guard,
     }
 }
 
@@ -1309,5 +1398,77 @@ mod tests {
                 def.identifier
             );
         }
+    }
+
+    #[test]
+    fn test_gcp_has_trailing_run_guard_default_others_none() {
+        for p in all() {
+            if p.identifier == "gcp" {
+                assert_eq!(p.trailing_run_guard, Some(GCP_TRAILING_RUN_GUARD));
+            } else {
+                assert_eq!(
+                    p.trailing_run_guard, None,
+                    "{} must not have a trailing_run_guard",
+                    p.identifier
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_gcp_trailing_run_guard_is_2048() {
+        assert_eq!(gcp().trailing_run_guard, Some(2048));
+    }
+
+    /// Every built-in def with a guard must have at least one Variable segment
+    /// (a guard on a fixed-length pattern is meaningless).
+    #[test]
+    fn assert_builtin_guards_valid() {
+        for def in all_defs() {
+            if def.trailing_run_guard.is_some() {
+                assert!(
+                    last_variable_charset(&def.segments).is_some(),
+                    "{} has a trailing_run_guard but no Variable segment",
+                    def.identifier
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_last_variable_charset_returns_last_of_multiple() {
+        let segs: Arc<[Segment]> = vec![
+            Segment::Literal(b"prefix-".to_vec()),
+            Segment::Variable {
+                charset: CharsetName::Digits,
+                min: 4,
+                max: 4,
+            },
+            Segment::Literal(b"-mid-".to_vec()),
+            Segment::Variable {
+                charset: CharsetName::HexLower,
+                min: 8,
+                max: 8,
+            },
+        ]
+        .into();
+        let def = StructuralDef {
+            identifier: "test_multi_variable".into(),
+            segments: segs,
+            trailing_run_guard: None,
+        };
+        assert_eq!(
+            last_variable_charset(&def.segments),
+            Some(CharsetName::HexLower)
+        );
+
+        let pattern = Pattern {
+            identifier: def.identifier.clone(),
+            segments: def.segments.clone(),
+            salt: random_salt(),
+            digests: vec![],
+            trailing_run_guard: def.trailing_run_guard,
+        };
+        assert_eq!(pattern.last_variable_charset(), Some(CharsetName::HexLower));
     }
 }

@@ -216,6 +216,9 @@ impl SecretsFile {
                     segments: segments.into(),
                     salt: entry.salt,
                     digests: entry.digests.clone(),
+                    // Patterns-file entries don't carry a guard field yet; wiring
+                    // this to the schema is a separate step.
+                    trailing_run_guard: None,
                 })
             })
             .collect()

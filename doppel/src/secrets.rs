@@ -275,6 +275,8 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         segments: arc_segments.clone(),
         salt,
         digests: vec![digest],
+        // Placeholder until registration options carry a guard knob (step-06).
+        trailing_run_guard: None,
     };
 
     // Sanity check: verify fake derivation succeeds at registration time.

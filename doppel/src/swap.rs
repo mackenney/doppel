@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::crypto::encrypt_secret;
 use crate::crypto::generate_session_key;
+use crate::fake::Charset;
 use crate::fake::FakeError;
 use crate::patterns::{Pattern, build_ac_automaton};
 use crate::types::{Entry, SwapError, SwapResult};
@@ -139,6 +140,20 @@ pub(crate) fn swap_with_ac(
     })
 }
 
+/// Returns true when at least `threshold` consecutive bytes starting at
+/// `start` all belong to `charset`. Early-exits at the first non-charset
+/// byte, at end of payload, or as soon as `threshold` bytes are confirmed —
+/// never reads past `start + threshold` (SPEC §Trailing Run Guard:
+/// "MAY stop reading as soon as the threshold is reached").
+#[allow(dead_code)] // wired into detection in a later step
+fn trailing_run_reaches(payload: &[u8], start: usize, charset: &Charset, threshold: usize) -> bool {
+    let end = start.saturating_add(threshold);
+    if end > payload.len() {
+        return false; // EOF before threshold → match stands (item 44)
+    }
+    payload[start..end].iter().all(|&b| charset.contains(b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +249,41 @@ mod tests {
             result1.entries[0].fake, result2.entries[0].fake,
             "INV-13: fake must be stable"
         );
+    }
+
+    #[test]
+    fn test_trailing_run_reaches_exact_threshold() {
+        let payload = b"0123456789";
+        let charset = crate::fake::digits_ref();
+        assert!(trailing_run_reaches(payload, 0, charset, 10));
+    }
+
+    #[test]
+    fn test_trailing_run_reaches_non_charset_byte_before_threshold() {
+        let mut payload = b"012345678".to_vec();
+        payload.push(b'x'); // 10th byte is not a digit
+        let charset = crate::fake::digits_ref();
+        assert!(!trailing_run_reaches(&payload, 0, charset, 10));
+    }
+
+    #[test]
+    fn test_trailing_run_reaches_eof_before_threshold() {
+        let payload = b"12345";
+        let charset = crate::fake::digits_ref();
+        assert!(!trailing_run_reaches(payload, 0, charset, 10));
+    }
+
+    #[test]
+    fn test_trailing_run_reaches_threshold_one() {
+        let payload = b"9";
+        let charset = crate::fake::digits_ref();
+        assert!(trailing_run_reaches(payload, 0, charset, 1));
+    }
+
+    #[test]
+    fn test_trailing_run_reaches_start_at_payload_end_does_not_panic() {
+        let payload = b"12345";
+        let charset = crate::fake::digits_ref();
+        assert!(!trailing_run_reaches(payload, payload.len(), charset, 1));
     }
 }
