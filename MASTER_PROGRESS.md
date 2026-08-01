@@ -15,6 +15,8 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## Queued
 
+- `trailing-run-guard` — opt-in trailing same-charset run guard suppressing base64-blob false positives (SPEC items 44-49 + item 18 guard tie-breaks, VC 18-25, GCP guarded by default, registration option) — [plans/trailing-run-guard/](plans/trailing-run-guard/PROGRESS.md)
+
 ## Completed
 
 - `initial-implementation` — full library + CLI (11 steps, 65 tests, all 23 INV invariants) commit 63672b1
