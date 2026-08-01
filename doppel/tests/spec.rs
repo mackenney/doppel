@@ -4,3 +4,6 @@
 
 #[path = "spec/inv.rs"]
 mod inv;
+
+#[path = "spec/inv_trailing_run_guard.rs"]
+mod inv_trailing_run_guard;

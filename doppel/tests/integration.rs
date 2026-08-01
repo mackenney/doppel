@@ -6,3 +6,6 @@ mod round_trip;
 
 #[path = "integration/detector.rs"]
 mod detector;
+
+#[path = "integration/guard.rs"]
+mod guard;
