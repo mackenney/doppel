@@ -35,6 +35,10 @@ pub struct PatternEntry {
     pub digests: Vec<[u8; 32]>,
     /// Ordered segment definitions defining detection structure and fake generation.
     pub segments: Vec<SegmentDef>,
+    /// Minimum trailing same-charset run length (bytes) that suppresses a match
+    /// (SPEC §Trailing Run Guard). Absent = no guard, unconditional detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_run_guard: Option<u64>,
 }
 
 /// Errors returned by [`SecretsFile`] operations.
@@ -133,6 +137,25 @@ impl SecretsFile {
         }
 
         for entry in &file.pattern {
+            if let Some(guard) = entry.trailing_run_guard {
+                if guard == 0 {
+                    return Err(SecretsFileError::InvalidSegment {
+                        identifier: entry.identifier.clone(),
+                        reason: "trailing_run_guard must be a positive integer".into(),
+                    });
+                }
+                if !entry
+                    .segments
+                    .iter()
+                    .any(|s| matches!(s, SegmentDef::Variable { .. }))
+                {
+                    return Err(SecretsFileError::InvalidSegment {
+                        identifier: entry.identifier.clone(),
+                        reason: "trailing_run_guard requires at least one variable segment".into(),
+                    });
+                }
+            }
+
             crate::segment::validate_segment_defs(&entry.segments).map_err(|e| {
                 SecretsFileError::InvalidSegment {
                     identifier: entry.identifier.clone(),
@@ -174,6 +197,26 @@ impl SecretsFile {
         self.pattern
             .iter()
             .map(|entry| {
+                if let Some(guard) = entry.trailing_run_guard {
+                    if guard == 0 {
+                        return Err(SecretsFileError::InvalidSegment {
+                            identifier: entry.identifier.clone(),
+                            reason: "trailing_run_guard must be a positive integer".into(),
+                        });
+                    }
+                    if !entry
+                        .segments
+                        .iter()
+                        .any(|s| matches!(s, SegmentDef::Variable { .. }))
+                    {
+                        return Err(SecretsFileError::InvalidSegment {
+                            identifier: entry.identifier.clone(),
+                            reason: "trailing_run_guard requires at least one variable segment"
+                                .into(),
+                        });
+                    }
+                }
+
                 // Validate segment structure (defense-in-depth for programmatically
                 // constructed SecretsFile values that bypass deserialize/add_structural_entry).
                 crate::segment::validate_segment_defs(&entry.segments).map_err(|e| {
@@ -211,14 +254,22 @@ impl SecretsFile {
                     }
                 }
 
+                let trailing_run_guard = entry
+                    .trailing_run_guard
+                    .map(|g| {
+                        usize::try_from(g).map_err(|_| SecretsFileError::InvalidSegment {
+                            identifier: entry.identifier.clone(),
+                            reason: "trailing_run_guard exceeds platform usize range".into(),
+                        })
+                    })
+                    .transpose()?;
+
                 Ok(Pattern {
                     identifier: entry.identifier.clone(),
                     segments: segments.into(),
                     salt: entry.salt,
                     digests: entry.digests.clone(),
-                    // Patterns-file entries don't carry a guard field yet; wiring
-                    // this to the schema is a separate step.
-                    trailing_run_guard: None,
+                    trailing_run_guard,
                 })
             })
             .collect()
@@ -259,6 +310,7 @@ impl SecretsFile {
             salt: pattern.salt,
             digests: pattern.digests.clone(),
             segments: seg_defs,
+            trailing_run_guard: pattern.trailing_run_guard.map(|g| g as u64),
         });
         Ok(())
     }
@@ -325,6 +377,7 @@ impl SecretsFile {
             salt,
             digests: vec![],
             segments,
+            trailing_run_guard: None,
         });
 
         Ok(())
@@ -347,6 +400,7 @@ impl SecretsFile {
                     salt,
                     digests: vec![],
                     segments: seg_defs,
+                    trailing_run_guard: def.trailing_run_guard.map(|g| g as u64),
                 });
             }
         }
@@ -450,6 +504,7 @@ mod tests {
                 },
                 SegmentDef::Literal { value: "AA".into() },
             ],
+            trailing_run_guard: None,
         });
         pf.generate_missing_structural_salts();
         let entry = pf
@@ -510,6 +565,7 @@ segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
                         max: 20,
                     },
                 ],
+                trailing_run_guard: None,
             }],
         };
         let patterns = pf.to_patterns().unwrap();
@@ -536,6 +592,7 @@ segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
                         max: 16,
                     },
                 ],
+                trailing_run_guard: None,
             }],
         };
         let bytes = pf.serialize().unwrap();
@@ -543,5 +600,144 @@ segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
         assert_eq!(pf2.pattern.len(), 1);
         assert_eq!(pf2.pattern[0].digests.len(), 1);
         assert_eq!(pf2.pattern[0].digests[0], digest);
+    }
+
+    #[test]
+    fn test_trailing_run_guard_round_trip() {
+        use crate::segment::SegmentDef;
+        let pf = SecretsFile {
+            version: 3,
+            pattern: vec![PatternEntry {
+                identifier: "guarded".into(),
+                salt: [0xDD; 32],
+                digests: vec![],
+                segments: vec![
+                    SegmentDef::Literal {
+                        value: "AIza".into(),
+                    },
+                    SegmentDef::Variable {
+                        charset: "url_safe_base64".into(),
+                        min: 35,
+                        max: 35,
+                    },
+                ],
+                trailing_run_guard: Some(2048),
+            }],
+        };
+        let bytes = pf.serialize().unwrap();
+        let pf2 = SecretsFile::deserialize(&bytes).unwrap();
+        assert_eq!(pf2.pattern[0].trailing_run_guard, Some(2048));
+        let patterns = pf2.to_patterns().unwrap();
+        assert_eq!(patterns[0].trailing_run_guard, Some(2048));
+    }
+
+    #[test]
+    fn test_trailing_run_guard_absent_deserializes_to_none() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "my_pattern"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "literal", value = "tok_" }, { type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
+"#;
+        let pf = SecretsFile::deserialize(pf_data).unwrap();
+        assert_eq!(pf.pattern[0].trailing_run_guard, None);
+    }
+
+    #[test]
+    fn test_trailing_run_guard_without_variable_segment_rejected() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "all_literal"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "literal", value = "fixed-token" }]
+trailing_run_guard = 2048
+"#;
+        let err = SecretsFile::deserialize(pf_data).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("trailing_run_guard requires at least one variable segment"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_trailing_run_guard_zero_rejected_on_load() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "zero_guard"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
+trailing_run_guard = 0
+"#;
+        let err = SecretsFile::deserialize(pf_data).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("trailing_run_guard must be a positive integer"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_trailing_run_guard_zero_rejected_in_to_patterns() {
+        use crate::segment::SegmentDef;
+        let pf = SecretsFile {
+            version: 3,
+            pattern: vec![PatternEntry {
+                identifier: "zero_guard".into(),
+                salt: [0xEE; 32],
+                digests: vec![],
+                segments: vec![SegmentDef::Variable {
+                    charset: "alphanumeric".into(),
+                    min: 10,
+                    max: 10,
+                }],
+                trailing_run_guard: Some(0),
+            }],
+        };
+        let err = match pf.to_patterns() {
+            Ok(_) => panic!("expected error"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string()
+                .contains("trailing_run_guard must be a positive integer"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_generate_missing_structural_salts_wires_gcp_guard() {
+        let mut pf = SecretsFile::new();
+        pf.generate_missing_structural_salts();
+        let gcp = pf.pattern.iter().find(|e| e.identifier == "gcp").unwrap();
+        assert_eq!(gcp.trailing_run_guard, Some(2048));
+        let anthropic = pf
+            .pattern
+            .iter()
+            .find(|e| e.identifier == "anthropic")
+            .unwrap();
+        assert_eq!(anthropic.trailing_run_guard, None);
+    }
+
+    #[test]
+    fn test_unguarded_pattern_serializes_without_trailing_run_guard_key() {
+        let mut pf = SecretsFile::new();
+        pf.generate_missing_structural_salts();
+        let bytes = pf.serialize().unwrap();
+        let s = std::str::from_utf8(&bytes).unwrap();
+        let anthropic_section = s
+            .split("[[pattern]]")
+            .find(|sec| sec.contains("identifier = \"anthropic\""))
+            .unwrap();
+        assert!(
+            !anthropic_section.contains("trailing_run_guard"),
+            "section: {anthropic_section}"
+        );
     }
 }
