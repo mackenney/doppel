@@ -7,6 +7,18 @@ use crate::fake::FakeError;
 use crate::patterns::{Pattern, build_ac_automaton};
 use crate::types::{Entry, SwapError, SwapResult};
 
+/// Selects the single best-matching pattern at `pos` from `patterns`.
+///
+/// Selection chain (SPEC §Pattern Detection step 5; Behavioral Invariants
+/// item 18):
+/// 1. Longest match wins (`capture.end` maximized).
+/// 2. On a length tie, a first-segment-Literal pattern beats a non-literal one.
+/// 3. On a further tie (same end, same first-segment kind), a guarded
+///    Pattern (`trailing_run_guard` is `Some`) beats an unguarded one.
+/// 4. Between two guarded Patterns tied through rule 3, the larger
+///    threshold wins.
+/// 5. Any remaining tie keeps the incumbent — pattern-set order, left
+///    unspecified by SPEC.
 fn find_best_match<'a>(
     payload: &[u8],
     pos: usize,
@@ -24,6 +36,19 @@ fn find_best_match<'a>(
                     if capture.end == bc.end
                         && pattern.first_segment_is_literal()
                         && !bp.first_segment_is_literal() =>
+                {
+                    (pattern, capture)
+                }
+                // INV-18: on persistent tie (same end, same first-segment kind), a
+                // guarded pattern beats an unguarded one, and between guarded patterns
+                // the larger threshold wins. Option<usize>'s derived ordering encodes
+                // both sub-clauses in one comparison: None < Some(t) covers
+                // guarded-beats-unguarded, Some(a) < Some(b) covers the threshold rule.
+                // Equal guards (including None vs None) fall through to the incumbent.
+                Some((bp, bc))
+                    if capture.end == bc.end
+                        && pattern.first_segment_is_literal() == bp.first_segment_is_literal()
+                        && pattern.trailing_run_guard > bp.trailing_run_guard =>
                 {
                     (pattern, capture)
                 }
@@ -180,6 +205,7 @@ fn trailing_run_reaches(payload: &[u8], start: usize, charset: &Charset, thresho
 mod tests {
     use super::*;
     use crate::patterns;
+    use crate::segment::{CharsetName, Segment};
 
     const TEST_ANTHROPIC_KEY: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const TEST_GCP_KEY: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -350,5 +376,136 @@ mod tests {
         let result = swap(TEST_GCP_KEY, &[patterns::gcp()]).expect("swap failed");
         assert_ne!(result.payload, TEST_GCP_KEY, "match must stand");
         assert_eq!(result.entries.len(), 1, "one entry for the standing match");
+    }
+
+    fn tok_payload(var_len: usize) -> Vec<u8> {
+        let mut payload = b"tok_".to_vec();
+        payload.extend(std::iter::repeat_n(b'a', var_len));
+        payload
+    }
+
+    fn literal_pattern(identifier: &str, var_len: usize, guard: Option<usize>) -> Pattern {
+        Pattern {
+            identifier: identifier.to_string(),
+            segments: vec![
+                Segment::Literal(b"tok_".to_vec()),
+                Segment::Variable {
+                    charset: CharsetName::Alphanumeric,
+                    min: var_len,
+                    max: var_len,
+                },
+            ]
+            .into(),
+            salt: [0u8; 32],
+            digests: vec![],
+            trailing_run_guard: guard,
+        }
+    }
+
+    fn opaque_pattern(identifier: &str, var_len: usize, guard: Option<usize>) -> Pattern {
+        Pattern {
+            identifier: identifier.to_string(),
+            segments: vec![
+                Segment::Opaque {
+                    value: b"tok_".to_vec(),
+                    charset: CharsetName::Alphanumeric,
+                },
+                Segment::Variable {
+                    charset: CharsetName::Alphanumeric,
+                    min: var_len,
+                    max: var_len,
+                },
+            ]
+            .into(),
+            salt: [0u8; 32],
+            digests: vec![],
+            trailing_run_guard: guard,
+        }
+    }
+
+    #[test]
+    fn test_find_best_match_guard_beats_unguarded_on_tie() {
+        // INV-18: on persistent tie, a guarded pattern beats an unguarded one,
+        // in both pattern-set orders.
+        let payload = tok_payload(30);
+        let guarded = literal_pattern("guarded", 30, Some(64));
+        let unguarded = literal_pattern("unguarded", 30, None);
+
+        let patterns = [guarded.clone(), unguarded.clone()];
+        let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
+        assert_eq!(winner.identifier, "guarded", "guarded wins tie (order A)");
+
+        let patterns = [unguarded, guarded];
+        let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
+        assert_eq!(winner.identifier, "guarded", "guarded wins tie (order B)");
+    }
+
+    #[test]
+    fn test_find_best_match_larger_threshold_wins_on_tie() {
+        // INV-18: between two guarded patterns tied on end and first-segment
+        // kind, the larger threshold wins, in both pattern-set orders.
+        let payload = tok_payload(30);
+        let large = literal_pattern("large_threshold", 30, Some(64));
+        let small = literal_pattern("small_threshold", 30, Some(8));
+
+        let patterns = [large.clone(), small.clone()];
+        let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
+        assert_eq!(
+            winner.identifier, "large_threshold",
+            "larger threshold wins tie (order A)"
+        );
+
+        let patterns = [small, large];
+        let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
+        assert_eq!(
+            winner.identifier, "large_threshold",
+            "larger threshold wins tie (order B)"
+        );
+    }
+
+    #[test]
+    fn test_find_best_match_longest_match_not_overridden_by_guard() {
+        // INV-18: the guard tie-break arm MUST NOT override the longest-match
+        // rule — a longer unguarded match beats a shorter guarded one.
+        let payload = tok_payload(34);
+        let longer_unguarded = literal_pattern("longer_unguarded", 34, None);
+        let shorter_guarded = literal_pattern("shorter_guarded", 30, Some(64));
+
+        let patterns = [shorter_guarded, longer_unguarded];
+        let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
+        assert_eq!(
+            winner.identifier, "longer_unguarded",
+            "longest match wins regardless of guard"
+        );
+    }
+
+    #[test]
+    fn test_find_best_match_literal_first_not_overridden_by_guard() {
+        // INV-18: the guard tie-break arm MUST NOT override the literal-first
+        // rule — an unguarded literal-first match beats a guarded opaque-first
+        // match of the same total length.
+        let payload = tok_payload(30);
+        let literal_unguarded = literal_pattern("literal_unguarded", 30, None);
+        let opaque_guarded = opaque_pattern("opaque_guarded", 30, Some(64));
+
+        let patterns = [opaque_guarded, literal_unguarded];
+        let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
+        assert_eq!(
+            winner.identifier, "literal_unguarded",
+            "literal-first wins regardless of guard"
+        );
+    }
+
+    #[test]
+    fn test_find_best_match_none_guard_tie_keeps_incumbent() {
+        // Fallback unchanged: both patterns unguarded and otherwise tied ->
+        // first-in-set kept, per pattern-set order left unspecified by SPEC.
+        let payload = tok_payload(30);
+        let first = literal_pattern("first", 30, None);
+        let second = literal_pattern("second", 30, None);
+
+        let patterns = [first, second];
+        let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
+        assert_eq!(winner.identifier, "first", "first-in-set kept on full tie");
     }
 }
