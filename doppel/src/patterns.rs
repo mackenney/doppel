@@ -92,9 +92,8 @@ fn match_segments(
 }
 
 /// Charset of the last Variable segment in `segs`. `None` if none exists.
-// Used by `Pattern::last_variable_charset` and by a guard-validity test; not yet
-// wired into detection (a later step consumes it for the trailing-run guard).
-#[allow(dead_code)] // used by Pattern::last_variable_charset (test-only for now) and unit tests
+/// Used by `Pattern::last_variable_charset`, which `swap::guard_fires` calls
+/// on every winning match to resolve the trailing-run guard's charset.
 fn last_variable_charset(segs: &[Segment]) -> Option<CharsetName> {
     segs.iter().rev().find_map(|s| match s {
         Segment::Variable { charset, .. } => Some(*charset),
@@ -784,7 +783,6 @@ impl Pattern {
 
     /// Charset of the last Variable segment — the guard charset per
     /// Behavioral Invariants item 45. `None` if no Variable segment exists.
-    #[allow(dead_code)] // consumed by later step wiring the guard into detection
     pub(crate) fn last_variable_charset(&self) -> Option<CharsetName> {
         last_variable_charset(&self.segments)
     }
