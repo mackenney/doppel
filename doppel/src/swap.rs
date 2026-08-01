@@ -75,7 +75,10 @@ fn generate_fake_for_match(
 
 /// Scan `payload` for secrets matching `patterns`, replace each with a
 /// structurally-equivalent fake, and return the swapped payload, encrypted
-/// entries, and a fresh session key.
+/// entries, and a fresh session key. If the winning match at a position
+/// declares a trailing run guard (SPEC §Trailing Run Guard), the guard's
+/// forward-only probe can suppress that single detection with no cascade
+/// to a losing candidate.
 ///
 /// For repeated calls with a fixed pattern set, prefer [`Detector`] to avoid
 /// rebuilding the Aho-Corasick automaton on every call.
@@ -98,6 +101,8 @@ pub fn swap(payload: &[u8], patterns: &[Pattern]) -> Result<SwapResult, SwapErro
 }
 
 /// Inner swap implementation reusing a pre-built Aho-Corasick automaton.
+/// Guard suppression semantics are identical to [`swap`] (SPEC §Trailing
+/// Run Guard).
 ///
 /// # Contract
 ///

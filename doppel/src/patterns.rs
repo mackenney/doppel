@@ -753,9 +753,11 @@ pub struct Pattern {
     pub(crate) salt: [u8; 32],
     /// HMAC digests; empty = family pattern, non-empty = instance/group pattern.
     pub(crate) digests: Vec<[u8; 32]>,
-    /// Optional trailing run guard threshold in bytes (SPEC §Trailing Run Guard).
-    /// `None` = unconditional detection (Behavioral Invariants item 48).
-    #[allow(dead_code)] // read by a later step's detection-time guard check
+    /// Opt-in trailing run guard threshold in bytes (SPEC §Trailing Run Guard).
+    /// `None` (the default for every constructor except [`gcp`]) preserves
+    /// unconditional detection (Behavioral Invariants item 48); `Some(n)`
+    /// suppresses the winning match when at least `n` trailing bytes belong
+    /// to its variable segment's charset.
     pub(crate) trailing_run_guard: Option<usize>,
 }
 
@@ -962,6 +964,13 @@ pub fn github_fine_grained() -> Pattern {
 }
 
 /// Returns a GCP/Gemini API key pattern (`AIza`) with an ephemeral salt.
+///
+/// Ships with a trailing run guard (SPEC §Trailing Run Guard) by default: its
+/// 4-byte prefix and single base64-charset variable region is the
+/// statistically weakest structure in the built-in set against large
+/// base64-encoded payloads (SPEC §Built-in Family Patterns). To remove the
+/// guard, load patterns from a patterns file and delete the
+/// `trailing_run_guard` key from the `gcp` entry.
 ///
 /// See [`anthropic`] for salt stability semantics.
 pub fn gcp() -> Pattern {
