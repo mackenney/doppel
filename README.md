@@ -77,13 +77,16 @@ let pat = register_with_options(b"my-super-secret-api-token", &SecretOptions {
     tail_anchor_len: 0,      // no trailing anchor
     restrict_charset: false, // fake uses wide charset by default
     force: false,            // reject secrets below 83-bit entropy
+    trailing_run_guard: None, // opt-in suppression near large same-charset blobs
 })?
 ```
 
 `SecretOptions` controls the detection anchor length (`anchor_len`, default 3),
-an optional trailing anchor (`tail_anchor_len`), fake charset restriction, and an
-entropy override (`force`). `register` is shorthand for `register_with_options` with
-all defaults.
+an optional trailing anchor (`tail_anchor_len`), fake charset restriction, an
+entropy override (`force`), and an optional trailing run guard
+(`trailing_run_guard`, default `None`) that suppresses matches immediately
+followed by a long run of same-charset bytes. `register` is shorthand for
+`register_with_options` with all defaults.
 
 Source: [`doppel/src/secrets.rs`](doppel/src/secrets.rs).
 

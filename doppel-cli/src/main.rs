@@ -321,6 +321,7 @@ fn run_register(
             tail_anchor_len,
             restrict_charset,
             force,
+            ..SecretOptions::default()
         };
         let pattern = register_with_options(&secret, &opts)?;
         pf.add_secret_pattern(id.to_string(), &pattern)?;

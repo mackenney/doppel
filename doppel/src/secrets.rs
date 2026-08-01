@@ -35,6 +35,20 @@ pub struct SecretOptions {
     /// SPEC: default false; use only when target system requires.
     pub restrict_charset: bool,
 
+    /// Optional trailing run guard threshold in bytes (default `None` — no guard).
+    ///
+    /// When set, the produced Pattern declares a trailing run guard (SPEC
+    /// §Trailing Run Guard): a winning match followed by at least this many
+    /// consecutive guard-charset bytes is suppressed as a likely slice of an
+    /// encoded blob. The guard charset is the Pattern's single `variable`
+    /// segment charset — wide by default, or the detected charset when
+    /// `restrict_charset` is true. Must be positive; zero is rejected with
+    /// [`SecretError::ZeroTrailingRunGuard`]. Registered patterns are
+    /// HMAC-gated, so the guard suppresses only genuine occurrences of the
+    /// secret embedded directly in same-charset runs — leave `None` unless
+    /// that trade-off is intended.
+    pub trailing_run_guard: Option<usize>,
+
     /// Suppress entropy hard failure (83-bit threshold).
     /// SPEC: entropy warning is still emitted; only hard fail is suppressed.
     pub force: bool,
@@ -47,6 +61,7 @@ impl Default for SecretOptions {
             tail_anchor_len: 0,
             restrict_charset: false,
             force: false,
+            trailing_run_guard: None,
         }
     }
 }
@@ -91,6 +106,10 @@ pub enum SecretError {
         attempts: u32,
     },
 
+    /// `trailing_run_guard` is zero — the guard threshold must be a positive byte count.
+    #[error("trailing_run_guard must be a positive integer (got 0)")]
+    ZeroTrailingRunGuard,
+
     /// Registration rejected due to insufficient entropy in variable portion.
     /// Use `force: true` in `SecretOptions` to override.
     #[error(
@@ -107,7 +126,7 @@ pub enum SecretError {
 /// Register an arbitrary secret with default options and produce a registered-secret Pattern.
 ///
 /// Returns `Err` instead of panicking on invalid input. See [`SecretError`] for error conditions.
-/// See [`register_with_options`] to customise anchor lengths, charset restriction, or force.
+/// See [`register_with_options`] to customise anchor lengths, charset restriction, a trailing run guard, or force.
 ///
 /// # Examples
 ///
@@ -138,6 +157,7 @@ pub fn register(secret: &[u8]) -> Result<Pattern, SecretError> {
 /// - [`SecretError::NoVariableBytes`] if `anchor_len + tail_anchor_len >= secret.len()`.
 /// - [`SecretError::InsufficientEntropy`] if entropy < 83 bits and `!opts.force`.
 /// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts.
+/// - [`SecretError::ZeroTrailingRunGuard`] if `trailing_run_guard` is `Some(0)`.
 pub fn register_with_options(secret: &[u8], opts: &SecretOptions) -> Result<Pattern, SecretError> {
     register_with_options_rng(secret, opts, &mut OsRng)
 }
@@ -173,6 +193,9 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
             "doppel: anchor_len {} is below the recommended minimum of 3; short anchors generate more false Aho-Corasick candidates",
             opts.anchor_len
         );
+    }
+    if opts.trailing_run_guard == Some(0) {
+        return Err(SecretError::ZeroTrailingRunGuard);
     }
 
     let anchor_len = opts.anchor_len;
@@ -275,8 +298,7 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         segments: arc_segments.clone(),
         salt,
         digests: vec![digest],
-        // Placeholder until registration options carry a guard knob (step-06).
-        trailing_run_guard: None,
+        trailing_run_guard: opts.trailing_run_guard,
     };
 
     // Sanity check: verify fake derivation succeeds at registration time.
@@ -346,5 +368,55 @@ mod tests {
         };
         let mut rng = StdRng::seed_from_u64(3);
         assert!(register_with_options_rng(secret, &opts, &mut rng).is_ok());
+    }
+
+    #[test]
+    fn test_zero_trailing_run_guard_rejected() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            trailing_run_guard: Some(0),
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(4);
+        assert!(matches!(
+            register_with_options_rng(secret, &opts, &mut rng),
+            Err(SecretError::ZeroTrailingRunGuard)
+        ));
+    }
+
+    #[test]
+    fn test_trailing_run_guard_wired_into_pattern() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            trailing_run_guard: Some(2048),
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(5);
+        let pattern = register_with_options_rng(secret, &opts, &mut rng).unwrap();
+        assert_eq!(pattern.trailing_run_guard, Some(2048));
+    }
+
+    #[test]
+    fn test_default_options_have_no_trailing_run_guard() {
+        let secret = b"my-long-enough-secret-value";
+        let mut rng = StdRng::seed_from_u64(6);
+        let pattern = register_with_rng(secret, &mut rng).unwrap();
+        assert_eq!(pattern.trailing_run_guard, None);
+    }
+
+    #[test]
+    fn test_restrict_charset_guard_uses_detected_charset() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            restrict_charset: true,
+            trailing_run_guard: Some(2048),
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        let pattern = register_with_options_rng(secret, &opts, &mut rng).unwrap();
+        let anchor_len = opts.anchor_len;
+        let middle_bytes = &secret[anchor_len..secret.len() - opts.tail_anchor_len];
+        let detected = crate::segment::detect_charset_name(middle_bytes);
+        assert_eq!(pattern.last_variable_charset(), Some(detected));
     }
 }
