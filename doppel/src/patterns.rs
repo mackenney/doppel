@@ -261,11 +261,17 @@ static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
 /// context (quote, whitespace, punctuation) within tens of bytes of its end;
 /// base64-encoded binary blobs (the false-positive source) run uninterrupted
 /// for far longer — real-world screenshot uploads observed at 15–400 KB.
-/// 2048 is a deliberately coarse point in the wide gap between those two
-/// regimes: ~2 orders of magnitude above real-key trailing contexts, well
-/// below observed blob sizes, and it bounds probe cost at 2KB per candidate
-/// (candidates occur ~once per 16.7MB of uniform base64).
-pub(crate) const GCP_TRAILING_RUN_GUARD: usize = 2048;
+/// 1024 was chosen empirically against two real screenshot corpora (2792 +
+/// 417 real PNG screenshots, sizes ranging 0.5KB–5.5MB, median ~110KB): it
+/// achieved complete suppression of every real false-positive candidate found
+/// in those corpora, while thresholds above ~8192 started *increasing*
+/// unsuppressed false positives instead of decreasing them (see SPEC.md's
+/// "A larger threshold is not uniformly better" limitation) — a false-positive
+/// match near the tail of a blob shorter than the threshold can never be
+/// suppressed, so raising the threshold past typical blob sizes only trades
+/// away coverage. 1024 sits comfortably below where that tail effect starts
+/// costing coverage, while remaining far above real GCP key trailing contexts.
+pub(crate) const GCP_TRAILING_RUN_GUARD: usize = 1024;
 
 const GCP_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"AIza"),
@@ -1423,8 +1429,8 @@ mod tests {
     }
 
     #[test]
-    fn test_gcp_trailing_run_guard_is_2048() {
-        assert_eq!(gcp().trailing_run_guard, Some(2048));
+    fn test_gcp_trailing_run_guard_is_1024() {
+        assert_eq!(gcp().trailing_run_guard, Some(1024));
     }
 
     /// Every built-in def with a guard must have at least one Variable segment

@@ -10,6 +10,12 @@ use crate::patterns::{self, Pattern};
 use crate::segment::{Segment, SegmentDef};
 use crate::serde_helpers::{hex_32, hex_vec_32};
 
+/// Advisory threshold above which a loaded `trailing_run_guard` warns (SPEC item 50).
+/// Real-world encoded blobs run tens of KB to a few MB; a threshold well past that
+/// range does not improve suppression and can reduce it near blob tails (see SPEC.md's
+/// "A larger threshold is not uniformly better" limitation). Advisory only — never rejected.
+const TRAILING_RUN_GUARD_WARN_THRESHOLD: u64 = 20_000;
+
 /// Top-level patterns file structure (version 3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretsFile {
@@ -144,6 +150,16 @@ impl SecretsFile {
                         reason: "trailing_run_guard must be a positive integer".into(),
                     });
                 }
+                if guard > TRAILING_RUN_GUARD_WARN_THRESHOLD {
+                    log::warn!(
+                        "doppel: pattern '{}' trailing_run_guard {} exceeds {}; real-world blob sizes are \
+                         tens of KB to a few MB, so a threshold this large does not improve suppression and \
+                         can reduce it near blob tails",
+                        entry.identifier,
+                        guard,
+                        TRAILING_RUN_GUARD_WARN_THRESHOLD
+                    );
+                }
                 if !entry
                     .segments
                     .iter()
@@ -203,6 +219,16 @@ impl SecretsFile {
                             identifier: entry.identifier.clone(),
                             reason: "trailing_run_guard must be a positive integer".into(),
                         });
+                    }
+                    if guard > TRAILING_RUN_GUARD_WARN_THRESHOLD {
+                        log::warn!(
+                            "doppel: pattern '{}' trailing_run_guard {} exceeds {}; real-world blob sizes are \
+                             tens of KB to a few MB, so a threshold this large does not improve suppression and \
+                             can reduce it near blob tails",
+                            entry.identifier,
+                            guard,
+                            TRAILING_RUN_GUARD_WARN_THRESHOLD
+                        );
                     }
                     if !entry
                         .segments
@@ -716,7 +742,7 @@ trailing_run_guard = 0
         let mut pf = SecretsFile::new();
         pf.generate_missing_structural_salts();
         let gcp = pf.pattern.iter().find(|e| e.identifier == "gcp").unwrap();
-        assert_eq!(gcp.trailing_run_guard, Some(2048));
+        assert_eq!(gcp.trailing_run_guard, Some(1024));
         let anthropic = pf
             .pattern
             .iter()

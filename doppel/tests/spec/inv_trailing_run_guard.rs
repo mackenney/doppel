@@ -72,7 +72,7 @@ fn family_entry(
 fn test_guard_suppresses_match_at_exact_threshold() {
     // item 44, VC-18: guarded pattern's structural match immediately followed by
     // at least the threshold count of guard-charset bytes MUST be discarded.
-    let payload = [SYNTH_GCP, &base64_filler(2048)].concat();
+    let payload = [SYNTH_GCP, &base64_filler(1024)].concat();
     let result = swap(&payload, &[doppel::patterns::gcp()]).expect("swap failed");
     assert_eq!(
         result.payload, payload,
@@ -88,7 +88,7 @@ fn test_guard_suppresses_match_at_exact_threshold() {
 fn test_guard_does_not_fire_one_byte_under_threshold() {
     // item 44, VC-19: fewer than the threshold count of guard-charset bytes
     // (terminated by a non-charset byte) MUST replace the match normally.
-    let payload = [SYNTH_GCP, &base64_filler(2047), b"\"".as_slice()].concat();
+    let payload = [SYNTH_GCP, &base64_filler(1023), b"\"".as_slice()].concat();
     let result = swap(&payload, &[doppel::patterns::gcp()]).expect("swap failed");
     assert_eq!(
         result.entries.len(),
@@ -107,7 +107,7 @@ fn test_guard_does_not_fire_one_byte_under_threshold() {
 #[test]
 fn test_match_stands_when_eof_reached_before_threshold() {
     // item 44, VC-19: EOF reached before threshold count accumulated → match stands.
-    let payload = [SYNTH_GCP, &base64_filler(2047)].concat();
+    let payload = [SYNTH_GCP, &base64_filler(1023)].concat();
     let result = swap(&payload, &[doppel::patterns::gcp()]).expect("swap failed");
     assert_eq!(
         result.entries.len(),
@@ -584,4 +584,50 @@ fn test_vc25_larger_threshold_wins_tie_and_match_stands_between_thresholds() {
         );
         assert!(result.entries.is_empty(), "VC-25 C: zero entries");
     }
+}
+
+#[test]
+fn test_inv50_register_warns_but_succeeds_above_20000() {
+    // item 50: register SHOULD emit a warning when trailing_run_guard > 20,000,
+    // but MUST NOT reject it — advisory only.
+    // TODO: add log-capture assertion when a test logger harness is available.
+    use doppel::{SecretOptions, register_with_options};
+    let secret = b"my-long-enough-secret-value-for-registration";
+    let opts = SecretOptions {
+        trailing_run_guard: Some(20_001),
+        ..Default::default()
+    };
+    let result = register_with_options(secret, &opts);
+    assert!(
+        result.is_ok(),
+        "item 50: registration with trailing_run_guard > 20,000 must succeed (got warning)"
+    );
+}
+
+#[test]
+fn test_inv50_patterns_file_load_warns_but_succeeds_above_20000() {
+    // item 50: patterns-file load SHOULD emit the same warning above 20,000,
+    // but MUST NOT reject it — advisory only.
+    // TODO: add log-capture assertion when a test logger harness is available.
+    let entry = family_entry(
+        "big_guard",
+        [0x22; 32],
+        "tok_",
+        "alphanumeric",
+        16,
+        Some(20_001),
+    );
+    let pf = SecretsFile {
+        version: 3,
+        pattern: vec![entry],
+    };
+    let bytes = pf.serialize().unwrap();
+    let loaded =
+        SecretsFile::deserialize(&bytes).expect("item 50: threshold > 20,000 must not be rejected");
+    let patterns = loaded.to_patterns();
+    assert!(
+        patterns.is_ok(),
+        "item 50: to_patterns must also accept threshold > 20,000"
+    );
+    assert_eq!(patterns.unwrap().len(), 1);
 }

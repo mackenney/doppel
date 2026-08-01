@@ -356,7 +356,7 @@ mod tests {
     fn test_swap_gcp_match_stands_run_terminated_before_threshold() {
         // Item 44: trailing run terminated by a non-charset byte before
         // reaching the threshold — match stands.
-        let mut trailing = vec![b'a'; 2047];
+        let mut trailing = vec![b'a'; 1023];
         trailing.push(b'"');
         let payload = [TEST_GCP_KEY, &trailing].concat();
         let result = swap(&payload, &[patterns::gcp()]).expect("swap failed");

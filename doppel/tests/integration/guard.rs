@@ -75,7 +75,7 @@ fn test_large_base64_blob_with_embedded_prefix_roundtrip() {
     // offsets by chance must not be corrupted — the guard defends it.
     let mut blob = base64_filler(64 * 1024);
     // Force several literal "AIza" occurrences deep inside the blob, each
-    // followed by far more than 2048 bytes of base64-charset trailing data.
+    // followed by far more than 1024 bytes of base64-charset trailing data.
     for offset in [1000usize, 20_000, 40_000] {
         blob[offset..offset + 4].copy_from_slice(b"AIza");
     }
