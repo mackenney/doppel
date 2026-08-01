@@ -104,12 +104,7 @@ pub(crate) fn swap_with_ac(
         }
 
         match find_best_match(payload, pos, patterns) {
-            None => {
-                // INV-2: copy this byte unchanged
-                output.push(payload[pos]);
-                pos += 1;
-            }
-            Some((pattern, capture)) => {
+            Some((pattern, capture)) if !guard_fires(pattern, payload, &capture) => {
                 let matched_slice = &payload[pos..capture.end];
 
                 let (fake, _entry_idx) = if let Some(&idx) = seen.get(matched_slice) {
@@ -129,6 +124,15 @@ pub(crate) fn swap_with_ac(
                 output.extend_from_slice(&fake);
                 pos = capture.end;
             }
+            _ => {
+                // INV-2: copy this byte unchanged
+                // Item 46: suppression yields no detection at this position;
+                // no cascade to a losing candidate. Scanning resumes at pos+1,
+                // so any secret inside the probe window is still detected
+                // independently at its own position (item 47 / VC-20).
+                output.push(payload[pos]);
+                pos += 1;
+            }
         }
     }
 
@@ -140,12 +144,30 @@ pub(crate) fn swap_with_ac(
     })
 }
 
+/// Returns true when the winning match's trailing run guard suppresses the
+/// detection: the pattern declares a threshold, its final Variable segment
+/// charset is resolvable, and the run of that charset immediately following
+/// the match extends at least `threshold` bytes (SPEC §Trailing Run Guard,
+/// items 44-46). Applies only to the single selected winner; never re-enters
+/// candidate selection (item 46) and does not fire when the pattern has no
+/// guard configured (item 48).
+fn guard_fires(pattern: &Pattern, payload: &[u8], capture: &crate::segment::MatchCapture) -> bool {
+    let Some(threshold) = pattern.trailing_run_guard else {
+        return false;
+    };
+    let Some(charset) = pattern.last_variable_charset() else {
+        // Unreachable for validated patterns (item 45 enforced at load);
+        // fail open to "no suppression" rather than panic.
+        return false;
+    };
+    trailing_run_reaches(payload, capture.end, charset.resolve(), threshold)
+}
+
 /// Returns true when at least `threshold` consecutive bytes starting at
 /// `start` all belong to `charset`. Early-exits at the first non-charset
 /// byte, at end of payload, or as soon as `threshold` bytes are confirmed —
 /// never reads past `start + threshold` (SPEC §Trailing Run Guard:
 /// "MAY stop reading as soon as the threshold is reached").
-#[allow(dead_code)] // wired into detection in a later step
 fn trailing_run_reaches(payload: &[u8], start: usize, charset: &Charset, threshold: usize) -> bool {
     let end = start.saturating_add(threshold);
     if end > payload.len() {
@@ -160,6 +182,7 @@ mod tests {
     use crate::patterns;
 
     const TEST_ANTHROPIC_KEY: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const TEST_GCP_KEY: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     #[test]
     fn test_swap_structural_basic() {
@@ -285,5 +308,47 @@ mod tests {
         let payload = b"12345";
         let charset = crate::fake::digits_ref();
         assert!(!trailing_run_reaches(payload, payload.len(), charset, 1));
+    }
+
+    #[test]
+    fn test_swap_gcp_suppressed_by_long_base64_trailing_run() {
+        // Item 44-46: GCP key immediately followed by >= threshold base64
+        // bytes suppresses the match entirely.
+        let trailing = vec![b'a'; 2048];
+        let payload = [TEST_GCP_KEY, &trailing].concat();
+        let result = swap(&payload, &[patterns::gcp()]).expect("swap failed");
+        assert_eq!(result.payload, payload, "suppressed: payload unchanged");
+        assert!(result.entries.is_empty(), "suppressed: no entries");
+    }
+
+    #[test]
+    fn test_swap_gcp_match_stands_run_terminated_before_threshold() {
+        // Item 44: trailing run terminated by a non-charset byte before
+        // reaching the threshold — match stands.
+        let mut trailing = vec![b'a'; 2047];
+        trailing.push(b'"');
+        let payload = [TEST_GCP_KEY, &trailing].concat();
+        let result = swap(&payload, &[patterns::gcp()]).expect("swap failed");
+        assert_ne!(result.payload, payload, "match must stand");
+        assert_eq!(result.entries.len(), 1, "one entry for the standing match");
+    }
+
+    #[test]
+    fn test_swap_gcp_match_stands_eof_before_threshold() {
+        // Item 44: payload ends before threshold bytes accumulate — match stands.
+        let trailing = vec![b'a'; 100];
+        let payload = [TEST_GCP_KEY, &trailing].concat();
+        let result = swap(&payload, &[patterns::gcp()]).expect("swap failed");
+        assert_ne!(result.payload, payload, "match must stand");
+        assert_eq!(result.entries.len(), 1, "one entry for the standing match");
+    }
+
+    #[test]
+    fn test_swap_gcp_match_stands_zero_trailing_bytes() {
+        // Item 44: key at the very end of the payload — zero trailing bytes,
+        // well under the threshold — match stands.
+        let result = swap(TEST_GCP_KEY, &[patterns::gcp()]).expect("swap failed");
+        assert_ne!(result.payload, TEST_GCP_KEY, "match must stand");
+        assert_eq!(result.entries.len(), 1, "one entry for the standing match");
     }
 }
