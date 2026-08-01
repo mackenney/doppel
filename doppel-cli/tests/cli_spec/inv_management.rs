@@ -429,3 +429,111 @@ fn test_vc16_remove_eliminates_identifier() {
         "VC-16: other entries must be preserved"
     );
 }
+
+#[test]
+fn test_register_trailing_run_guard_written_to_patterns_file() {
+    // SPEC §CLI Contract: register MUST accept --trailing-run-guard <n>, wiring it
+    // into the produced Pattern's trailing_run_guard field.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "trg-entry"])
+        .args(["--trailing-run-guard", "2048"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let status = child.wait_with_output().unwrap().status;
+    assert!(status.success(), "register --trailing-run-guard failed");
+
+    let after = std::fs::read_to_string(&pat).unwrap();
+    assert!(
+        after.contains("trailing_run_guard = 2048"),
+        "register must write trailing_run_guard = 2048 to the patterns file; got:\n{after}"
+    );
+
+    let pf = doppel::SecretsFile::deserialize(after.as_bytes()).unwrap();
+    let entry = pf
+        .pattern
+        .iter()
+        .find(|e| e.identifier == "trg-entry")
+        .unwrap();
+    assert_eq!(entry.trailing_run_guard, Some(2048));
+}
+
+#[test]
+fn test_register_zero_trailing_run_guard_rejected() {
+    // SPEC §Registration Options: registration MUST fail with a clear error when
+    // trailing-run-guard is supplied as zero.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "trg-zero-entry"])
+        .args(["--trailing-run-guard", "0"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !output.status.success(),
+        "register --trailing-run-guard 0 must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("trailing_run_guard"),
+        "stderr must name the rejected field: {stderr}"
+    );
+}
+
+#[test]
+fn test_register_default_has_no_trailing_run_guard() {
+    // Confirms --trailing-run-guard defaults to absent when omitted, per
+    // SPEC §Registration Options ("Absent is the recommended default").
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "no-trg-entry"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let status = child.wait_with_output().unwrap().status;
+    assert!(status.success(), "register failed");
+
+    let after = std::fs::read_to_string(&pat).unwrap();
+    let pf = doppel::SecretsFile::deserialize(after.as_bytes()).unwrap();
+    let entry = pf
+        .pattern
+        .iter()
+        .find(|e| e.identifier == "no-trg-entry")
+        .unwrap();
+    assert_eq!(entry.trailing_run_guard, None);
+}

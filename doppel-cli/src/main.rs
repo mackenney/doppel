@@ -85,6 +85,15 @@ enum Commands {
         /// Generate fake bytes from the secret's own charset only.
         #[arg(long)]
         restrict_charset: bool,
+        /// Trailing run guard threshold in bytes (default: none — no guard).
+        ///
+        /// When set, the produced Pattern declares a trailing run guard: a
+        /// winning match followed by at least this many consecutive
+        /// guard-charset bytes is suppressed as a likely slice of an encoded
+        /// blob. The guard charset is the Pattern's single `variable` segment
+        /// charset. Must be positive; zero is rejected with a clear error.
+        #[arg(long)]
+        trailing_run_guard: Option<usize>,
         /// Suppress entropy hard-fail (83-bit threshold); warning is still emitted.
         #[arg(long, short = 'f')]
         force: bool,
@@ -247,6 +256,9 @@ fn run_init(patterns_path: &Path, force: bool) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+// Mirrors the CLI's `register` option surface 1:1; splitting it into a config
+// struct would add indirection with no behavioral benefit for a single call site.
+#[allow(clippy::too_many_arguments)]
 fn run_register(
     patterns_path: &Path,
     identifier: Option<&str>,
@@ -254,6 +266,7 @@ fn run_register(
     anchor_len: usize,
     tail_anchor_len: usize,
     restrict_charset: bool,
+    trailing_run_guard: Option<usize>,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::{SecretOptions, SecretsFile, register_with_options};
@@ -320,8 +333,8 @@ fn run_register(
             anchor_len,
             tail_anchor_len,
             restrict_charset,
+            trailing_run_guard,
             force,
-            ..SecretOptions::default()
         };
         let pattern = register_with_options(&secret, &opts)?;
         pf.add_secret_pattern(id.to_string(), &pattern)?;
@@ -861,6 +874,7 @@ fn main() {
             anchor_len,
             tail_anchor_len,
             restrict_charset,
+            trailing_run_guard,
             force,
         } => run_register(
             &patterns,
@@ -869,6 +883,7 @@ fn main() {
             anchor_len,
             tail_anchor_len,
             restrict_charset,
+            trailing_run_guard,
             force,
         ),
         Commands::Define {
