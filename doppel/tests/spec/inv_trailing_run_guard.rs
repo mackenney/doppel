@@ -65,6 +65,7 @@ fn family_entry(
             },
         ],
         trailing_run_guard: guard,
+        trailing_run_guard_charset: None,
     }
 }
 
@@ -149,6 +150,7 @@ fn test_guard_charset_is_last_variable_segment() {
             },
         ],
         trailing_run_guard: Some(16),
+        trailing_run_guard_charset: None,
     };
     let pf = SecretsFile {
         version: 3,

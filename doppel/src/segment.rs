@@ -254,7 +254,10 @@ pub enum SegmentDef {
 /// - All charset names are recognised
 /// - All Variable segments have min <= max
 /// - All Variable segments have min >= 1
-pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDefError> {
+pub(crate) fn validate_segment_defs(
+    defs: &[SegmentDef],
+    allow_no_variable: bool,
+) -> Result<(), SegmentDefError> {
     let mut has_variable = false;
     match defs.first() {
         Some(SegmentDef::Literal { value }) | Some(SegmentDef::Opaque { value, .. }) => {
@@ -302,7 +305,7 @@ pub(crate) fn validate_segment_defs(defs: &[SegmentDef]) -> Result<(), SegmentDe
             _ => {}
         }
     }
-    if !has_variable {
+    if !has_variable && !allow_no_variable {
         return Err(SegmentDefError::NoVariableSegment);
     }
     Ok(())
@@ -450,7 +453,7 @@ mod tests {
         let defs = vec![SegmentDef::Literal {
             value: "prefix".into(),
         }];
-        let err = validate_segment_defs(&defs).unwrap_err();
+        let err = validate_segment_defs(&defs, false).unwrap_err();
         assert!(err.to_string().contains("at least one variable segment"));
     }
 
@@ -466,7 +469,7 @@ mod tests {
                 max: 10,
             },
         ];
-        let err = validate_segment_defs(&defs).unwrap_err();
+        let err = validate_segment_defs(&defs, false).unwrap_err();
         assert!(err.to_string().contains("unknown charset \"bogus\""));
     }
 
@@ -507,7 +510,7 @@ mod tests {
                 max: 8,
             },
         ];
-        let err = validate_segment_defs(&defs).unwrap_err();
+        let err = validate_segment_defs(&defs, false).unwrap_err();
         assert!(matches!(
             err,
             SegmentDefError::FirstSegmentTooShort { len: 0 }
@@ -525,7 +528,7 @@ mod tests {
                 max: 8,
             },
         ];
-        let err = validate_segment_defs(&defs).unwrap_err();
+        let err = validate_segment_defs(&defs, false).unwrap_err();
         assert!(matches!(
             err,
             SegmentDefError::FirstSegmentTooShort { len: 1 }
@@ -543,7 +546,7 @@ mod tests {
                 max: 8,
             },
         ];
-        assert!(validate_segment_defs(&defs).is_ok());
+        assert!(validate_segment_defs(&defs, false).is_ok());
     }
 
     #[test]

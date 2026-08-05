@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::patterns::{self, Pattern};
-use crate::segment::{Segment, SegmentDef};
+use crate::segment::{CharsetName, Segment, SegmentDef};
 use crate::serde_helpers::{hex_32, hex_vec_32};
 
 /// Advisory threshold above which a loaded `trailing_run_guard` warns (SPEC item 50).
@@ -45,6 +45,11 @@ pub struct PatternEntry {
     /// (SPEC §Trailing Run Guard). Absent = no guard, unconditional detection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trailing_run_guard: Option<u64>,
+    /// Explicit trailing-run guard charset name (SPEC.md Behavioral Invariants item 51).
+    /// Requires `trailing_run_guard` to also be present. Absent = infer from the
+    /// last Variable segment's charset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_run_guard_charset: Option<String>,
 }
 
 /// Errors returned by [`SecretsFile`] operations.
@@ -160,23 +165,44 @@ impl SecretsFile {
                         TRAILING_RUN_GUARD_WARN_THRESHOLD
                     );
                 }
-                if !entry
-                    .segments
-                    .iter()
-                    .any(|s| matches!(s, SegmentDef::Variable { .. }))
-                {
+            } else if entry.trailing_run_guard_charset.is_some() {
+                return Err(SecretsFileError::InvalidSegment {
+                    identifier: entry.identifier.clone(),
+                    reason: "trailing_run_guard_charset requires trailing_run_guard".into(),
+                });
+            }
+
+            if let Some(name) = &entry.trailing_run_guard_charset {
+                if CharsetName::from_name(name).is_none() {
                     return Err(SecretsFileError::InvalidSegment {
                         identifier: entry.identifier.clone(),
-                        reason: "trailing_run_guard requires at least one variable segment".into(),
+                        reason: format!("unrecognised trailing_run_guard_charset \"{name}\""),
                     });
                 }
             }
 
-            crate::segment::validate_segment_defs(&entry.segments).map_err(|e| {
-                SecretsFileError::InvalidSegment {
+            if entry.trailing_run_guard.is_some()
+                && entry.trailing_run_guard_charset.is_none()
+                && !entry
+                    .segments
+                    .iter()
+                    .any(|s| matches!(s, SegmentDef::Variable { .. }))
+            {
+                return Err(SecretsFileError::InvalidSegment {
                     identifier: entry.identifier.clone(),
-                    reason: e.to_string(),
-                }
+                    reason: "trailing_run_guard requires at least one variable segment".into(),
+                });
+            }
+
+            crate::segment::validate_segment_defs(
+                &entry.segments,
+                // allow_no_variable: item 51 relaxes the no-variable-segment check
+                // only when an explicit guard charset is present alongside the threshold.
+                entry.trailing_run_guard.is_some() && entry.trailing_run_guard_charset.is_some(),
+            )
+            .map_err(|e| SecretsFileError::InvalidSegment {
+                identifier: entry.identifier.clone(),
+                reason: e.to_string(),
             })?;
 
             // INV-31: instance patterns must have fixed-length variable segments.
@@ -230,26 +256,46 @@ impl SecretsFile {
                             TRAILING_RUN_GUARD_WARN_THRESHOLD
                         );
                     }
-                    if !entry
-                        .segments
-                        .iter()
-                        .any(|s| matches!(s, SegmentDef::Variable { .. }))
-                    {
+                } else if entry.trailing_run_guard_charset.is_some() {
+                    return Err(SecretsFileError::InvalidSegment {
+                        identifier: entry.identifier.clone(),
+                        reason: "trailing_run_guard_charset requires trailing_run_guard".into(),
+                    });
+                }
+
+                if let Some(name) = &entry.trailing_run_guard_charset {
+                    if CharsetName::from_name(name).is_none() {
                         return Err(SecretsFileError::InvalidSegment {
                             identifier: entry.identifier.clone(),
-                            reason: "trailing_run_guard requires at least one variable segment"
-                                .into(),
+                            reason: format!("unrecognised trailing_run_guard_charset \"{name}\""),
                         });
                     }
                 }
 
+                if entry.trailing_run_guard.is_some()
+                    && entry.trailing_run_guard_charset.is_none()
+                    && !entry
+                        .segments
+                        .iter()
+                        .any(|s| matches!(s, SegmentDef::Variable { .. }))
+                {
+                    return Err(SecretsFileError::InvalidSegment {
+                        identifier: entry.identifier.clone(),
+                        reason: "trailing_run_guard requires at least one variable segment".into(),
+                    });
+                }
+
                 // Validate segment structure (defense-in-depth for programmatically
                 // constructed SecretsFile values that bypass deserialize/add_structural_entry).
-                crate::segment::validate_segment_defs(&entry.segments).map_err(|e| {
-                    SecretsFileError::InvalidSegment {
-                        identifier: entry.identifier.clone(),
-                        reason: e.to_string(),
-                    }
+                crate::segment::validate_segment_defs(
+                    &entry.segments,
+                    // allow_no_variable: item 51 relaxes the no-variable-segment check
+                    // only when an explicit guard charset is present alongside the threshold.
+                    entry.trailing_run_guard.is_some() && entry.trailing_run_guard_charset.is_some(),
+                )
+                .map_err(|e| SecretsFileError::InvalidSegment {
+                    identifier: entry.identifier.clone(),
+                    reason: e.to_string(),
                 })?;
                 let segments: Result<Vec<Segment>, _> = entry
                     .segments
@@ -296,7 +342,10 @@ impl SecretsFile {
                     salt: entry.salt,
                     digests: entry.digests.clone(),
                     trailing_run_guard,
-                    trailing_run_guard_charset: None,
+                    trailing_run_guard_charset: entry
+                        .trailing_run_guard_charset
+                        .as_deref()
+                        .and_then(CharsetName::from_name),
                 })
             })
             .collect()
@@ -338,6 +387,9 @@ impl SecretsFile {
             digests: pattern.digests.clone(),
             segments: seg_defs,
             trailing_run_guard: pattern.trailing_run_guard.map(|g| g as u64),
+            trailing_run_guard_charset: pattern
+                .trailing_run_guard_charset
+                .map(|c| c.as_str().to_string()),
         });
         Ok(())
     }
@@ -392,7 +444,9 @@ impl SecretsFile {
             return Err(SecretsFileError::DuplicateIdentifier { identifier });
         }
 
-        crate::segment::validate_segment_defs(&segments).map_err(|e| {
+        // allow_no_variable: false — `define`/add_structural_entry stays strict per
+        // SPEC §define (load-vs-define asymmetry is deliberate).
+        crate::segment::validate_segment_defs(&segments, false).map_err(|e| {
             SecretsFileError::InvalidSegment {
                 identifier: identifier.clone(),
                 reason: e.to_string(),
@@ -405,6 +459,7 @@ impl SecretsFile {
             digests: vec![],
             segments,
             trailing_run_guard: None,
+            trailing_run_guard_charset: None,
         });
 
         Ok(())
@@ -428,6 +483,9 @@ impl SecretsFile {
                     digests: vec![],
                     segments: seg_defs,
                     trailing_run_guard: def.trailing_run_guard.map(|g| g as u64),
+                    trailing_run_guard_charset: def
+                        .trailing_run_guard_charset
+                        .map(|c| c.as_str().to_string()),
                 });
             }
         }
@@ -532,6 +590,7 @@ mod tests {
                 SegmentDef::Literal { value: "AA".into() },
             ],
             trailing_run_guard: None,
+            trailing_run_guard_charset: None,
         });
         pf.generate_missing_structural_salts();
         let entry = pf
@@ -593,6 +652,7 @@ segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
                     },
                 ],
                 trailing_run_guard: None,
+                trailing_run_guard_charset: None,
             }],
         };
         let patterns = pf.to_patterns().unwrap();
@@ -620,6 +680,7 @@ segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
                     },
                 ],
                 trailing_run_guard: None,
+                trailing_run_guard_charset: None,
             }],
         };
         let bytes = pf.serialize().unwrap();
@@ -649,6 +710,7 @@ segments = [{ type = "variable", charset = "digits", min = 5, max = 5 }]
                     },
                 ],
                 trailing_run_guard: Some(2048),
+                trailing_run_guard_charset: None,
             }],
         };
         let bytes = pf.serialize().unwrap();
@@ -725,6 +787,7 @@ trailing_run_guard = 0
                     max: 10,
                 }],
                 trailing_run_guard: Some(0),
+                trailing_run_guard_charset: None,
             }],
         };
         let err = match pf.to_patterns() {
@@ -765,6 +828,127 @@ trailing_run_guard = 0
         assert!(
             !anthropic_section.contains("trailing_run_guard"),
             "section: {anthropic_section}"
+        );
+    }
+
+    #[test]
+    fn test_guard_charset_round_trip() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "guarded_charset"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "literal", value = "AIza" }, { type = "variable", charset = "url_safe_base64", min = 35, max = 35 }]
+trailing_run_guard = 1024
+trailing_run_guard_charset = "base64_any"
+"#;
+        let pf = SecretsFile::deserialize(pf_data).unwrap();
+        assert_eq!(
+            pf.pattern[0].trailing_run_guard_charset,
+            Some("base64_any".to_string())
+        );
+        let patterns = pf.to_patterns().unwrap();
+        assert_eq!(
+            patterns[0].trailing_run_guard_charset,
+            Some(CharsetName::Base64Any)
+        );
+    }
+
+    #[test]
+    fn test_absent_guard_charset_serializes_without_key() {
+        let mut pf = SecretsFile::new();
+        pf.generate_missing_structural_salts();
+        let bytes = pf.serialize().unwrap();
+        let s = std::str::from_utf8(&bytes).unwrap();
+        let anthropic_section = s
+            .split("[[pattern]]")
+            .find(|sec| sec.contains("identifier = \"anthropic\""))
+            .unwrap();
+        assert!(
+            !anthropic_section.contains("trailing_run_guard_charset"),
+            "section: {anthropic_section}"
+        );
+    }
+
+    #[test]
+    fn test_guard_charset_without_threshold_rejected() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "bad"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "literal", value = "tok_" }, { type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
+trailing_run_guard_charset = "base64_any"
+"#;
+        let err = SecretsFile::deserialize(pf_data).unwrap_err();
+        assert!(
+            err.to_string().contains("trailing_run_guard_charset"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_guard_charset_unrecognised_name_rejected() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "bad"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "literal", value = "tok_" }, { type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
+trailing_run_guard = 1024
+trailing_run_guard_charset = "bogus"
+"#;
+        let err = SecretsFile::deserialize(pf_data).unwrap_err();
+        assert!(err.to_string().contains("bogus"), "error: {err}");
+    }
+
+    #[test]
+    fn test_guard_with_explicit_charset_and_no_variable_segment_loads_ok() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "no_variable"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "literal", value = "prefix_" }, { type = "opaque", value = "suffixval" }]
+trailing_run_guard = 2048
+trailing_run_guard_charset = "alphanumeric"
+"#;
+        let pf = SecretsFile::deserialize(pf_data).unwrap();
+        let patterns = pf.to_patterns().unwrap();
+        assert_eq!(patterns[0].trailing_run_guard, Some(2048));
+    }
+
+    #[test]
+    fn test_guard_without_explicit_charset_and_no_variable_segment_rejected() {
+        let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "no_variable"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "literal", value = "prefix_" }, { type = "opaque", value = "suffixval" }]
+trailing_run_guard = 2048
+"#;
+        let err = SecretsFile::deserialize(pf_data).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("trailing_run_guard requires at least one variable segment"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_generate_missing_structural_salts_wires_gcp_guard_charset() {
+        let mut pf = SecretsFile::new();
+        pf.generate_missing_structural_salts();
+        let gcp = pf.pattern.iter().find(|e| e.identifier == "gcp").unwrap();
+        assert_eq!(
+            gcp.trailing_run_guard_charset,
+            Some("base64_any".to_string())
         );
     }
 }
