@@ -100,7 +100,7 @@ enum Commands {
     },
     /// Add a user-defined structural pattern to the patterns file.
     #[command(
-        long_about = "Add a user-defined structural pattern to the patterns file.\n\nStructural patterns match secrets by format, not exact value. Supply --segment for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64, wide\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
+        long_about = "Add a user-defined structural pattern to the patterns file.\n\nStructural patterns match secrets by format, not exact value. Supply --segment for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64, base64_any, wide\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
     )]
     Define {
         /// Path to the patterns file to update.
@@ -114,7 +114,7 @@ enum Commands {
             long,
             required = true,
             num_args = 1,
-            long_help = "Repeat for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64, wide\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
+            long_help = "Repeat for each segment in order.\n\nliteral:<value>  -  exact fixed string\n\nvariable:<charset>:<min>:<max>  -  variable-length random segment\n\nCharsets: alphanumeric, uppercase_alphanumeric, digits, hex_lower, url_safe_base64, base64_any, wide\n\nExample: --segment literal:sk- --segment variable:alphanumeric:48:48"
         )]
         segment: Vec<String>,
     },
@@ -159,8 +159,8 @@ const INIT_COMMENT_BLOCK: &str = r#"# doppel patterns file (version 3)
 #   { type = "opaque", value = "anchor bytes", charset = "name" }
 #   { type = "variable", charset = "name", min = N, max = M }
 #
-# Valid charset names: alphanumeric, url_safe_base64, uppercase_alphanumeric,
-#                      digits, hex_lower, wide
+# Valid charset names: alphanumeric, url_safe_base64, base64_any,
+#                      uppercase_alphanumeric, digits, hex_lower, wide
 #
 # Commands:
 #   doppel register --patterns <file> --identifier <id> --anchor-len 3 < secret.txt
@@ -574,6 +574,7 @@ fn charset_size(name: &str) -> usize {
     match name {
         "alphanumeric" => 62,
         "url_safe_base64" => 64,
+        "base64_any" => 67,
         "uppercase_alphanumeric" => 36,
         "digits" => 10,
         "hex_lower" => 16,
