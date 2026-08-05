@@ -54,6 +54,19 @@ pub struct SecretOptions {
     /// that trade-off is intended.
     pub trailing_run_guard: Option<usize>,
 
+    /// Explicit trailing run guard charset name (default `None` — inferred).
+    ///
+    /// SPEC §Registration Options / item 51: when set, overrides the guard
+    /// charset the Pattern would otherwise infer from `restrict_charset`
+    /// (SPEC item 49's "unless the explicit guard-charset option is
+    /// supplied"). Requires `trailing_run_guard` to also be set; string-typed
+    /// because [`crate::segment::CharsetName`] is `pub(crate)`. Not exposed as
+    /// a CLI flag. Unrecognised names are rejected with
+    /// [`SecretError::UnknownGuardCharset`]; setting this without
+    /// `trailing_run_guard` is rejected with
+    /// [`SecretError::GuardCharsetWithoutGuard`].
+    pub trailing_run_guard_charset: Option<String>,
+
     /// Suppress entropy hard failure (83-bit threshold).
     /// SPEC: entropy warning is still emitted; only hard fail is suppressed.
     pub force: bool,
@@ -67,6 +80,7 @@ impl Default for SecretOptions {
             restrict_charset: false,
             force: false,
             trailing_run_guard: None,
+            trailing_run_guard_charset: None,
         }
     }
 }
@@ -114,6 +128,17 @@ pub enum SecretError {
     /// `trailing_run_guard` is zero — the guard threshold must be a positive byte count.
     #[error("trailing_run_guard must be a positive integer (got 0)")]
     ZeroTrailingRunGuard,
+
+    /// `trailing_run_guard_charset` was set without `trailing_run_guard`.
+    #[error("trailing_run_guard_charset requires trailing_run_guard")]
+    GuardCharsetWithoutGuard,
+
+    /// `trailing_run_guard_charset` named a charset doppel does not recognise.
+    #[error("unknown trailing_run_guard_charset \"{name}\"")]
+    UnknownGuardCharset {
+        /// The unrecognised charset name that was supplied.
+        name: String,
+    },
 
     /// Registration rejected due to insufficient entropy in variable portion.
     /// Use `force: true` in `SecretOptions` to override.
@@ -163,6 +188,8 @@ pub fn register(secret: &[u8]) -> Result<Pattern, SecretError> {
 /// - [`SecretError::InsufficientEntropy`] if entropy < 83 bits and `!opts.force`.
 /// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts.
 /// - [`SecretError::ZeroTrailingRunGuard`] if `trailing_run_guard` is `Some(0)`.
+/// - [`SecretError::GuardCharsetWithoutGuard`] if `trailing_run_guard_charset` is set without `trailing_run_guard`.
+/// - [`SecretError::UnknownGuardCharset`] if `trailing_run_guard_charset` names an unrecognised charset.
 pub fn register_with_options(secret: &[u8], opts: &SecretOptions) -> Result<Pattern, SecretError> {
     register_with_options_rng(secret, opts, &mut OsRng)
 }
@@ -202,6 +229,16 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
     if opts.trailing_run_guard == Some(0) {
         return Err(SecretError::ZeroTrailingRunGuard);
     }
+    if opts.trailing_run_guard_charset.is_some() && opts.trailing_run_guard.is_none() {
+        return Err(SecretError::GuardCharsetWithoutGuard);
+    }
+    let guard_charset = match &opts.trailing_run_guard_charset {
+        Some(name) => Some(
+            CharsetName::from_name(name)
+                .ok_or_else(|| SecretError::UnknownGuardCharset { name: name.clone() })?,
+        ),
+        None => None,
+    };
     if let Some(n) = opts.trailing_run_guard {
         if n > TRAILING_RUN_GUARD_WARN_THRESHOLD {
             log::warn!(
@@ -315,7 +352,7 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         salt,
         digests: vec![digest],
         trailing_run_guard: opts.trailing_run_guard,
-        trailing_run_guard_charset: None,
+        trailing_run_guard_charset: guard_charset,
     };
 
     // Sanity check: verify fake derivation succeeds at registration time.
@@ -435,5 +472,51 @@ mod tests {
         let middle_bytes = &secret[anchor_len..secret.len() - opts.tail_anchor_len];
         let detected = crate::segment::detect_charset_name(middle_bytes);
         assert_eq!(pattern.last_variable_charset(), Some(detected));
+    }
+
+    #[test]
+    fn test_guard_charset_without_guard_rejected() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            trailing_run_guard_charset: Some("base64_any".to_string()),
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(8);
+        assert!(matches!(
+            register_with_options_rng(secret, &opts, &mut rng),
+            Err(SecretError::GuardCharsetWithoutGuard)
+        ));
+    }
+
+    #[test]
+    fn test_unknown_guard_charset_rejected() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            trailing_run_guard: Some(2048),
+            trailing_run_guard_charset: Some("bogus".to_string()),
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(9);
+        match register_with_options_rng(secret, &opts, &mut rng) {
+            Err(SecretError::UnknownGuardCharset { name }) => assert_eq!(name, "bogus"),
+            Err(other) => panic!("expected UnknownGuardCharset, got {other:?}"),
+            Ok(_) => panic!("expected UnknownGuardCharset, got Ok"),
+        }
+    }
+
+    #[test]
+    fn test_explicit_guard_charset_wired_into_pattern() {
+        let secret = b"my-long-enough-secret-value";
+        let opts = SecretOptions {
+            trailing_run_guard: Some(2048),
+            trailing_run_guard_charset: Some("base64_any".to_string()),
+            ..SecretOptions::default()
+        };
+        let mut rng = StdRng::seed_from_u64(10);
+        let pattern = register_with_options_rng(secret, &opts, &mut rng).unwrap();
+        assert_eq!(
+            pattern.trailing_run_guard_charset,
+            Some(CharsetName::Base64Any)
+        );
     }
 }

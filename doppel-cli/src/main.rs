@@ -334,6 +334,7 @@ fn run_register(
             tail_anchor_len,
             restrict_charset,
             trailing_run_guard,
+            trailing_run_guard_charset: None,
             force,
         };
         let pattern = register_with_options(&secret, &opts)?;
