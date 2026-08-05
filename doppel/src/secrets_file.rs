@@ -296,6 +296,7 @@ impl SecretsFile {
                     salt: entry.salt,
                     digests: entry.digests.clone(),
                     trailing_run_guard,
+                    trailing_run_guard_charset: None,
                 })
             })
             .collect()

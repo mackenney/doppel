@@ -315,6 +315,7 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         salt,
         digests: vec![digest],
         trailing_run_guard: opts.trailing_run_guard,
+        trailing_run_guard_charset: None,
     };
 
     // Sanity check: verify fake derivation succeeds at registration time.

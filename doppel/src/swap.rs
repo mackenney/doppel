@@ -180,12 +180,17 @@ pub(crate) fn swap_with_ac(
 /// the match extends at least `threshold` bytes (SPEC §Trailing Run Guard,
 /// items 44-46). Applies only to the single selected winner; never re-enters
 /// candidate selection (item 46) and does not fire when the pattern has no
-/// guard configured (item 48).
+/// guard configured (item 48). The guard charset is resolved explicit-wins:
+/// `pattern.trailing_run_guard_charset` (item 51) takes precedence over the
+/// charset inferred from the pattern's last Variable segment.
 fn guard_fires(pattern: &Pattern, payload: &[u8], capture: &crate::segment::MatchCapture) -> bool {
     let Some(threshold) = pattern.trailing_run_guard else {
         return false;
     };
-    let Some(charset) = pattern.last_variable_charset() else {
+    let Some(charset) = pattern
+        .trailing_run_guard_charset
+        .or_else(|| pattern.last_variable_charset())
+    else {
         // Unreachable for validated patterns (item 45 enforced at load);
         // fail open to "no suppression" rather than panic.
         return false;
@@ -404,6 +409,7 @@ mod tests {
             salt: [0u8; 32],
             digests: vec![],
             trailing_run_guard: guard,
+            trailing_run_guard_charset: None,
         }
     }
 
@@ -425,6 +431,7 @@ mod tests {
             salt: [0u8; 32],
             digests: vec![],
             trailing_run_guard: guard,
+            trailing_run_guard_charset: None,
         }
     }
 
@@ -512,5 +519,50 @@ mod tests {
         let patterns = [first, second];
         let winner = find_best_match(&payload, 0, &patterns).expect("match").0;
         assert_eq!(winner.identifier, "first", "first-in-set kept on full tie");
+    }
+
+    #[test]
+    fn test_guard_fires_explicit_charset_wins_over_inferred() {
+        // Item 51: an explicit trailing_run_guard_charset takes precedence over
+        // the charset inferred from the last Variable segment. '+' belongs to
+        // Base64Any but not to UrlSafeBase64, so only the pattern with the
+        // explicit override suppresses the trailing '+' run.
+        let var_len = 30;
+        let mut payload = b"tok_".to_vec();
+        payload.extend(std::iter::repeat_n(b'a', var_len));
+        payload.extend(std::iter::repeat_n(b'+', 32));
+
+        let build = |charset_override: Option<CharsetName>| Pattern {
+            identifier: "explicit_guard_charset".to_string(),
+            segments: vec![
+                Segment::Literal(b"tok_".to_vec()),
+                Segment::Variable {
+                    charset: CharsetName::UrlSafeBase64,
+                    min: var_len,
+                    max: var_len,
+                },
+            ]
+            .into(),
+            salt: [0u8; 32],
+            digests: vec![],
+            trailing_run_guard: Some(32),
+            trailing_run_guard_charset: charset_override,
+        };
+
+        let explicit = build(Some(CharsetName::Base64Any));
+        let result = swap(&payload, &[explicit]).expect("swap failed");
+        assert_eq!(
+            result.payload, payload,
+            "explicit Base64Any guard charset suppresses the trailing '+' run"
+        );
+        assert!(result.entries.is_empty());
+
+        let inferred = build(None);
+        let result = swap(&payload, &[inferred]).expect("swap failed");
+        assert_ne!(
+            result.payload, payload,
+            "inferred UrlSafeBase64 charset does not cover '+', so the match stands"
+        );
+        assert_eq!(result.entries.len(), 1);
     }
 }
