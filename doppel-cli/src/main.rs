@@ -98,6 +98,19 @@ enum Commands {
         /// existing group member.
         #[arg(long, conflicts_with = "group")]
         trailing_run_guard: Option<usize>,
+        /// Explicit trailing run guard charset name (default: inferred from the
+        /// secret's variable-portion charset).
+        ///
+        /// Overrides the charset the guard would otherwise infer from
+        /// `--restrict-charset` (SPEC.md Behavioral Invariants item 51).
+        /// Requires `--trailing-run-guard`; rejected without it. One of:
+        /// alphanumeric, url_safe_base64, uppercase_alphanumeric, digits,
+        /// hex_lower, wide, base64_any.
+        ///
+        /// Rejected together with --group, for the same reason as
+        /// --trailing-run-guard: guard config lives on the pattern entry.
+        #[arg(long, conflicts_with = "group")]
+        trailing_run_guard_charset: Option<String>,
         /// Suppress entropy hard-fail (83-bit threshold); warning is still emitted.
         #[arg(long, short = 'f')]
         force: bool,
@@ -271,6 +284,7 @@ fn run_register(
     tail_anchor_len: usize,
     restrict_charset: bool,
     trailing_run_guard: Option<usize>,
+    trailing_run_guard_charset: Option<String>,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use doppel::{SecretOptions, SecretsFile, register_with_options};
@@ -338,7 +352,7 @@ fn run_register(
             tail_anchor_len,
             restrict_charset,
             trailing_run_guard,
-            trailing_run_guard_charset: None,
+            trailing_run_guard_charset,
             force,
         };
         let pattern = register_with_options(&secret, &opts)?;
@@ -901,6 +915,7 @@ fn main() {
             tail_anchor_len,
             restrict_charset,
             trailing_run_guard,
+            trailing_run_guard_charset,
             force,
         } => run_register(
             &patterns,
@@ -910,6 +925,7 @@ fn main() {
             tail_anchor_len,
             restrict_charset,
             trailing_run_guard,
+            trailing_run_guard_charset,
             force,
         ),
         Commands::Define {

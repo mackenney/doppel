@@ -55,8 +55,9 @@ pub struct SecretOptions {
     /// charset the Pattern would otherwise infer from `restrict_charset`
     /// (SPEC item 49's "unless the explicit guard-charset option is
     /// supplied"). Requires `trailing_run_guard` to also be set; string-typed
-    /// because `crate::segment::CharsetName` is `pub(crate)`. Not exposed as
-    /// a CLI flag. Unrecognised names are rejected with
+    /// because `crate::segment::CharsetName` is `pub(crate)`. Exposed as the
+    /// CLI's `register --trailing-run-guard-charset <name>` flag. Unrecognised
+    /// names are rejected with
     /// [`SecretError::UnknownGuardCharset`]; setting this without
     /// `trailing_run_guard` is rejected with
     /// [`SecretError::GuardCharsetWithoutGuard`].

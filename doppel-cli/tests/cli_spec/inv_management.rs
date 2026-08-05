@@ -692,3 +692,249 @@ fn test_list_shows_guard_for_registered_guarded_pattern() {
         "list output must show guard config for guarded entry; stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn test_register_trailing_run_guard_charset_written_to_patterns_file() {
+    // SPEC.md CLI Contract: register MUST accept --trailing-run-guard-charset
+    // <name> alongside --trailing-run-guard, wiring it into the produced
+    // Pattern's trailing_run_guard_charset field (SPEC item 51).
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "trgc-entry"])
+        .args(["--trailing-run-guard", "2048"])
+        .args(["--trailing-run-guard-charset", "base64_any"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let status = child.wait_with_output().unwrap().status;
+    assert!(
+        status.success(),
+        "register --trailing-run-guard-charset failed"
+    );
+
+    let after = std::fs::read_to_string(&pat).unwrap();
+    let pf = doppel::SecretsFile::deserialize(after.as_bytes()).unwrap();
+    let entry = pf
+        .pattern
+        .iter()
+        .find(|e| e.identifier == "trgc-entry")
+        .unwrap();
+    assert_eq!(entry.trailing_run_guard, Some(2048));
+    assert_eq!(
+        entry.trailing_run_guard_charset.as_deref(),
+        Some("base64_any")
+    );
+}
+
+#[test]
+fn test_register_trailing_run_guard_charset_without_guard_rejected() {
+    // SPEC §Registration Options: --trailing-run-guard-charset without
+    // --trailing-run-guard MUST be rejected with a clear error.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "trgc-no-guard"])
+        .args(["--trailing-run-guard-charset", "base64_any"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !output.status.success(),
+        "register --trailing-run-guard-charset without --trailing-run-guard must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("trailing_run_guard_charset"),
+        "stderr must name the rejected field: {stderr}"
+    );
+}
+
+#[test]
+fn test_register_group_conflicts_with_trailing_run_guard_charset() {
+    // Guard charset, like the guard threshold itself, lives on the pattern
+    // entry and has no effect for --group updates; clap must reject the
+    // combination rather than silently ignoring the flag.
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args([
+            "--group",
+            "whatever",
+            "--trailing-run-guard-charset",
+            "base64_any",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "register --group with --trailing-run-guard-charset should be rejected by clap"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("trailing-run-guard-charset") && stderr.contains("group"),
+        "expected clap conflicts_with error mentioning both flags, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_register_unknown_trailing_run_guard_charset_rejected() {
+    // SPEC §Registration Options: an unrecognised guard charset name MUST be
+    // rejected with a clear error.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "trgc-bogus"])
+        .args(["--trailing-run-guard", "2048"])
+        .args(["--trailing-run-guard-charset", "bogus"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !output.status.success(),
+        "register --trailing-run-guard-charset bogus must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bogus"),
+        "stderr must name the unrecognised charset: {stderr}"
+    );
+}
+
+#[test]
+fn test_register_with_explicit_guard_charset_swap_suppresses_secret() {
+    // End-to-end: registering with an explicit guard charset (hex_lower)
+    // produces a Pattern whose guard probe honors that charset rather than
+    // the default `wide` match charset. Trailing bytes that are in `wide`
+    // but not `hex_lower` must NOT satisfy the guard (match stands, gets
+    // replaced); trailing bytes that are in `hex_lower` must satisfy it
+    // (match suppressed, payload unchanged).
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut register = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "trgc-swap"])
+        .args(["--trailing-run-guard", "8"])
+        .args(["--trailing-run-guard-charset", "hex_lower"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    register.stdin.take().unwrap().write_all(secret).unwrap();
+    let status = register.wait_with_output().unwrap().status;
+    assert!(status.success(), "register failed");
+
+    // Trailing run of 10 non-hex-lower-but-wide bytes (uppercase + punctuation)
+    // must NOT satisfy the explicit hex_lower guard charset, so the match
+    // must stand and be replaced.
+    let payload_stands = [secret.as_slice(), b"!@#$%^&*()!"].concat();
+    let entries_path = dir.path().join("entries-stands.json");
+    let key_path = dir.path().join("key-stands.txt");
+    let mut swap = cli_bin()
+        .args(["swap", "--patterns"])
+        .arg(&pat)
+        .args(["--entries"])
+        .arg(&entries_path)
+        .args(["--key-out"])
+        .arg(&key_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    swap.stdin
+        .take()
+        .unwrap()
+        .write_all(&payload_stands)
+        .unwrap();
+    let swap_out = swap.wait_with_output().unwrap();
+    assert!(
+        swap_out.status.success(),
+        "swap failed: {}",
+        String::from_utf8_lossy(&swap_out.stderr)
+    );
+    assert!(
+        !swap_out.stdout.windows(secret.len()).any(|w| w == *secret),
+        "secret must be suppressed only under the explicit hex_lower guard \
+         charset, not left standing when followed by non-hex-lower bytes; \
+         swap must have replaced it"
+    );
+
+    // Trailing run of 10 hex_lower bytes satisfies the explicit guard
+    // charset threshold (8) and must suppress the match.
+    let payload_suppressed = [secret.as_slice(), b"0123456789"].concat();
+    let entries_path2 = dir.path().join("entries-suppressed.json");
+    let key_path2 = dir.path().join("key-suppressed.txt");
+    let mut swap2 = cli_bin()
+        .args(["swap", "--patterns"])
+        .arg(&pat)
+        .args(["--entries"])
+        .arg(&entries_path2)
+        .args(["--key-out"])
+        .arg(&key_path2)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    swap2
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&payload_suppressed)
+        .unwrap();
+    let swap2_out = swap2.wait_with_output().unwrap();
+    assert!(
+        swap2_out.status.success(),
+        "swap failed: {}",
+        String::from_utf8_lossy(&swap2_out.stderr)
+    );
+    assert_eq!(
+        swap2_out.stdout, payload_suppressed,
+        "secret followed by threshold-count hex_lower bytes must be \
+         suppressed under the explicit hex_lower guard charset (payload \
+         returned unchanged)"
+    );
+}
