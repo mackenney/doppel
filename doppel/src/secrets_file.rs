@@ -6,15 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::patterns::{self, Pattern};
+use crate::patterns::{self, Pattern, TRAILING_RUN_GUARD_WARN_THRESHOLD};
 use crate::segment::{CharsetName, Segment, SegmentDef};
 use crate::serde_helpers::{hex_32, hex_vec_32};
-
-/// Advisory threshold above which a loaded `trailing_run_guard` warns (SPEC item 50).
-/// Real-world encoded blobs run tens of KB to a few MB; a threshold well past that
-/// range does not improve suppression and can reduce it near blob tails (see SPEC.md's
-/// "A larger threshold is not uniformly better" limitation). Advisory only — never rejected.
-const TRAILING_RUN_GUARD_WARN_THRESHOLD: u64 = 20_000;
 
 /// Top-level patterns file structure (version 3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +93,97 @@ pub enum SecretsFileError {
     },
 }
 
+/// Validates guard-related fields and structural invariants for a single
+/// pattern entry. Shared by [`SecretsFile::deserialize`] (file load) and
+/// [`SecretsFile::to_patterns`] (programmatic construction) so the two entry
+/// points can't drift on what counts as a valid entry — the exact drift risk
+/// three independent code reviewers flagged when this logic was duplicated.
+///
+/// `warn_on_high_threshold` gates the >20,000-byte advisory log (SPEC item
+/// 50); pass `true` from `deserialize` and `false` from `to_patterns` so the
+/// ordinary `deserialize` -> `to_patterns` CLI chain logs the advisory once
+/// per loaded entry instead of twice.
+fn validate_pattern_entry(
+    entry: &PatternEntry,
+    warn_on_high_threshold: bool,
+) -> Result<(), SecretsFileError> {
+    if let Some(guard) = entry.trailing_run_guard {
+        if guard == 0 {
+            return Err(SecretsFileError::InvalidSegment {
+                identifier: entry.identifier.clone(),
+                reason: "trailing_run_guard must be a positive integer".into(),
+            });
+        }
+        if warn_on_high_threshold && guard > TRAILING_RUN_GUARD_WARN_THRESHOLD {
+            log::warn!(
+                "doppel: pattern '{}' trailing_run_guard {} exceeds {}; real-world blob sizes are \
+                 tens of KB to a few MB, so a threshold this large does not improve suppression and \
+                 can reduce it near blob tails",
+                entry.identifier,
+                guard,
+                TRAILING_RUN_GUARD_WARN_THRESHOLD
+            );
+        }
+    } else if entry.trailing_run_guard_charset.is_some() {
+        return Err(SecretsFileError::InvalidSegment {
+            identifier: entry.identifier.clone(),
+            reason: "trailing_run_guard_charset requires trailing_run_guard".into(),
+        });
+    }
+
+    if let Some(name) = &entry.trailing_run_guard_charset {
+        if CharsetName::from_name(name).is_none() {
+            return Err(SecretsFileError::InvalidSegment {
+                identifier: entry.identifier.clone(),
+                reason: format!("unrecognised trailing_run_guard_charset \"{name}\""),
+            });
+        }
+    }
+
+    if entry.trailing_run_guard.is_some()
+        && entry.trailing_run_guard_charset.is_none()
+        && !entry
+            .segments
+            .iter()
+            .any(|s| matches!(s, SegmentDef::Variable { .. }))
+    {
+        return Err(SecretsFileError::InvalidSegment {
+            identifier: entry.identifier.clone(),
+            reason: "trailing_run_guard requires at least one variable segment".into(),
+        });
+    }
+
+    crate::segment::validate_segment_defs(
+        &entry.segments,
+        // allow_no_variable: item 51 relaxes the no-variable-segment check
+        // only when an explicit guard charset is present alongside the threshold.
+        entry.trailing_run_guard.is_some() && entry.trailing_run_guard_charset.is_some(),
+    )
+    .map_err(|e| SecretsFileError::InvalidSegment {
+        identifier: entry.identifier.clone(),
+        reason: e.to_string(),
+    })?;
+
+    // INV-31: instance patterns must have fixed-length variable segments.
+    if !entry.digests.is_empty() {
+        for (i, seg) in entry.segments.iter().enumerate() {
+            if let SegmentDef::Variable { min, max, .. } = seg {
+                if min != max {
+                    return Err(SecretsFileError::InvalidSegment {
+                        identifier: entry.identifier.clone(),
+                        reason: format!(
+                            "instance pattern variable segment at index {} has min ({}) != max ({})",
+                            i, min, max
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl SecretsFile {
     /// Create an empty patterns file (version 3, no entries).
     pub fn new() -> Self {
@@ -148,79 +233,12 @@ impl SecretsFile {
         }
 
         for entry in &file.pattern {
-            if let Some(guard) = entry.trailing_run_guard {
-                if guard == 0 {
-                    return Err(SecretsFileError::InvalidSegment {
-                        identifier: entry.identifier.clone(),
-                        reason: "trailing_run_guard must be a positive integer".into(),
-                    });
-                }
-                if guard > TRAILING_RUN_GUARD_WARN_THRESHOLD {
-                    log::warn!(
-                        "doppel: pattern '{}' trailing_run_guard {} exceeds {}; real-world blob sizes are \
-                         tens of KB to a few MB, so a threshold this large does not improve suppression and \
-                         can reduce it near blob tails",
-                        entry.identifier,
-                        guard,
-                        TRAILING_RUN_GUARD_WARN_THRESHOLD
-                    );
-                }
-            } else if entry.trailing_run_guard_charset.is_some() {
-                return Err(SecretsFileError::InvalidSegment {
-                    identifier: entry.identifier.clone(),
-                    reason: "trailing_run_guard_charset requires trailing_run_guard".into(),
-                });
-            }
-
-            if let Some(name) = &entry.trailing_run_guard_charset {
-                if CharsetName::from_name(name).is_none() {
-                    return Err(SecretsFileError::InvalidSegment {
-                        identifier: entry.identifier.clone(),
-                        reason: format!("unrecognised trailing_run_guard_charset \"{name}\""),
-                    });
-                }
-            }
-
-            if entry.trailing_run_guard.is_some()
-                && entry.trailing_run_guard_charset.is_none()
-                && !entry
-                    .segments
-                    .iter()
-                    .any(|s| matches!(s, SegmentDef::Variable { .. }))
-            {
-                return Err(SecretsFileError::InvalidSegment {
-                    identifier: entry.identifier.clone(),
-                    reason: "trailing_run_guard requires at least one variable segment".into(),
-                });
-            }
-
-            crate::segment::validate_segment_defs(
-                &entry.segments,
-                // allow_no_variable: item 51 relaxes the no-variable-segment check
-                // only when an explicit guard charset is present alongside the threshold.
-                entry.trailing_run_guard.is_some() && entry.trailing_run_guard_charset.is_some(),
-            )
-            .map_err(|e| SecretsFileError::InvalidSegment {
-                identifier: entry.identifier.clone(),
-                reason: e.to_string(),
-            })?;
-
-            // INV-31: instance patterns must have fixed-length variable segments.
-            if !entry.digests.is_empty() {
-                for (i, seg) in entry.segments.iter().enumerate() {
-                    if let SegmentDef::Variable { min, max, .. } = seg {
-                        if min != max {
-                            return Err(SecretsFileError::InvalidSegment {
-                                identifier: entry.identifier.clone(),
-                                reason: format!(
-                                    "instance pattern variable segment at index {} has min ({}) != max ({})",
-                                    i, min, max
-                                ),
-                            });
-                        }
-                    }
-                }
-            }
+            // deserialize is the on-disk load path; emit the advisory here so a
+            // hand-edited or generated patterns file surfaces the warning once at
+            // load time. to_patterns's call below skips it (warn_on_high_threshold:
+            // false) so the ordinary deserialize -> to_patterns CLI chain doesn't
+            // log the same advisory twice for the same entries.
+            validate_pattern_entry(entry, true)?;
         }
 
         Ok(file)
@@ -239,64 +257,13 @@ impl SecretsFile {
         self.pattern
             .iter()
             .map(|entry| {
-                if let Some(guard) = entry.trailing_run_guard {
-                    if guard == 0 {
-                        return Err(SecretsFileError::InvalidSegment {
-                            identifier: entry.identifier.clone(),
-                            reason: "trailing_run_guard must be a positive integer".into(),
-                        });
-                    }
-                    if guard > TRAILING_RUN_GUARD_WARN_THRESHOLD {
-                        log::warn!(
-                            "doppel: pattern '{}' trailing_run_guard {} exceeds {}; real-world blob sizes are \
-                             tens of KB to a few MB, so a threshold this large does not improve suppression and \
-                             can reduce it near blob tails",
-                            entry.identifier,
-                            guard,
-                            TRAILING_RUN_GUARD_WARN_THRESHOLD
-                        );
-                    }
-                } else if entry.trailing_run_guard_charset.is_some() {
-                    return Err(SecretsFileError::InvalidSegment {
-                        identifier: entry.identifier.clone(),
-                        reason: "trailing_run_guard_charset requires trailing_run_guard".into(),
-                    });
-                }
+                // to_patterns is also reachable directly on a programmatically
+                // built SecretsFile (never routed through deserialize), so it must
+                // re-validate for defense-in-depth; warn_on_high_threshold is false
+                // here because deserialize already warned for the file-load path —
+                // see the comment there.
+                validate_pattern_entry(entry, false)?;
 
-                if let Some(name) = &entry.trailing_run_guard_charset {
-                    if CharsetName::from_name(name).is_none() {
-                        return Err(SecretsFileError::InvalidSegment {
-                            identifier: entry.identifier.clone(),
-                            reason: format!("unrecognised trailing_run_guard_charset \"{name}\""),
-                        });
-                    }
-                }
-
-                if entry.trailing_run_guard.is_some()
-                    && entry.trailing_run_guard_charset.is_none()
-                    && !entry
-                        .segments
-                        .iter()
-                        .any(|s| matches!(s, SegmentDef::Variable { .. }))
-                {
-                    return Err(SecretsFileError::InvalidSegment {
-                        identifier: entry.identifier.clone(),
-                        reason: "trailing_run_guard requires at least one variable segment".into(),
-                    });
-                }
-
-                // Validate segment structure (defense-in-depth for programmatically
-                // constructed SecretsFile values that bypass deserialize/add_structural_entry).
-                crate::segment::validate_segment_defs(
-                    &entry.segments,
-                    // allow_no_variable: item 51 relaxes the no-variable-segment check
-                    // only when an explicit guard charset is present alongside the threshold.
-                    entry.trailing_run_guard.is_some() && entry.trailing_run_guard_charset.is_some(),
-                )
-                .map_err(|e| SecretsFileError::InvalidSegment {
-                    identifier: entry.identifier.clone(),
-                    reason: e.to_string(),
-                })?;
                 let segments: Result<Vec<Segment>, _> = entry
                     .segments
                     .iter()
@@ -309,23 +276,13 @@ impl SecretsFile {
                     .collect();
                 let segments = segments?;
 
-                // INV-31: instance patterns must have fixed-length variable segments.
-                if !entry.digests.is_empty() {
-                    for (i, seg) in entry.segments.iter().enumerate() {
-                        if let crate::segment::SegmentDef::Variable { min, max, .. } = seg {
-                            if min != max {
-                                return Err(SecretsFileError::InvalidSegment {
-                                    identifier: entry.identifier.clone(),
-                                    reason: format!(
-                                        "instance pattern variable segment at index {} has min ({}) != max ({})",
-                                        i, min, max
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                }
-
+                // On 64-bit targets (CI runs exclusively 64-bit) this conversion
+                // is infallible: u64::MAX == usize::MAX, so the error branch below
+                // is unreachable and untested here. It's only reachable on 32-bit
+                // targets with a threshold > u32::MAX (~4.29 GB) — far past the
+                // 20,000-byte advisory range — so a 32-bit-gated test would assert
+                // the same platform fact the compiler already enforces via
+                // `usize::try_from`'s signature, not real product behavior.
                 let trailing_run_guard = entry
                     .trailing_run_guard
                     .map(|g| {

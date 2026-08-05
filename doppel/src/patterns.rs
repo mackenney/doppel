@@ -7,6 +7,16 @@ use crate::segment::{BuiltinSegment, CharsetName, MatchCapture, Segment};
 use aho_corasick::AhoCorasick;
 use std::sync::{Arc, LazyLock};
 
+/// Advisory threshold above which a `trailing_run_guard` warns (SPEC item 50).
+/// Real-world encoded blobs run tens of KB to a few MB; a threshold well past that
+/// range does not improve suppression and can reduce it near blob tails (see SPEC.md's
+/// "A larger threshold is not uniformly better" limitation). Advisory only — never rejected.
+///
+/// Shared by `secrets::register_with_options` and `secrets_file::validate_pattern_entry`
+/// so the two guard-configuration entry points (register a single secret vs. load/build
+/// a patterns file) can't drift on the warn threshold or its type.
+pub(crate) const TRAILING_RUN_GUARD_WARN_THRESHOLD: u64 = 20_000;
+
 /// Internal structural definition used as a static template for built-in patterns.
 /// Holds the identifier and segment list; salt is supplied by the per-call constructor.
 #[derive(Clone)]

@@ -1,15 +1,10 @@
-use crate::patterns::Pattern;
+use crate::patterns::{Pattern, TRAILING_RUN_GUARD_WARN_THRESHOLD};
 use crate::segment::{CharsetName, Segment};
 use rand::rngs::OsRng;
 use std::sync::Arc;
 
 const ENTROPY_HARD_FAIL_BITS: f64 = 83.0;
 const ENTROPY_WARN_BITS: f64 = 131.0;
-/// Advisory threshold above which a supplied trailing_run_guard warns (SPEC item 50).
-/// Real-world encoded blobs run tens of KB to a few MB; a threshold well past that
-/// range does not improve suppression and can reduce it near blob tails (see SPEC.md's
-/// "A larger threshold is not uniformly better" limitation). Advisory only — never rejected.
-const TRAILING_RUN_GUARD_WARN_THRESHOLD: usize = 20_000;
 
 /// Calculate effective entropy for a variable portion.
 ///
@@ -240,7 +235,7 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
         None => None,
     };
     if let Some(n) = opts.trailing_run_guard {
-        if n > TRAILING_RUN_GUARD_WARN_THRESHOLD {
+        if n as u64 > TRAILING_RUN_GUARD_WARN_THRESHOLD {
             log::warn!(
                 "doppel: trailing_run_guard {} exceeds {}; real-world blob sizes are tens of KB to \
                  a few MB, so a threshold this large does not improve suppression and can reduce it \
