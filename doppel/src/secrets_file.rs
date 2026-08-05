@@ -792,6 +792,36 @@ trailing_run_guard = 0
     }
 
     #[test]
+    fn test_guard_charset_unrecognised_name_rejected_in_to_patterns() {
+        use crate::segment::SegmentDef;
+        let pf = SecretsFile {
+            version: 3,
+            pattern: vec![PatternEntry {
+                identifier: "bad".into(),
+                salt: [0xEE; 32],
+                digests: vec![],
+                segments: vec![
+                    SegmentDef::Literal {
+                        value: "tok_".into(),
+                    },
+                    SegmentDef::Variable {
+                        charset: "alphanumeric".into(),
+                        min: 10,
+                        max: 10,
+                    },
+                ],
+                trailing_run_guard: Some(1024),
+                trailing_run_guard_charset: Some("bogus".into()),
+            }],
+        };
+        let err = match pf.to_patterns() {
+            Ok(_) => panic!("expected error"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("bogus"), "error: {err}");
+    }
+
+    #[test]
     fn test_guard_without_explicit_charset_and_no_variable_segment_rejected_in_to_patterns() {
         use crate::segment::SegmentDef;
         let pf = SecretsFile {
