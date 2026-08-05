@@ -211,6 +211,39 @@ impl CharsetName {
             CharsetName::Base64Any => "base64_any",
         }
     }
+
+    /// Every `CharsetName` variant, in declaration order.
+    ///
+    /// `charset_name_exhaustiveness_canary` below has no wildcard arm, so
+    /// the compiler refuses to build once a variant is added to
+    /// `CharsetName` without a corresponding arm there — making it
+    /// impossible to add a variant and forget to also list it here.
+    #[cfg(test)]
+    pub(crate) const ALL: [CharsetName; 7] = [
+        CharsetName::Alphanumeric,
+        CharsetName::UrlSafeBase64,
+        CharsetName::UppercaseAlphanumeric,
+        CharsetName::Digits,
+        CharsetName::HexLower,
+        CharsetName::Wide,
+        CharsetName::Base64Any,
+    ];
+}
+
+/// Exhaustiveness canary for [`CharsetName::ALL`]: matches every variant
+/// with no wildcard arm, so adding a `CharsetName` variant without updating
+/// this function (and, right next to it, `ALL`) fails to compile.
+#[cfg(test)]
+const fn charset_name_exhaustiveness_canary(name: CharsetName) {
+    match name {
+        CharsetName::Alphanumeric
+        | CharsetName::UrlSafeBase64
+        | CharsetName::UppercaseAlphanumeric
+        | CharsetName::Digits
+        | CharsetName::HexLower
+        | CharsetName::Wide
+        | CharsetName::Base64Any => {}
+    }
 }
 
 /// Cardinality (byte-alphabet size) of a named charset, or `None` if `name`
@@ -443,22 +476,43 @@ mod tests {
         // Every name CharsetName::from_name accepts must resolve to a
         // cardinality here too, and the two MUST agree exactly (this is the
         // fix for the CLI's previously hand-maintained, driftable table).
+        //
+        // Iterating `CharsetName::ALL` (rather than a hand-copied name
+        // list) means a future variant is covered automatically: `ALL`'s
+        // compile-time exhaustiveness canary forces it to be added there,
+        // and this loop then exercises it without further test changes.
         let expected = [
-            ("alphanumeric", 62),
-            ("url_safe_base64", 64),
-            ("uppercase_alphanumeric", 36),
-            ("digits", 10),
-            ("hex_lower", 16),
-            ("wide", 92),
-            ("base64_any", 67),
+            (CharsetName::Alphanumeric, 62),
+            (CharsetName::UrlSafeBase64, 64),
+            (CharsetName::UppercaseAlphanumeric, 36),
+            (CharsetName::Digits, 10),
+            (CharsetName::HexLower, 16),
+            (CharsetName::Wide, 92),
+            (CharsetName::Base64Any, 67),
         ];
-        for (name, size) in expected {
+        for variant in CharsetName::ALL {
+            charset_name_exhaustiveness_canary(variant);
+            let name = variant.as_str();
             assert_eq!(
-                charset_cardinality(name),
-                Some(size),
-                "charset {name} cardinality mismatch"
+                CharsetName::from_name(name),
+                Some(variant),
+                "charset {name} must round-trip through from_name"
             );
+            let cardinality = charset_cardinality(name)
+                .unwrap_or_else(|| panic!("charset {name} must have a cardinality"));
+            assert!(
+                cardinality > 0,
+                "charset {name} cardinality must be nonzero"
+            );
+            if let Some((_, size)) = expected.iter().find(|(v, _)| *v == variant) {
+                assert_eq!(cardinality, *size, "charset {name} cardinality mismatch");
+            }
         }
+        assert_eq!(
+            expected.len(),
+            CharsetName::ALL.len(),
+            "expected table must cover every CharsetName::ALL variant exactly"
+        );
     }
 
     #[test]
