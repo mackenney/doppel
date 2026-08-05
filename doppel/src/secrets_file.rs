@@ -759,6 +759,72 @@ trailing_run_guard = 0
     }
 
     #[test]
+    fn test_guard_charset_without_threshold_rejected_in_to_patterns() {
+        use crate::segment::SegmentDef;
+        let pf = SecretsFile {
+            version: 3,
+            pattern: vec![PatternEntry {
+                identifier: "bad".into(),
+                salt: [0xEE; 32],
+                digests: vec![],
+                segments: vec![
+                    SegmentDef::Literal {
+                        value: "tok_".into(),
+                    },
+                    SegmentDef::Variable {
+                        charset: "alphanumeric".into(),
+                        min: 10,
+                        max: 10,
+                    },
+                ],
+                trailing_run_guard: None,
+                trailing_run_guard_charset: Some("base64_any".into()),
+            }],
+        };
+        let err = match pf.to_patterns() {
+            Ok(_) => panic!("expected error"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("trailing_run_guard_charset"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_guard_without_explicit_charset_and_no_variable_segment_rejected_in_to_patterns() {
+        use crate::segment::SegmentDef;
+        let pf = SecretsFile {
+            version: 3,
+            pattern: vec![PatternEntry {
+                identifier: "no_variable".into(),
+                salt: [0xEE; 32],
+                digests: vec![],
+                segments: vec![
+                    SegmentDef::Literal {
+                        value: "prefix_".into(),
+                    },
+                    SegmentDef::Opaque {
+                        value: "suffixval".into(),
+                        charset: None,
+                    },
+                ],
+                trailing_run_guard: Some(2048),
+                trailing_run_guard_charset: None,
+            }],
+        };
+        let err = match pf.to_patterns() {
+            Ok(_) => panic!("expected error"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string()
+                .contains("trailing_run_guard requires at least one variable segment"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
     fn test_generate_missing_structural_salts_wires_gcp_guard() {
         let mut pf = SecretsFile::new();
         pf.generate_missing_structural_salts();
