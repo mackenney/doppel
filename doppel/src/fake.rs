@@ -140,6 +140,8 @@ static URL_SAFE_BASE64_BYTES: &[u8] =
 static UPPERCASE_ALPHANUMERIC_BYTES: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 static DIGITS_BYTES: &[u8] = b"0123456789";
 static HEX_LOWER_BYTES: &[u8] = b"0123456789abcdef";
+static BASE64_ANY_BYTES: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_=";
 
 pub(crate) static ALPHANUMERIC: LazyLock<Charset> = LazyLock::new(|| Charset {
     bitmap: build_bitmap(ALPHANUMERIC_BYTES),
@@ -166,6 +168,11 @@ pub(crate) static HEX_LOWER: LazyLock<Charset> = LazyLock::new(|| Charset {
     bytes: HEX_LOWER_BYTES,
 });
 
+pub(crate) static BASE64_ANY: LazyLock<Charset> = LazyLock::new(|| Charset {
+    bitmap: build_bitmap(BASE64_ANY_BYTES),
+    bytes: BASE64_ANY_BYTES,
+});
+
 pub(crate) fn alphanumeric_ref() -> &'static Charset {
     &ALPHANUMERIC
 }
@@ -184,6 +191,10 @@ pub(crate) fn digits_ref() -> &'static Charset {
 
 pub(crate) fn hex_lower_ref() -> &'static Charset {
     &HEX_LOWER
+}
+
+pub(crate) fn base64_any_ref() -> &'static Charset {
+    &BASE64_ANY
 }
 
 pub(crate) static WIDE: LazyLock<Charset> = LazyLock::new(|| {

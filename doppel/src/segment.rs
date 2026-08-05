@@ -158,7 +158,7 @@ pub(crate) struct MatchCapture {
 /// Named character set for Variable segments.
 ///
 /// Maps 1:1 to the charset names in SPEC.md §Patterns File:
-/// `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`.
+/// `alphanumeric`, `url_safe_base64`, `base64_any`, `uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CharsetName {
@@ -168,6 +168,7 @@ pub(crate) enum CharsetName {
     Digits,
     HexLower,
     Wide,
+    Base64Any,
 }
 
 impl CharsetName {
@@ -180,6 +181,7 @@ impl CharsetName {
             CharsetName::Digits => crate::fake::digits_ref(),
             CharsetName::HexLower => crate::fake::hex_lower_ref(),
             CharsetName::Wide => crate::fake::wide_ref(),
+            CharsetName::Base64Any => crate::fake::base64_any_ref(),
         }
     }
 
@@ -192,6 +194,7 @@ impl CharsetName {
             "digits" => Some(CharsetName::Digits),
             "hex_lower" => Some(CharsetName::HexLower),
             "wide" => Some(CharsetName::Wide),
+            "base64_any" => Some(CharsetName::Base64Any),
             _ => None,
         }
     }
@@ -205,6 +208,7 @@ impl CharsetName {
             CharsetName::Digits => "digits",
             CharsetName::HexLower => "hex_lower",
             CharsetName::Wide => "wide",
+            CharsetName::Base64Any => "base64_any",
         }
     }
 }
@@ -540,5 +544,30 @@ mod tests {
             },
         ];
         assert!(validate_segment_defs(&defs).is_ok());
+    }
+
+    #[test]
+    fn base64_any_name_round_trips_through_from_name_and_as_str() {
+        assert_eq!(
+            CharsetName::from_name("base64_any"),
+            Some(CharsetName::Base64Any)
+        );
+        assert_eq!(CharsetName::Base64Any.as_str(), "base64_any");
+    }
+
+    #[test]
+    fn base64_any_resolves_to_67_byte_charset() {
+        assert_eq!(CharsetName::Base64Any.resolve().bytes.len(), 67);
+    }
+
+    #[test]
+    fn base64_any_bitmap_contains_expected_members_and_excludes_others() {
+        let charset = CharsetName::Base64Any.resolve();
+        for &b in b"+/-_=Az0" {
+            assert!(charset.contains(b), "expected {b} to be a member");
+        }
+        for &b in b"\n \"" {
+            assert!(!charset.contains(b), "expected {b} to not be a member");
+        }
     }
 }
