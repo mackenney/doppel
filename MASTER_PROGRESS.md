@@ -11,7 +11,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## In Progress
 
-*(none)*
+- `trailing-run-guard-charset-fix` — explicit guard charset (`trailing_run_guard_charset`) + `base64_any` charset; GCP guard currently suppresses zero standard-base64 false positives (see `HANDOFF.md`) — [plan](plans/trailing-run-guard-charset-fix/PROGRESS.md)
 
 ## Queued
 
