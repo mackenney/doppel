@@ -11,6 +11,10 @@
 
 - `register --group` combined with `--trailing-run-guard` is now rejected at parse time instead of silently ignoring the guard flag.
 
+### Changed
+
+- New `doppel::segment::charset_cardinality(name)` public accessor replaces the CLI's hand-maintained charset-size table (`doppel-cli`'s `inspect` entropy estimate); the CLI now delegates to the library so the two cannot drift.
+
 ## [0.0.2] - 2026-06-09
 
 ### Breaking Changes

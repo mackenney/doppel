@@ -213,6 +213,19 @@ impl CharsetName {
     }
 }
 
+/// Cardinality (byte-alphabet size) of a named charset, or `None` if `name`
+/// is not a recognised charset name.
+///
+/// Covers every charset name accepted by `variable`/`opaque` segments and
+/// `trailing_run_guard_charset` in the patterns file (SPEC.md §Patterns File).
+/// This is the single source of truth for charset sizes; callers computing
+/// entropy estimates (e.g. the CLI's `inspect` command) MUST use this instead
+/// of a separately maintained table, to avoid drift from the charset
+/// definitions in `crate::fake`.
+pub fn charset_cardinality(name: &str) -> Option<usize> {
+    CharsetName::from_name(name).map(|c| c.resolve().len())
+}
+
 /// Serializable segment definition for the patterns file TOML format.
 ///
 /// This is the data-transfer representation. The internally-tagged `type` field
@@ -423,6 +436,34 @@ mod tests {
             let parsed: CharsetName = serde_json::from_str(&json).unwrap();
             assert_eq!(&parsed, variant);
         }
+    }
+
+    #[test]
+    fn charset_cardinality_covers_every_recognised_name() {
+        // Every name CharsetName::from_name accepts must resolve to a
+        // cardinality here too, and the two MUST agree exactly (this is the
+        // fix for the CLI's previously hand-maintained, driftable table).
+        let expected = [
+            ("alphanumeric", 62),
+            ("url_safe_base64", 64),
+            ("uppercase_alphanumeric", 36),
+            ("digits", 10),
+            ("hex_lower", 16),
+            ("wide", 92),
+            ("base64_any", 67),
+        ];
+        for (name, size) in expected {
+            assert_eq!(
+                charset_cardinality(name),
+                Some(size),
+                "charset {name} cardinality mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn charset_cardinality_rejects_unknown_name() {
+        assert_eq!(charset_cardinality("not-a-real-charset"), None);
     }
 
     #[test]

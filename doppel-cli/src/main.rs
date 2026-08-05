@@ -575,16 +575,7 @@ fn format_pattern_segments(entry: &doppel::PatternEntry) -> String {
 }
 
 fn charset_size(name: &str) -> usize {
-    match name {
-        "alphanumeric" => 62,
-        "url_safe_base64" => 64,
-        "base64_any" => 67,
-        "uppercase_alphanumeric" => 36,
-        "digits" => 10,
-        "hex_lower" => 16,
-        "wide" => 92,
-        _ => 0,
-    }
+    doppel::segment::charset_cardinality(name).unwrap_or(0)
 }
 
 fn entropy_estimate(min: usize, max: usize, charset: &str) -> String {
