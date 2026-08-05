@@ -610,3 +610,85 @@ fn test_define_accepts_base64_any_charset() {
         "base64_any entropy must not be zeroed; stdout: {stdout}"
     );
 }
+
+#[test]
+fn test_inspect_shows_gcp_default_guard_config() {
+    // SPEC.md CLI Contract (inspect): trailing run guard threshold and
+    // effective charset MUST be displayed. GCP's built-in pattern ships
+    // trailing_run_guard = 1024, trailing_run_guard_charset = base64_any.
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["inspect", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "gcp"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Guard: 1024 bytes (charset: base64_any)"),
+        "gcp inspect output must show guard config; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_inspect_shows_none_for_unguarded_pattern() {
+    // Entries with no guard MUST show an explicit "none", not silently
+    // omit the field (consistent with inspect's always-shown fields).
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["inspect", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "anthropic"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Guard: none"),
+        "unguarded pattern's inspect output must show 'Guard: none'; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_list_shows_guard_for_registered_guarded_pattern() {
+    // SPEC.md CLI Contract (list): guarded entries MUST display threshold
+    // and effective charset. Uses a register-produced guarded instance
+    // pattern (not a built-in) to also confirm the inferred-charset path
+    // (no explicit trailing_run_guard_charset set).
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let secret = b"my-test-secret-value-that-is-long-enough-for-entropy";
+
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "list-guard-entry"])
+        .args(["--trailing-run-guard", "512"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let status = child.wait_with_output().unwrap().status;
+    assert!(status.success(), "register --trailing-run-guard failed");
+
+    let output = cli_bin()
+        .args(["list", "--patterns"])
+        .arg(&pat)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("list-guard-entry")
+            && stdout.contains("[guard: 512 bytes (charset: wide)]"),
+        "list output must show guard config for guarded entry; stdout:\n{stdout}"
+    );
+}

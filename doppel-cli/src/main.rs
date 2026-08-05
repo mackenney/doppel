@@ -536,12 +536,17 @@ fn run_list(patterns_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 "instance"
             };
             let desc = format_pattern_segments(entry);
+            let guard_suffix = match guard_description(entry) {
+                Some(g) => format!("  [guard: {}]", g),
+                None => String::new(),
+            };
             println!(
-                "  {:width$}  [{}]  {}  ({} digests)",
+                "  {:width$}  [{}]  {}  ({} digests){}",
                 entry.identifier,
                 kind,
                 desc,
                 entry.digests.len(),
+                guard_suffix,
                 width = col_width
             );
         }
@@ -572,6 +577,26 @@ fn format_pattern_segments(entry: &doppel::PatternEntry) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Human-readable trailing run guard description for `list`/`inspect`, or
+/// `None` when the entry declares no guard. When no explicit guard charset
+/// is set, mirrors the library's charset inference (SPEC.md Behavioral
+/// Invariants item 45: last `variable` segment's charset).
+fn guard_description(entry: &doppel::PatternEntry) -> Option<String> {
+    let threshold = entry.trailing_run_guard?;
+    let charset = entry.trailing_run_guard_charset.clone().unwrap_or_else(|| {
+        entry
+            .segments
+            .iter()
+            .rev()
+            .find_map(|s| match s {
+                doppel::segment::SegmentDef::Variable { charset, .. } => Some(charset.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    });
+    Some(format!("{} bytes (charset: {})", threshold, charset))
 }
 
 fn charset_size(name: &str) -> usize {
@@ -624,6 +649,10 @@ fn run_inspect(patterns_path: &Path, identifier: &str) -> Result<(), Box<dyn std
     println!("  Type: {}", type_str);
     println!("  Digests: {}", entry.digests.len());
     println!("  Salt: {}...", &*salt_fingerprint);
+    println!(
+        "  Guard: {}",
+        guard_description(entry).unwrap_or_else(|| "none".to_string())
+    );
     println!("  Segments:");
 
     for (i, d) in entry.segments.iter().enumerate() {
