@@ -7,6 +7,10 @@
 - `trailing_run_guard_charset` field on `Pattern`/`PatternEntry`/`SecretOptions`: an explicit, optional guard-probe charset for the trailing run guard, decoupled from the pattern's match charset. Defaults to `None` (guard infers the charset from the pattern's last `variable` segment, unchanged behavior). A new `base64_any` charset (union of standard and url-safe base64 alphabets) is available for patterns whose match charset is narrower than the base64 noise it needs to guard against.
 - Built-in GCP pattern now sets `trailing_run_guard_charset = "base64_any"` explicitly. Previously the guard inferred its probe charset from GCP's match charset (`url_safe_base64`), which does not include `+`/`/` — the exact bytes that terminate a probe run within the first few dozen bytes of a standard-alphabet base64 blob (the near-universal real-world encoding for embedded image data). The guard was measured to suppress zero real-world false positives against standard-base64 payloads at any threshold. With the explicit `base64_any` guard charset, the shipped 1024-byte default threshold suppresses these false positives while the match charset (and therefore real-key detection precision) is unchanged.
 
+### Fixed
+
+- `register --group` combined with `--trailing-run-guard` is now rejected at parse time instead of silently ignoring the guard flag.
+
 ## [0.0.2] - 2026-06-09
 
 ### Breaking Changes
