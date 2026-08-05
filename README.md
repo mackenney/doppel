@@ -78,6 +78,7 @@ let pat = register_with_options(b"my-super-secret-api-token", &SecretOptions {
     restrict_charset: false, // fake uses wide charset by default
     force: false,            // reject secrets below 83-bit entropy
     trailing_run_guard: None, // opt-in suppression near large same-charset blobs
+    trailing_run_guard_charset: None, // infer guard charset from the segment
 })?
 ```
 
