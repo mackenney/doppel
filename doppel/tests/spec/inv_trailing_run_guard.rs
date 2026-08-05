@@ -69,6 +69,24 @@ fn family_entry(
     }
 }
 
+/// Same shape as [`family_entry`] but with an explicit guard charset, used by
+/// the VC-26 (item 51) tests where the guard charset must diverge from the
+/// variable segment's own charset.
+fn family_entry_with_guard_charset(
+    identifier: &str,
+    salt: [u8; 32],
+    literal: &str,
+    var_charset: &str,
+    var_len: usize,
+    guard: Option<u64>,
+    guard_charset: &str,
+) -> PatternEntry {
+    PatternEntry {
+        trailing_run_guard_charset: Some(guard_charset.to_string()),
+        ..family_entry(identifier, salt, literal, var_charset, var_len, guard)
+    }
+}
+
 #[test]
 fn test_guard_suppresses_match_at_exact_threshold() {
     // item 44, VC-18: guarded pattern's structural match immediately followed by
@@ -189,8 +207,9 @@ fn test_guard_charset_is_last_variable_segment() {
 
 #[test]
 fn test_vc21_guard_without_variable_segment_rejected_at_load() {
-    // item 45, VC-21: loading a patterns file where a guard is declared on an
-    // all-literal pattern MUST fail with a clear error mentioning "trailing_run_guard".
+    // item 45, VC-21 (amended): loading a patterns file where a guard is declared
+    // with no explicit guard charset and no `variable` segment MUST fail with a
+    // clear error mentioning "trailing_run_guard".
     let pf_data = br#"
 version = 3
 
@@ -204,6 +223,49 @@ trailing_run_guard = 2048
     assert!(
         err.to_string().contains("trailing_run_guard"),
         "VC-21: error must mention trailing_run_guard, got: {err}"
+    );
+}
+
+#[test]
+fn test_vc21_guard_with_explicit_charset_loads_without_variable_segment() {
+    // item 51, VC-21 (amended): "A pattern MAY declare an explicit guard charset
+    // alongside its trailing run guard. ... A pattern that declares both a
+    // trailing run guard and an explicit guard charset MUST be accepted at load
+    // time even when it contains no `variable` segment." Same degenerate shape
+    // as the rejected case above (zero variable segments), but with an opaque
+    // segment (not all-literal) so the pattern is also swap-viable — the
+    // all-literal case is a known pathological config (item 51 closing
+    // sentence about fake-derivation basis), not what this test targets.
+    let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "literal_opaque"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [
+    { type = "literal", value = "fixed-" },
+    { type = "opaque", value = "swap-me-1234567890" },
+]
+trailing_run_guard = 2048
+trailing_run_guard_charset = "base64_any"
+"#;
+    let pf = SecretsFile::deserialize(pf_data)
+        .expect("VC-21: guard + explicit charset must load without a variable segment");
+    let patterns = pf
+        .to_patterns()
+        .expect("VC-21: to_patterns must also accept this shape");
+    assert_eq!(patterns.len(), 1);
+
+    // Swap-viable: the opaque segment gives the pattern a basis for fake
+    // derivation, so a genuine match is detected and replaced normally.
+    let payload = b"fixed-swap-me-1234567890".to_vec();
+    let result = swap(&payload, &patterns).expect("swap failed");
+    assert_eq!(result.entries.len(), 1);
+    assert!(
+        !result
+            .payload
+            .windows(payload.len())
+            .any(|w| w == payload.as_slice())
     );
 }
 
@@ -632,4 +694,287 @@ fn test_inv50_patterns_file_load_warns_but_succeeds_above_20000() {
         "item 50: to_patterns must also accept threshold > 20,000"
     );
     assert_eq!(patterns.unwrap().len(), 1);
+}
+
+#[test]
+fn test_vc26_explicit_guard_charset_broader_than_segment_suppresses() {
+    // item 51, VC-26 (direction A): "a trailing run that meets the threshold
+    // under the declared charset suppresses the match even when bytes in that
+    // run fall outside the segment charset." Declared charset base64_any is a
+    // strict superset of the last variable segment's url_safe_base64.
+    let entry = family_entry_with_guard_charset(
+        "vc26_broad",
+        [0x88; 32],
+        "tok_",
+        "url_safe_base64",
+        30,
+        Some(64),
+        "base64_any",
+    );
+    let pf = SecretsFile {
+        version: 3,
+        pattern: vec![entry],
+    };
+    let patterns = pf.to_patterns().expect("fixture must load");
+
+    let match_bytes = [b"tok_".as_slice(), &base64_filler(30)].concat();
+    // 64 bytes of '+': member of base64_any (declared), NOT of url_safe_base64
+    // (segment charset) — only the explicit declaration can suppress this.
+    let plus_run = vec![b'+'; 64];
+    let payload = [match_bytes.as_slice(), &plus_run].concat();
+    let result = swap(&payload, &patterns).expect("swap failed");
+    assert_eq!(
+        result.payload, payload,
+        "VC-26 A: broader-than-segment declared charset must suppress"
+    );
+    assert!(
+        result.entries.is_empty(),
+        "VC-26 A: zero entries when suppressed"
+    );
+}
+
+#[test]
+fn test_vc26_explicit_guard_charset_narrower_than_segment_leaves_standing() {
+    // item 51, VC-26 (direction B): "a trailing run that fails to meet the
+    // threshold under the declared charset leaves the match standing even when
+    // it would meet the threshold under the segment charset." Declared charset
+    // digits does not contain 'a'; the segment charset url_safe_base64 does.
+    let entry = family_entry_with_guard_charset(
+        "vc26_narrow",
+        [0x99; 32],
+        "tok_",
+        "url_safe_base64",
+        30,
+        Some(64),
+        "digits",
+    );
+    let pf = SecretsFile {
+        version: 3,
+        pattern: vec![entry],
+    };
+    let patterns = pf.to_patterns().expect("fixture must load");
+
+    let match_bytes = [b"tok_".as_slice(), &base64_filler(30)].concat();
+    // 64 bytes of 'a': member of url_safe_base64 (segment charset), NOT of
+    // digits (declared) — the segment charset must NOT rescue the match.
+    let a_run = vec![b'a'; 64];
+    let payload = [match_bytes.as_slice(), &a_run].concat();
+    let result = swap(&payload, &patterns).expect("swap failed");
+    assert_eq!(
+        result.entries.len(),
+        1,
+        "VC-26 B: narrower-than-segment declared charset must leave the match standing"
+    );
+    assert!(
+        !result
+            .payload
+            .windows(match_bytes.len())
+            .any(|w| w == match_bytes.as_slice()),
+        "VC-26 B: standing match must still be replaced"
+    );
+}
+
+/// Deterministic standard-alphabet base64 filler containing '+' and '/' well
+/// within the first 148 bytes (SPEC.md's measured real-world url-safe-run
+/// bound) — the vector that distinguishes the item-51 fix from the old
+/// inferred (url_safe_base64) guard-charset behavior.
+fn gcp_std_base64_filler(len: usize) -> Vec<u8> {
+    const CHUNK: &[u8] = b"Ab0+Cd1/";
+    (0..len).map(|i| CHUNK[i % CHUNK.len()]).collect()
+}
+
+#[test]
+fn test_vc27_gcp_default_suppresses_standard_base64_blob() {
+    // VC-27: "Given the built-in GCP pattern at its default guard
+    // configuration, a structural GCP-shaped candidate embedded in unwrapped
+    // standard-alphabet base64 data and followed by at least the default
+    // threshold count of standard-base64 bytes is suppressed and produces no
+    // entry." Exercises the full patterns-file emission+load chain
+    // (generate_missing_structural_salts -> serialize -> deserialize ->
+    // to_patterns), not just the in-memory builtin constructor.
+    let mut pf = SecretsFile {
+        version: 3,
+        pattern: vec![],
+    };
+    pf.generate_missing_structural_salts();
+    let bytes = pf.serialize().expect("serialize must succeed");
+    let loaded = SecretsFile::deserialize(&bytes).expect("deserialize must succeed");
+    let patterns = loaded.to_patterns().expect("to_patterns must succeed");
+
+    // filler contains '+' at offset 3 and '/' at offset 7 — an inferred
+    // url_safe_base64 guard charset would terminate its probe run there, far
+    // short of the 1024-byte threshold; only the explicit base64_any
+    // declaration (SPEC.md §Built-in Family Patterns) can suppress this.
+    let filler = gcp_std_base64_filler(1024);
+    let payload = [SYNTH_GCP, &filler].concat();
+    let result = swap(&payload, &patterns).expect("swap failed");
+    assert_eq!(
+        result.payload, payload,
+        "VC-27: GCP default guard must suppress a standard-base64 blob at threshold"
+    );
+    assert!(
+        result.entries.is_empty(),
+        "VC-27: zero entries when suppressed"
+    );
+
+    // Contrast (root-cause proof): fewer than the threshold count, terminated,
+    // must still replace normally — the guard still respects the threshold.
+    let short_filler = gcp_std_base64_filler(1023);
+    let payload_b = [SYNTH_GCP, &short_filler, b"\"".as_slice()].concat();
+    let result_b = swap(&payload_b, &patterns).expect("swap failed");
+    assert_eq!(
+        result_b.entries.len(),
+        1,
+        "VC-27 contrast: one byte under threshold, terminated, must be replaced"
+    );
+    assert!(
+        !result_b
+            .payload
+            .windows(SYNTH_GCP.len())
+            .any(|w| w == SYNTH_GCP),
+        "VC-27 contrast: original secret must not appear in swapped payload"
+    );
+}
+
+#[test]
+fn test_vc28_guard_charset_without_threshold_rejected_on_both_paths() {
+    // item 51, VC-28: "An explicit guard charset declared without a trailing
+    // run guard threshold MUST be rejected at load and registration time with
+    // a clear error."
+    let secret = b"registered-secret-charset-only-no-threshold-05";
+    let opts = SecretOptions {
+        trailing_run_guard_charset: Some("base64_any".into()),
+        ..Default::default()
+    };
+    let err = register_with_options(secret, &opts).err().unwrap();
+    assert!(
+        err.to_string()
+            .contains("trailing_run_guard_charset requires trailing_run_guard"),
+        "VC-28: registration error must mention the dependency, got: {err}"
+    );
+
+    let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "charset_only"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [{ type = "variable", charset = "alphanumeric", min = 10, max = 10 }]
+trailing_run_guard_charset = "base64_any"
+"#;
+    let load_err = SecretsFile::deserialize(pf_data).unwrap_err();
+    assert!(
+        load_err
+            .to_string()
+            .contains("trailing_run_guard_charset requires trailing_run_guard"),
+        "VC-28: load error must mention the same dependency, got: {load_err}"
+    );
+}
+
+#[test]
+fn test_inv49_registered_guard_uses_explicit_charset_when_supplied() {
+    // items 49, 51: register_with_options with a threshold and an explicit
+    // trailing_run_guard_charset must use the declared charset for the guard
+    // probe, not the registered pattern's inferred (alphanumeric) segment
+    // charset. Counterpart of test_vc22_registered_guarded_secret_suppressed_and_replaced.
+    let secret = b"RegisteredSecretForCharsetOverrideTestZZ";
+    let opts = SecretOptions {
+        restrict_charset: true,
+        trailing_run_guard: Some(64),
+        trailing_run_guard_charset: Some("base64_any".into()),
+        ..Default::default()
+    };
+    let pat = register_with_options(secret, &opts).expect("registration must succeed");
+
+    // Payload A: secret + 64 bytes of '+'/'/' — outside the inferred
+    // alphanumeric segment charset but inside the declared base64_any — must
+    // suppress. Proves the declared charset, not the inferred one, governs.
+    let plus_slash_filler: Vec<u8> = (0..64)
+        .map(|i| if i % 2 == 0 { b'+' } else { b'/' })
+        .collect();
+    let payload_a = [secret.as_slice(), &plus_slash_filler].concat();
+    let result_a = swap(&payload_a, std::slice::from_ref(&pat)).expect("swap failed");
+    assert_eq!(
+        result_a.payload, payload_a,
+        "item 49/51: explicit guard charset must suppress a +/-mix trailing run"
+    );
+    assert!(result_a.entries.is_empty());
+
+    // Payload B: secret + '"' (outside the declared charset too) — replaced.
+    let payload_b = [secret.as_slice(), b"\"".as_slice()].concat();
+    let result_b = swap(&payload_b, &[pat]).expect("swap failed");
+    assert_eq!(
+        result_b.entries.len(),
+        1,
+        "item 49/51: terminator outside guard charset — match must stand"
+    );
+    assert!(!result_b.payload.windows(secret.len()).any(|w| w == secret));
+}
+
+#[test]
+fn test_guard_without_explicit_charset_behaves_identically_to_inference() {
+    // item 51 closing MUST: "When no explicit guard charset is declared, guard
+    // behavior MUST be identical to the inferred-charset behavior of item 45."
+    // Backward-compat regression (HANDOFF downside 7): a guarded pattern
+    // loaded from TOML that omits trailing_run_guard_charset entirely must
+    // behave exactly as before this feature existed — probe uses the last
+    // variable segment's charset (url_safe_base64 here), not any default.
+    // test_guard_charset_is_last_variable_segment covers the segment-selection
+    // half (last vs. first variable); this covers the standard-vs-url-safe
+    // divergence half.
+    let pf_data = br#"
+version = 3
+
+[[pattern]]
+identifier = "no_explicit_charset"
+salt = "0000000000000000000000000000000000000000000000000000000000000001"
+segments = [
+    { type = "literal", value = "tok_" },
+    { type = "variable", charset = "url_safe_base64", min = 30, max = 30 },
+]
+trailing_run_guard = 64
+"#;
+    assert!(
+        !std::str::from_utf8(pf_data)
+            .unwrap()
+            .contains("trailing_run_guard_charset"),
+        "fixture must omit trailing_run_guard_charset entirely"
+    );
+    let pf =
+        SecretsFile::deserialize(pf_data).expect("must load without an explicit guard charset");
+    let patterns = pf.to_patterns().expect("must convert to patterns");
+
+    let match_bytes = [b"tok_".as_slice(), &base64_filler(30)].concat();
+
+    // url-safe trailing at exactly the threshold: member of the inferred
+    // (segment) charset — must suppress, same as pre-item-51 behavior.
+    let suppressed_payload = [match_bytes.as_slice(), &base64_filler(64)].concat();
+    let result = swap(&suppressed_payload, &patterns).expect("swap failed");
+    assert_eq!(
+        result.payload, suppressed_payload,
+        "inference: url-safe trailing at threshold must suppress"
+    );
+    assert!(result.entries.is_empty());
+
+    // Standard-base64 trailing containing '+' before the threshold: '+' is
+    // not a member of the inferred url_safe_base64 charset, so the probe run
+    // terminates far short of 64 — must NOT suppress, same as pre-item-51
+    // behavior (this is precisely the divergence item 51 exists to override,
+    // and here there is no override, so the old behavior must be preserved).
+    let mut standing_trailing = base64_filler(64);
+    standing_trailing[10] = b'+';
+    let standing_payload = [match_bytes.as_slice(), &standing_trailing].concat();
+    let result2 = swap(&standing_payload, &patterns).expect("swap failed");
+    assert_eq!(
+        result2.entries.len(),
+        1,
+        "inference: '+' before threshold must not suppress"
+    );
+    assert!(
+        !result2
+            .payload
+            .windows(match_bytes.len())
+            .any(|w| w == match_bytes.as_slice()),
+        "standing match must still be replaced"
+    );
 }

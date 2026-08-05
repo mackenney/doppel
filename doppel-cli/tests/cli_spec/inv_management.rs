@@ -537,3 +537,51 @@ fn test_register_default_has_no_trailing_run_guard() {
         .unwrap();
     assert_eq!(entry.trailing_run_guard, None);
 }
+
+#[test]
+fn test_define_accepts_base64_any_charset() {
+    // SPEC.md §Patterns File: base64_any is "a general-purpose charset, valid
+    // wherever a charset name is accepted: `variable` and `opaque` segments as
+    // well as `trailing_run_guard_charset`." Guards `define`'s `from_name`
+    // lookup rejecting it, and guards `charset_size`'s unrecognised-name
+    // `_ => 0` fallback silently zeroing its entropy in `inspect` output.
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["define", "--patterns"])
+        .arg(&pat)
+        .args([
+            "--identifier",
+            "B64ANY",
+            "--segment",
+            "literal:prefix_",
+            "--segment",
+            "variable:base64_any:35:35",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "define with base64_any charset must succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let inspect_output = cli_bin()
+        .args(["inspect", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "B64ANY"])
+        .output()
+        .unwrap();
+    assert!(inspect_output.status.success());
+    let stdout = String::from_utf8_lossy(&inspect_output.stdout);
+    // 35 * log2(67) ≈ 212.3 bits — assert on the "212." prefix, not the exact float.
+    assert!(
+        stdout.contains("212."),
+        "base64_any entropy must not fall through charset_size's \
+         unrecognised-name `_ => 0` branch; stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("0.0 bits"),
+        "base64_any entropy must not be zeroed; stdout: {stdout}"
+    );
+}
