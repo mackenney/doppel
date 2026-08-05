@@ -372,6 +372,31 @@ fn test_inv37_register_group_preserves_inline_comments() {
 }
 
 #[test]
+fn test_register_group_conflicts_with_trailing_run_guard() {
+    // Guard config lives on the pattern entry, not on an individual registered
+    // secret, so `--trailing-run-guard` has no effect for `--group` updates. clap
+    // must reject the combination rather than silently ignoring the flag.
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let output = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--group", "whatever", "--trailing-run-guard", "64"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "register --group with --trailing-run-guard should be rejected by clap"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("trailing-run-guard") && stderr.contains("group"),
+        "expected clap conflicts_with error mentioning both flags, got:\n{stderr}"
+    );
+}
+
+#[test]
 fn test_vc16_remove_eliminates_identifier() {
     // VC-16: After `remove` succeeds on an existing identifier, the patterns file
     // MUST NOT contain any entry with that identifier.

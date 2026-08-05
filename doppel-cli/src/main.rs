@@ -92,7 +92,11 @@ enum Commands {
         /// guard-charset bytes is suppressed as a likely slice of an encoded
         /// blob. The guard charset is the Pattern's single `variable` segment
         /// charset. Must be positive; zero is rejected with a clear error.
-        #[arg(long)]
+        ///
+        /// Rejected together with --group: guard config lives on the pattern
+        /// entry itself, so it has no effect when appending a digest to an
+        /// existing group member.
+        #[arg(long, conflicts_with = "group")]
         trailing_run_guard: Option<usize>,
         /// Suppress entropy hard-fail (83-bit threshold); warning is still emitted.
         #[arg(long, short = 'f')]
