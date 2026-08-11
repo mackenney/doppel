@@ -19,6 +19,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## Completed
 
+- `aws-akia-asia-default-guard` — AWS AKIA/ASIA built-in patterns now default-guarded (1024 bytes, `base64_any`), same weak shape as GCP; found via a real production false positive (screenshot upload corrupted through an `ASIA`-shaped chance match), corrects SPEC.md's prior "other built-ins need no guard" claim; commit 69094f0
 - `trailing-run-guard-charset-fix` — explicit `trailing_run_guard_charset` field + `base64_any` charset; fixes GCP guard's charset conflation (was inferring url_safe_base64 from match segment, providing zero suppression against real-world standard-base64 image blobs at any threshold); GCP default now explicit `base64_any`, 13/13 real-corpus false positives suppressed post-fix; includes round-2/3 review fixes (register/--group conflict, shared-validator dedup, bypass-test coverage, doc updates); commit b48fd08
 - `trailing-run-guard` — opt-in trailing same-charset run guard suppressing base64-blob false positives (SPEC items 44-49 + item 18 guard tie-breaks, VC 18-25, GCP guarded by default 2048 bytes, registration option); commit 7bff46b
 
