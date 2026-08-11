@@ -282,10 +282,11 @@ static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
     trailing_run_guard_charset: None,
 });
 
-/// GCP guard threshold: a genuine standalone key is delimited by structural
-/// context (quote, whitespace, punctuation) within tens of bytes of its end;
-/// base64-encoded binary blobs (the false-positive source) run uninterrupted
-/// for far longer — real-world screenshot uploads observed at 15–400 KB.
+/// Default guard threshold, shared by GCP, AKIA, and ASIA: a genuine standalone
+/// key is delimited by structural context (quote, whitespace, punctuation)
+/// within tens of bytes of its end; base64-encoded binary blobs (the
+/// false-positive source) run uninterrupted for far longer — real-world
+/// screenshot uploads observed at 15–400 KB.
 /// 1024 was chosen empirically against two real screenshot corpora (2792 +
 /// 417 real PNG screenshots, sizes ranging 0.5KB–5.5MB, median ~110KB): it
 /// achieved complete suppression of every real false-positive candidate found
@@ -295,7 +296,7 @@ static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
 /// match near the tail of a blob shorter than the threshold can never be
 /// suppressed, so raising the threshold past typical blob sizes only trades
 /// away coverage. 1024 sits comfortably below where that tail effect starts
-/// costing coverage, while remaining far above real GCP key trailing contexts.
+/// costing coverage, while remaining far above real key trailing contexts.
 pub(crate) const DEFAULT_TRAILING_RUN_GUARD: usize = 1024;
 
 const GCP_SEGS: [BuiltinSegment; 2] = [
