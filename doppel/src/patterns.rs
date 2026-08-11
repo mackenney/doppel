@@ -207,8 +207,11 @@ static AWS_AKIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    trailing_run_guard: None,
-    trailing_run_guard_charset: None,
+    // Guarded by default: same false-positive class as GCP (see GCP_DEF above)
+    // — a 4-byte literal prefix and single unanchored variable region can occur
+    // by chance inside large base64 blobs (measured real-world corpus hit).
+    trailing_run_guard: Some(DEFAULT_TRAILING_RUN_GUARD),
+    trailing_run_guard_charset: Some(CharsetName::Base64Any),
 });
 
 const AWS_ASIA_SEGS: [BuiltinSegment; 2] = [
@@ -227,8 +230,9 @@ static AWS_ASIA_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    trailing_run_guard: None,
-    trailing_run_guard_charset: None,
+    // Guarded by default: same false-positive class as GCP/AKIA (see above).
+    trailing_run_guard: Some(DEFAULT_TRAILING_RUN_GUARD),
+    trailing_run_guard_charset: Some(CharsetName::Base64Any),
 });
 
 const GITHUB_CLASSIC_SEGS: [BuiltinSegment; 2] = [
@@ -292,7 +296,7 @@ static GITHUB_FG_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
 /// suppressed, so raising the threshold past typical blob sizes only trades
 /// away coverage. 1024 sits comfortably below where that tail effect starts
 /// costing coverage, while remaining far above real GCP key trailing contexts.
-pub(crate) const GCP_TRAILING_RUN_GUARD: usize = 1024;
+pub(crate) const DEFAULT_TRAILING_RUN_GUARD: usize = 1024;
 
 const GCP_SEGS: [BuiltinSegment; 2] = [
     BuiltinSegment::Literal(b"AIza"),
@@ -310,7 +314,7 @@ static GCP_DEF: LazyLock<StructuralDef> = LazyLock::new(|| StructuralDef {
         .map(Segment::from)
         .collect::<Vec<_>>()
         .into(),
-    trailing_run_guard: Some(GCP_TRAILING_RUN_GUARD),
+    trailing_run_guard: Some(DEFAULT_TRAILING_RUN_GUARD),
     trailing_run_guard_charset: Some(CharsetName::Base64Any),
 });
 
@@ -1486,11 +1490,26 @@ mod tests {
     }
 
     #[test]
-    fn test_gcp_has_trailing_run_guard_default_others_none() {
+    fn test_default_guard_patterns_others_none() {
+        // GCP, AKIA, and ASIA share the same weak structural shape (short
+        // literal prefix, single unanchored variable region) and so share the
+        // same default guard; every other built-in has a longer prefix and/or
+        // dual anchor making accidental structural matches negligible.
+        const GUARDED: &[&str] = &["gcp", "aws_akia", "aws_asia"];
         for p in all() {
-            if p.identifier == "gcp" {
-                assert_eq!(p.trailing_run_guard, Some(GCP_TRAILING_RUN_GUARD));
-                assert_eq!(p.trailing_run_guard_charset, Some(CharsetName::Base64Any));
+            if GUARDED.contains(&p.identifier.as_str()) {
+                assert_eq!(
+                    p.trailing_run_guard,
+                    Some(DEFAULT_TRAILING_RUN_GUARD),
+                    "{} must have the default trailing_run_guard",
+                    p.identifier
+                );
+                assert_eq!(
+                    p.trailing_run_guard_charset,
+                    Some(CharsetName::Base64Any),
+                    "{} must have the default guard charset",
+                    p.identifier
+                );
             } else {
                 assert_eq!(
                     p.trailing_run_guard, None,

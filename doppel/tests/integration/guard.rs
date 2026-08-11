@@ -91,3 +91,26 @@ fn test_large_base64_blob_with_embedded_prefix_roundtrip() {
         "no detections must occur inside the guarded false-positive blob"
     );
 }
+
+#[test]
+fn test_large_base64_blob_with_embedded_akia_prefix_roundtrip() {
+    // Same false-positive class as AIza (see above): AWS AKIA/ASIA patterns have
+    // a short 4-byte literal prefix and a single unanchored variable region, so
+    // "AKIA" + 16 uppercase-alphanumeric characters can occur by chance inside a
+    // large base64 blob (real-world corpus hit: embedded PNG image data).
+    let mut blob = base64_filler(64 * 1024);
+    // Structurally exact AKIA match, followed by far more than 1024 bytes of
+    // base64-charset trailing data.
+    blob[10_000..10_020].copy_from_slice(b"AKIALGUKFO74R8KHBHMW");
+
+    let result = swap(&blob, &patterns::all()).expect("swap failed");
+
+    assert_eq!(
+        result.payload, blob,
+        "large base64 blob with an embedded AKIA-shaped candidate must round-trip byte-identical"
+    );
+    assert!(
+        result.entries.is_empty(),
+        "no detections must occur inside the guarded false-positive blob"
+    );
+}

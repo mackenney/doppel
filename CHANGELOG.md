@@ -12,6 +12,7 @@
 ### Fixed
 
 - `register --group` combined with `--trailing-run-guard` is now rejected at parse time instead of silently ignoring the guard flag.
+- Built-in AWS `aws_akia` and `aws_asia` patterns now declare a trailing run guard by default (threshold 1024, charset `base64_any`), matching the GCP pattern. Both share GCP's weak structural shape (4-byte literal prefix, single unanchored variable region) and were confirmed producing real false-positive corruption: a structurally exact `ASIA`-prefixed candidate occurring by chance inside base64-encoded PNG image data, silently corrupting the encoded blob. SPEC.md's prior claim that "other built-in patterns need no guard" was incorrect for these two; corrected.
 
 ### Changed
 

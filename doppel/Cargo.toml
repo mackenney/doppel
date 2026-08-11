@@ -1,6 +1,6 @@
 [package]
 name = "doppel"
-version = "0.0.2"
+version = "0.1.0"
 edition = "2024"
 description = "Intercept secrets in byte payloads, replace them with structurally-equivalent fakes, and transparently restore originals in streaming responses."
 license = "MIT OR Apache-2.0"

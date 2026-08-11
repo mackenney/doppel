@@ -978,3 +978,57 @@ trailing_run_guard = 64
         "standing match must still be replaced"
     );
 }
+
+#[test]
+fn test_vc27_aws_akia_default_suppresses_base64_blob() {
+    // VC-27 parity for AWS AKIA: same weak shape as GCP (4-byte literal prefix,
+    // single unanchored variable region), same real-world corpus motivation
+    // (a structurally exact AKIA-shaped candidate occurring by chance inside
+    // base64-encoded PNG image data). Exercises the full patterns-file
+    // emission+load chain, not just the in-memory builtin constructor.
+    let mut pf = SecretsFile {
+        version: 3,
+        pattern: vec![],
+    };
+    pf.generate_missing_structural_salts();
+    let bytes = pf.serialize().expect("serialize must succeed");
+    let loaded = SecretsFile::deserialize(&bytes).expect("deserialize must succeed");
+    let patterns = loaded.to_patterns().expect("to_patterns must succeed");
+
+    // Synthetic candidate — NOT a real credential.
+    const SYNTH_AKIA: &[u8] = b"AKIALGUKFO74R8KHBHMW";
+
+    // Mixed-case url-safe-base64 filler: an inferred guard (AKIA's match
+    // charset is uppercase_alphanumeric) terminates on the first lowercase
+    // byte, within a handful of bytes — only the explicit base64_any
+    // declaration (SPEC.md §Built-in Family Patterns) suppresses this.
+    let filler = base64_filler(1024);
+    let payload = [SYNTH_AKIA, &filler].concat();
+    let result = swap(&payload, &patterns).expect("swap failed");
+    assert_eq!(
+        result.payload, payload,
+        "VC-27: AKIA default guard must suppress a base64 blob at threshold"
+    );
+    assert!(
+        result.entries.is_empty(),
+        "VC-27: zero entries when suppressed"
+    );
+
+    // Contrast: fewer than the threshold count, terminated, must still
+    // replace normally — the guard still respects the threshold.
+    let short_filler = base64_filler(1023);
+    let payload_b = [SYNTH_AKIA, &short_filler, b"\"".as_slice()].concat();
+    let result_b = swap(&payload_b, &patterns).expect("swap failed");
+    assert_eq!(
+        result_b.entries.len(),
+        1,
+        "VC-27 contrast: one byte under threshold, terminated, must be replaced"
+    );
+    assert!(
+        !result_b
+            .payload
+            .windows(SYNTH_AKIA.len())
+            .any(|w| w == SYNTH_AKIA),
+        "VC-27 contrast: original secret must not appear in swapped payload"
+    );
+}
