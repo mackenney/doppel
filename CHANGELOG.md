@@ -2,6 +2,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.1.0] - 2026-08-11
+
 ### Added
 
 - `trailing_run_guard_charset` field on `Pattern`/`PatternEntry`/`SecretOptions`: an explicit, optional guard-probe charset for the trailing run guard, decoupled from the pattern's match charset. Defaults to `None` (guard infers the charset from the pattern's last `variable` segment, unchanged behavior). A new `base64_any` charset (union of standard and url-safe base64 alphabets) is available for patterns whose match charset is narrower than the base64 noise it needs to guard against.
@@ -97,6 +99,7 @@ pub struct Pattern {
 - CLI commands: `init`, `swap`, `restore`, `register` (`--identifier`, `--anchor-len`, `--tail-anchor-len`, `--group`, `--force`), `define`, `list`, `inspect`, `remove`.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/mackenney/doppel/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/mackenney/doppel/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/mackenney/doppel/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/mackenney/doppel/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/mackenney/doppel/tree/v0.0.1
