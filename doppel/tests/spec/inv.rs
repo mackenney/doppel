@@ -130,8 +130,7 @@ fn test_inv5_async_no_plaintext_before_aead_verified() {
 
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
     let mut sr = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
-    let last = sr.entries[0].ciphertext.len() - 1;
-    sr.entries[0].ciphertext[last] ^= 0xFF; // tamper tag
+    sr.entries[0].flip_last_ciphertext_byte_for_testing(); // tamper tag
 
     let chunks: Vec<Result<Bytes, io::Error>> = sr
         .payload
@@ -190,8 +189,7 @@ fn test_inv6_async_aead_tag_failure_produces_error() {
 
     let payload = [b"ctx: ".as_slice(), SYNTH_GITHUB_CLASSIC].concat();
     let mut sr = swap(&payload, &[patterns::github_classic()]).expect("swap failed");
-    let last = sr.entries[0].ciphertext.len() - 1;
-    sr.entries[0].ciphertext[last] ^= 0xFF; // tamper tag
+    sr.entries[0].flip_last_ciphertext_byte_for_testing(); // tamper tag
 
     let chunks: Vec<Result<Bytes, io::Error>> = sr
         .payload

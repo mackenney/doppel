@@ -24,7 +24,7 @@ use aho_corasick::{AhoCorasick, Input};
 /// - INV-5: Plaintext emitted only after `decrypt_entry` succeeds
 /// - INV-6: AEAD failure returns immediately via `on_aead_failure`
 /// - INV-8: At most `max_hold` bytes remain in buffer after return (unless error)
-/// - INV-19: Uses AhoCorasick with LeftmostFirst for exact matching
+/// - INV-19: Uses AhoCorasick with LeftmostLongest for exact matching
 ///
 /// # Returns
 /// `Ok(())` on success (all safe bytes emitted), `Err(E)` on AEAD failure.

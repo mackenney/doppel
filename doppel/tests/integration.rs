@@ -9,3 +9,6 @@ mod detector;
 
 #[path = "integration/guard.rs"]
 mod guard;
+
+#[path = "integration/matcher_bounds.rs"]
+mod matcher_bounds;

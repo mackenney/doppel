@@ -76,12 +76,15 @@ fn match_segments(
         }
         Segment::Variable { charset, min, max } => {
             let cs = charset.resolve();
+            // Lengths past end of payload can never match; clamping avoids
+            // overflow and work proportional to `max` instead of payload size.
+            let hi = (*max).min(payload.len().saturating_sub(cur));
+            if *min > hi {
+                return None;
+            }
             // Try lengths from max down to min (longest-first, INV-18).
-            for var_len in (*min..=*max).rev() {
+            for var_len in (*min..=hi).rev() {
                 let end = cur + var_len;
-                if end > payload.len() {
-                    continue;
-                }
                 if payload[cur..end].iter().all(|&b| cs.contains(b)) {
                     let saved = var_lens.len();
                     var_lens.push(var_len);
@@ -784,7 +787,13 @@ pub(crate) fn build_ac_automaton(patterns: &[Pattern]) -> AhoCorasick {
         .iter()
         .filter_map(|p| p.first_segment_bytes())
         .collect();
-    AhoCorasick::new(&prefixes).expect("AC build should not fail for valid patterns")
+    // Leftmost semantics report the earliest-*starting* anchor; the default
+    // (Standard) reports the earliest-*ending* one, which skips an anchor that
+    // contains a shorter, earlier-ending anchor (SPEC Behavioral Invariant 18).
+    AhoCorasick::builder()
+        .match_kind(aho_corasick::MatchKind::LeftmostFirst)
+        .build(&prefixes)
+        .expect("AC build should not fail for valid patterns")
 }
 
 /// Unified detection descriptor for both family and instance patterns.
