@@ -87,7 +87,8 @@ where
         let fakes: Vec<&[u8]> = entries.iter().map(|e| e.fake.as_slice()).collect();
         Some(
             AhoCorasick::builder()
-                .match_kind(MatchKind::LeftmostFirst)
+                // Longest fake wins at a shared start, so a fake that prefixes another cannot shadow it (INV-4).
+                .match_kind(MatchKind::LeftmostLongest)
                 .build(&fakes)
                 .map_err(RestoreError::from)?,
         )
