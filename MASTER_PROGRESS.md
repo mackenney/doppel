@@ -11,7 +11,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## In Progress
 
-*(none)*
+- `proptest-gaps` — four more property tests (restore holdback, entries no-leak, registration guard e2e, Detector reuse); see `plans/proptest-gaps/`
 
 ## Queued
 

@@ -1,0 +1,29 @@
+{
+  "step": "step-04-detector-reuse",
+  "tier": "fast",
+  "base_commit": "d0e43e4",
+  "gates": [
+    { "id": "g-build-1", "class": "build", "cmd": "cargo nextest run -p doppel --all-features --test property --no-run", "timeoutMs": 900000 },
+    { "id": "g-static-1", "class": "static", "cmd": "bash -c 'cargo clippy -p doppel --all-features --all-targets > /tmp/clippy-step-04.log 2>&1; s=$?; cat /tmp/clippy-step-04.log; [ $s -eq 0 ] && ! grep -n \"tests/property/detector_reuse.rs\" /tmp/clippy-step-04.log'", "timeoutMs": 900000 },
+    { "id": "g-static-2", "class": "static", "cmd": "cargo fmt --check", "timeoutMs": 120000 },
+    { "id": "g-static-3", "class": "static", "cmd": "bash -c '! git diff --name-only HEAD~1 HEAD | grep -vxF doppel/tests/property/detector_reuse.rs'", "timeoutMs": 60000 },
+    { "id": "g-unit-1", "class": "unit", "cmd": "cargo nextest run -p doppel --all-features --test property detector_reuse::", "timeoutMs": 900000 },
+    { "id": "g-unit-2", "class": "unit", "cmd": "bash plans/proptest-gaps/mutations/step-04-detector-drops-first-pattern.sh", "timeoutMs": 1200000 },
+    { "id": "g-e2e-smoke-1", "class": "e2e-smoke", "cmd": "env PROPTEST_CASES=512 cargo nextest run -p doppel --all-features --test property detector_reuse::", "timeoutMs": 1200000 },
+    { "id": "g-regress-1", "class": "regress", "cmd": "cargo nextest run -p doppel --all-features --test property", "timeoutMs": 1800000 },
+    { "id": "g-integ-1", "class": "integ", "cmd": "cargo nextest run --workspace", "timeoutMs": 2700000 },
+    { "id": "g-integ-2", "class": "integ", "cmd": "env PROPTEST_CASES=1024 cargo nextest run -p doppel --all-features --test property restore_holdback:: entries_no_leak:: registration_guard:: detector_reuse::", "timeoutMs": 2700000 }
+  ],
+  "coverage": [
+    { "row": "one Detector reused sequentially, forward and reverse order", "gate": "g-unit-1" },
+    { "row": "fresh Detector per payload", "gate": "g-unit-1" },
+    { "row": "Detector shared across 2-4 std::thread::scope threads", "gate": "g-unit-1" },
+    { "row": "per-call entries/session key coherent (AEAD round trip)", "gate": "g-unit-1" },
+    { "row": "instance pattern in the set (arb_case p=0.25)", "gate": "g-unit-1" },
+    { "row": "Detector diverging from free swap is caught (mutant)", "gate": "g-unit-2" },
+    { "row": "PROPTEST_CASES env override", "gate": "g-e2e-smoke-1" },
+    { "row": "whole workspace with all four new modules", "gate": "g-integ-1" },
+    { "row": "scaled run of all four new modules", "gate": "g-integ-2" }
+  ],
+  "hard_splits_declared": []
+}

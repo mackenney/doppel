@@ -1,0 +1,28 @@
+{
+  "step": "step-02-entries-no-leak",
+  "tier": "fast",
+  "base_commit": "d0e43e4",
+  "gates": [
+    { "id": "g-build-1", "class": "build", "cmd": "cargo nextest run -p doppel --all-features --test property --no-run", "timeoutMs": 900000 },
+    { "id": "g-static-1", "class": "static", "cmd": "bash -c 'cargo clippy -p doppel --all-features --all-targets > /tmp/clippy-step-02.log 2>&1; s=$?; cat /tmp/clippy-step-02.log; [ $s -eq 0 ] && ! grep -n \"tests/property/entries_no_leak.rs\" /tmp/clippy-step-02.log'", "timeoutMs": 900000 },
+    { "id": "g-static-2", "class": "static", "cmd": "cargo fmt --check", "timeoutMs": 120000 },
+    { "id": "g-static-3", "class": "static", "cmd": "bash -c '! git diff --name-only HEAD~1 HEAD | grep -vxF doppel/tests/property/entries_no_leak.rs'", "timeoutMs": 60000 },
+    { "id": "g-unit-1", "class": "unit", "cmd": "cargo nextest run -p doppel --all-features --test property entries_no_leak::", "timeoutMs": 900000 },
+    { "id": "g-unit-2", "class": "unit", "cmd": "bash plans/proptest-gaps/mutations/step-02-ciphertext-is-plaintext.sh", "timeoutMs": 1200000 },
+    { "id": "g-unit-3", "class": "unit", "cmd": "bash plans/proptest-gaps/mutations/step-02-key-in-nonce.sh", "timeoutMs": 1200000 },
+    { "id": "g-e2e-smoke-1", "class": "e2e-smoke", "cmd": "env PROPTEST_CASES=1024 cargo nextest run -p doppel --all-features --test property entries_no_leak::", "timeoutMs": 1200000 },
+    { "id": "g-regress-1", "class": "regress", "cmd": "cargo nextest run -p doppel --all-features --test property", "timeoutMs": 1800000 },
+    { "id": "g-integ-1", "class": "integ", "result": "n/a", "reason": "plan-level integration run (full workspace suite) is owned by step-04-detector-reuse" }
+  ],
+  "coverage": [
+    { "row": "serialized form: raw JSON from Entry::serialize_entries", "gate": "g-unit-1" },
+    { "row": "decoded base64 non-fake fields (nonce, ciphertext)", "gate": "g-unit-2" },
+    { "row": "Debug form, fake elided and full", "gate": "g-unit-1" },
+    { "row": "public fake field", "gate": "g-unit-1" },
+    { "row": "session key embedded in entries", "gate": "g-unit-3" },
+    { "row": "instance-pattern specs from arb_case (p=0.25)", "gate": "g-unit-1" },
+    { "row": "entropy-scaled window per charset (digits 20 ... wide 10)", "gate": "g-unit-1" },
+    { "row": "PROPTEST_CASES env override", "gate": "g-e2e-smoke-1" }
+  ],
+  "hard_splits_declared": []
+}

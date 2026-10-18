@@ -1,0 +1,31 @@
+{
+  "step": "step-03-registration-guard",
+  "tier": "fast",
+  "base_commit": "d0e43e4",
+  "gates": [
+    { "id": "g-build-1", "class": "build", "cmd": "cargo nextest run -p doppel --all-features --test property --no-run", "timeoutMs": 900000 },
+    { "id": "g-static-1", "class": "static", "cmd": "bash -c 'cargo clippy -p doppel --all-features --all-targets > /tmp/clippy-step-03.log 2>&1; s=$?; cat /tmp/clippy-step-03.log; [ $s -eq 0 ] && ! grep -n \"tests/property/registration_guard.rs\" /tmp/clippy-step-03.log'", "timeoutMs": 900000 },
+    { "id": "g-static-2", "class": "static", "cmd": "cargo fmt --check", "timeoutMs": 120000 },
+    { "id": "g-static-3", "class": "static", "cmd": "bash -c '! git diff --name-only HEAD~1 HEAD | grep -vxF doppel/tests/property/registration_guard.rs'", "timeoutMs": 60000 },
+    { "id": "g-unit-1", "class": "unit", "cmd": "cargo nextest run -p doppel --all-features --test property registration_guard::", "timeoutMs": 900000 },
+    { "id": "g-unit-2", "class": "unit", "cmd": "bash plans/proptest-gaps/mutations/step-03-drop-explicit-guard-charset.sh", "timeoutMs": 1200000 },
+    { "id": "g-unit-3", "class": "unit", "cmd": "bash plans/proptest-gaps/mutations/step-03-threshold-off-by-one.sh", "timeoutMs": 1200000 },
+    { "id": "g-unit-4", "class": "unit", "cmd": "bash plans/proptest-gaps/mutations/step-03-accept-zero-guard.sh", "timeoutMs": 1200000 },
+    { "id": "g-e2e-smoke-1", "class": "e2e-smoke", "cmd": "env PROPTEST_CASES=1024 cargo nextest run -p doppel --all-features --test property registration_guard::", "timeoutMs": 1200000 },
+    { "id": "g-regress-1", "class": "regress", "cmd": "cargo nextest run -p doppel --all-features --test property", "timeoutMs": 1800000 },
+    { "id": "g-integ-1", "class": "integ", "result": "n/a", "reason": "plan-level integration run (full workspace suite) is owned by step-04-detector-reuse" }
+  ],
+  "coverage": [
+    { "row": "trailing_run_guard=Some(t), inferred guard charset", "gate": "g-unit-1" },
+    { "row": "explicit trailing_run_guard_charset (all 7 names) overrides variable charset", "gate": "g-unit-2" },
+    { "row": "declared threshold equals requested threshold", "gate": "g-unit-3" },
+    { "row": "trailing_run_guard=None: never suppressed (INV-48)", "gate": "g-unit-1" },
+    { "row": "restrict_charset=false (wide) and =true (detected)", "gate": "g-unit-1" },
+    { "row": "tail_anchor_len>0 (trailing opaque segment)", "gate": "g-unit-1" },
+    { "row": "run terminated by EOF vs filler byte", "gate": "g-unit-1" },
+    { "row": "threshold Some(0) -> ZeroTrailingRunGuard (with/without charset)", "gate": "g-unit-4" },
+    { "row": "charset without threshold -> GuardCharsetWithoutGuard", "gate": "g-unit-1" },
+    { "row": "PROPTEST_CASES env override", "gate": "g-e2e-smoke-1" }
+  ],
+  "hard_splits_declared": []
+}

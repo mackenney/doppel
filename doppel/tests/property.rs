@@ -33,6 +33,18 @@ mod restore_sync;
 #[path = "property/tamper.rs"]
 mod tamper;
 
+#[path = "property/restore_holdback.rs"]
+mod restore_holdback;
+
+#[path = "property/entries_no_leak.rs"]
+mod entries_no_leak;
+
+#[path = "property/registration_guard.rs"]
+mod registration_guard;
+
+#[path = "property/detector_reuse.rs"]
+mod detector_reuse;
+
 #[path = "property/support.rs"]
 mod support;
 
