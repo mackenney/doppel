@@ -2,6 +2,24 @@
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- `swap` no longer skips an earlier-starting anchor when a shorter anchor ends earlier inside it (candidate automaton now uses leftmost-first matching instead of the default earliest-ending semantics); previously a genuine secret could pass through unreplaced when two patterns' anchors overlapped.
+- `restore` (sync and async) no longer lets a shorter fake shadow a longer fake that it prefixes; restore now matches the longest fake at a shared start, so the original payload is reproduced exactly.
+- Variable-segment matching clamps its length range to the remaining payload, removing an overflow panic and work proportional to the declared maximum length rather than the payload size.
+
+### Changed
+
+- **Behavior change:** `register` / `register_with_options` and `doppel register` now fail with the new `SecretError::UnsupportedSecretBytes { offset }` when a byte of the secret's variable portion lies outside the effective variable charset (for example a space, `"`, `\`, a control byte, or any non-ASCII byte). Previously registration succeeded but produced a Pattern that could never detect the secret; with `echo secret | doppel register` the trailing newline silently caused this. The check applies even with `force`/`--force`, and the error carries only the byte offset, never secret bytes. Use `echo -n` or `printf` when piping a secret to `register`.
+
+### Documentation
+
+- SPEC.md: fake derivation is stable but not injective, so distinct secrets can in principle receive identical fakes (negligible above the 83-bit registration floor, non-negligible for low-capacity custom patterns); restore of such entries is unspecified. Documented as an accepted limitation with qualified invariant 4 and verifiable conditions 1, 2, 4 and 17.
+
+### Testing
+
+- New `proptest` property tier (`doppel/tests/property/`, `cargo nextest run -p doppel --all-features --test property`, scale with `PROPTEST_CASES`) checks detection, guards, restore (sync and async), AEAD tampering, registration and patterns-file loading against independent oracles.
+
 ## [0.1.0] - 2026-08-11
 
 ### Added
