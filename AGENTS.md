@@ -204,6 +204,8 @@ cargo nextest run --lib                                                        #
 
 - Commit messages: imperative mood, 72 chars, no period
 - Branch names: `ignacio@<module>/<kebab-description>`
+- Every feature/fix lives on its own branch off `main`; never commit directly to `main`.
+- Merge feature branches with `git merge --no-ff` (always create a merge commit, even when a fast-forward is possible). Never fast-forward-merge a feature branch into `main`. `git config merge.ff false` (repo-local) enforces this by default.
 - Format with `cargo fmt`, lint with `cargo clippy` before committing
 - No `#[allow(clippy::*)]` without a comment explaining why
 - No section-separator comments (`// ---`, `// ===`, etc.)
