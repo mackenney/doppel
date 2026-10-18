@@ -13,3 +13,6 @@ mod inv_candidate_positions;
 
 #[path = "spec/inv_restore_prefix_fakes.rs"]
 mod inv_restore_prefix_fakes;
+
+#[path = "spec/inv_registration_coverage.rs"]
+mod inv_registration_coverage;

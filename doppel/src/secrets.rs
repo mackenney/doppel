@@ -113,6 +113,21 @@ pub enum SecretError {
         secret_len: usize,
     },
 
+    /// A byte of the secret's variable portion lies outside the effective variable
+    /// charset, so the produced Pattern's `variable` segment could never match it and
+    /// the registered Pattern would silently never detect its own secret.
+    ///
+    /// `offset` is the byte offset into the secret of the first offending byte. The
+    /// message deliberately omits the offending byte (and every other secret byte) so
+    /// the error cannot leak the secret.
+    #[error(
+        "unsupported secret bytes: variable portion byte at offset {offset} is outside the effective charset"
+    )]
+    UnsupportedSecretBytes {
+        /// Byte offset into the secret of the first offending byte.
+        offset: usize,
+    },
+
     /// Fake generation failed because the charset is too small relative to the
     /// variable portion length (all candidates collided with the original).
     #[error("fake generation exhausted {attempts} attempts; charset too small for variable length")]
@@ -181,6 +196,7 @@ pub fn register(secret: &[u8]) -> Result<Pattern, SecretError> {
 /// - [`SecretError::AnchorTooShort`] if `anchor_len` < 2.
 /// - [`SecretError::TooShort`] if `secret` is empty or shorter than `anchor_len`.
 /// - [`SecretError::NoVariableBytes`] if `anchor_len + tail_anchor_len >= secret.len()`.
+/// - [`SecretError::UnsupportedSecretBytes`] if a variable-portion byte is outside the effective variable charset.
 /// - [`SecretError::InsufficientEntropy`] if entropy < 83 bits and `!opts.force`.
 /// - [`SecretError::CollisionLimit`] if fake generation exhausts all attempts.
 /// - [`SecretError::ZeroTrailingRunGuard`] if `trailing_run_guard` is `Some(0)`.
@@ -275,6 +291,19 @@ pub(crate) fn register_with_options_rng<R: rand::RngCore>(
     } else {
         (CharsetName::Wide, 92)
     };
+
+    // INV-52/VC-29: every byte of the variable portion must belong to the effective
+    // variable charset, regardless of `force`. Anchor and tail-anchor bytes are matched
+    // exactly by their opaque segments and are deliberately exempt: they cannot cause a
+    // self-detection miss.
+    if let Some(offset) = middle_bytes
+        .iter()
+        .position(|&b| !charset.resolve().contains(b))
+    {
+        return Err(SecretError::UnsupportedSecretBytes {
+            offset: middle_start + offset,
+        });
+    }
 
     // Entropy enforcement.
     let entropy = calculate_entropy(middle_len, charset_size);

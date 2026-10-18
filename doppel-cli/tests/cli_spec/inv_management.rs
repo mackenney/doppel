@@ -136,6 +136,52 @@ fn test_register_requires_label() {
 }
 
 #[test]
+fn test_register_rejects_out_of_charset_bytes_with_actionable_message() {
+    // INV-52/VC-29: register MUST reject a variable-portion byte outside the effective
+    // charset even without --force, and the message SHOULD suggest echo -n / printf
+    // (a trailing newline piped from echo is the usual cause) without leaking the secret.
+    use std::fs;
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let pat = init_patterns(dir.path());
+    let before = fs::read(&pat).unwrap();
+
+    let secret = b"SYNTHETIC secret value 9f8e7d6c5b4a";
+    let mut child = cli_bin()
+        .args(["register", "--patterns"])
+        .arg(&pat)
+        .args(["--identifier", "inv52-entry"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(secret).unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        !output.status.success(),
+        "register must fail for out-of-charset variable bytes"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("echo -n") || stderr.contains("printf"),
+        "INV-52: message should suggest echo -n/printf; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("SYNTHETIC"),
+        "INV-52: message must not leak the secret; stderr: {stderr}"
+    );
+    let after = fs::read(&pat).unwrap();
+    assert_eq!(
+        after, before,
+        "INV-52: rejected registration must not modify the patterns file"
+    );
+}
+
+#[test]
 fn test_define_rejects_unknown_charset() {
     let dir = tempfile::tempdir().unwrap();
     let pat = init_patterns(dir.path());

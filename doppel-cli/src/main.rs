@@ -355,7 +355,14 @@ fn run_register(
             trailing_run_guard_charset,
             force,
         };
-        let pattern = register_with_options(&secret, &opts)?;
+        let pattern = register_with_options(&secret, &opts).map_err(|e| match e {
+            doppel::SecretError::UnsupportedSecretBytes { offset } => format!(
+                "unsupported secret bytes at offset {offset}: the secret contains a byte outside the \
+                 variable charset. If the secret was piped in, a trailing newline is the usual \
+                 cause: use `echo -n` or `printf` instead of `echo`."
+            ),
+            other => other.to_string(),
+        })?;
         pf.add_secret_pattern(id.to_string(), &pattern)?;
 
         let new_entry = pf.pattern.last().expect("entry just added");
