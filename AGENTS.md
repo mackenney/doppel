@@ -121,6 +121,7 @@ current state.
 | **Spec invariants (lib)** | `doppel/tests/spec.rs` | `doppel/tests/spec/` | Library SPEC.md MUST/MUST NOT invariants |
 | **Spec invariants (CLI)** | `doppel-cli/tests/cli_spec.rs` | `doppel-cli/tests/cli_spec/` | CLI-specific SPEC.md invariants |
 | **Integration** | `doppel/tests/integration.rs` | `doppel/tests/integration/` | Public-API behavior: full swap→restore cycles, streaming edge cases |
+| **Property (lib)** | `doppel/tests/property.rs` | `doppel/tests/property/` | proptest properties of SPEC invariants against independent oracles; failing seeds persist to `*.proptest-regressions` |
 | **E2E** | `doppel-cli/tests/e2e.rs` | `doppel-cli/tests/e2e/` | CLI process boundary tests; gated by `--features test-e2e` |
 
 Inline unit tests (`#[cfg(test)]` in `src/`) test implementation internals and
@@ -196,6 +197,7 @@ cargo nextest run --workspace                                                  #
 cargo nextest run -p doppel --test spec                               # lib spec invariants
 cargo nextest run -p doppel-cli --test cli_spec                       # CLI spec invariants
 cargo nextest run -p doppel --test integration                        # integration only
+cargo nextest run -p doppel --all-features --test property             # property tests (PROPTEST_CASES=N to scale)
 cargo nextest run -p doppel-cli --features test-e2e --test e2e        # e2e
 cargo nextest run --lib                                                        # unit tests only
 ```
