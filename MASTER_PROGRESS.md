@@ -19,6 +19,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## Completed
 
+- `proptest-experiment` — proptest property tier (`doppel/tests/property/`, independent oracles, 83-bit generated-pattern floor); fixes for swap skipping an earlier-starting anchor, restore mangling prefix-related fakes, variable-range overflow; registration now rejects variable bytes outside the effective charset (INV-52); fake collisions documented as an accepted probabilistic limitation; commits 6738b73..0a5db67
 - `aws-akia-asia-default-guard` — AWS AKIA/ASIA built-in patterns now default-guarded (1024 bytes, `base64_any`), same weak shape as GCP; found via a real production false positive (screenshot upload corrupted through an `ASIA`-shaped chance match), corrects SPEC.md's prior "other built-ins need no guard" claim; commit 69094f0
 - `trailing-run-guard-charset-fix` — explicit `trailing_run_guard_charset` field + `base64_any` charset; fixes GCP guard's charset conflation (was inferring url_safe_base64 from match segment, providing zero suppression against real-world standard-base64 image blobs at any threshold); GCP default now explicit `base64_any`, 13/13 real-corpus false positives suppressed post-fix; includes round-2/3 review fixes (register/--group conflict, shared-validator dedup, bypass-test coverage, doc updates); commit b48fd08
 - `trailing-run-guard` — opt-in trailing same-charset run guard suppressing base64-blob false positives (SPEC items 44-49 + item 18 guard tie-breaks, VC 18-25, GCP guarded by default 2048 bytes, registration option); commit 7bff46b
@@ -41,5 +42,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 - `doc-fixes` — Rust source doc fixes, secrets-example.toml, CHANGELOG.md, README v3 rewrite, for-the-paranoid v3 rewrite, INV-42/43 anchor enforcement; commit 7b37fd6
 ## Known Gaps
 
+- Property tier built and validated on Rust 1.86 only; exact 1.85 (declared MSRV) not tested because the toolchain is not installed.
+- Intermittent `BrokenPipe` in `doppel-cli/tests/e2e/cli.rs` `test_e2e_register_missing_patterns_file` (test writes stdin after the child may already have exited); not fixed.
 - No CI configuration (out of scope for initial-implementation plan)
 - INV-26 and INV-27 `log::warn` diagnostics have no test assertions; tests verify registration succeeds but cannot capture log output without a test logger harness. Future fix: wire a test logger via `testing_logger` or equivalent.
