@@ -1,0 +1,29 @@
+# Commit gate: cheap checks only. The full gate is `just verify`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
+    hooks:
+      - id: check-merge-conflict
+        args: [--assume-in-merge]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-toml
+      - id: check-yaml
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: betterleaks
+        name: Betterleaks (staged changes)
+        entry: betterleaks git --pre-commit --staged --redact=100 --no-banner
+        language: system
+        pass_filenames: false
+        always_run: true

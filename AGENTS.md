@@ -220,8 +220,15 @@ cargo nextest run --lib                                                        #
 - Zeroize key material on drop; use `zeroize` crate
 - No `unwrap()` on crypto operations — always propagate errors
 
+## Entrypoints and release
+
+- `just` is the canonical interface (`just --list`): `check`, `test`, `test-property`, `test-e2e`, `audit`, `package`, and `verify`, the full gate run before merging to `main` and releasing.
+- `just setup` installs the prek commit hooks (`.pre-commit-config.yaml`: hygiene, `cargo fmt --check`, staged secret scan). Test vectors that look like secrets are allowlisted by path in `.betterleaks.toml`; add a path there only for synthetic fixtures.
+- Release process, tag convention and checklist: `RELEASING.md`.
+
 ## Tooling
 
 - **Shell:** bash; `jq`, `rg`, `fdfind` available
 - **Build:** `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt`
 - **Tests:** `cargo nextest run` (required)
+- **Advisories:** `cargo audit` (RustSec), via `just audit`
