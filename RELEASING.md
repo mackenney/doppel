@@ -49,8 +49,8 @@ feature merge.
 
 ## Checklist
 
-1. Update `MASTER_PROGRESS.md`: Known Gaps and, for a milestone-sized change,
-   a Completed line.
+1. Update `MASTER_PROGRESS.md`: remove finished plans and fixed gaps. History
+   belongs in the CHANGELOG (step 2), not there.
 2. CHANGELOG, strictly: `[Unreleased]` MUST list every user-visible change since
    the last tag (Added, Changed, Fixed, Documentation, Testing), flag behavior
    changes, and keep the `<!-- next-header -->` / `<!-- next-url -->` markers.

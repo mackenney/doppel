@@ -36,7 +36,7 @@ Cargo.lock         Locked dependency versions
 clippy.toml        Clippy configuration
 rustfmt.toml       Rustfmt configuration
 secrets-example.toml  Example patterns file
-MASTER_PROGRESS.md Single source of truth for project-wide work status
+MASTER_PROGRESS.md Current and upcoming work (history lives in CHANGELOG.md)
 SPEC.md            Behavioral contract for the full system
 ```
 
@@ -50,20 +50,28 @@ SPEC.md            Behavioral contract for the full system
 
 ## Master Progress
 
-`MASTER_PROGRESS.md` is the single source of truth for project-wide work status.
-Every human and agent working on doppel reads it first to understand
-current state.
+`MASTER_PROGRESS.md` is the single source of truth for current and upcoming
+work. Every human and agent working on doppel reads it first.
 
-**What it contains:**
+**Roles of the status files:**
+- `MASTER_PROGRESS.md` — what is happening and what is next. No history.
+- `CHANGELOG.md` — what has been done and shipped; owns the history. Written
+  by hand under `[Unreleased]`, stamped by `cargo-release` (see `RELEASING.md`).
+- `plans/<feature>/` — step-level detail for one in-flight plan; deleted on
+  completion.
+- Git history — the full record of how and why.
+
+**What `MASTER_PROGRESS.md` contains:**
 - **In Progress** — active plans with a link to their plan directory
 - **Queued** — not-started plans with a link to their plan directory
-- **Completed** — core milestones only, one line each with commit hash; routine changes belong in `CHANGELOG.md`
 - **Known Gaps** — identified issues with no active plan owner
 
 **Rules:**
-- When a plan completes and is deleted → add a Completed line only if it is a core milestone
 - When a new plan is created → add it to Queued
 - When work starts on a plan → move it from Queued to In Progress
+- When a plan completes and is deleted → remove it from `MASTER_PROGRESS.md` and
+  record the user-visible outcome in `CHANGELOG.md` `[Unreleased]`
+- When a gap is fixed → remove it from Known Gaps
 - Keep entries as one-liners; all detail lives in plan files and git history
 - Never let `MASTER_PROGRESS.md` drift: update it in the same commit as the plan change
 
@@ -75,7 +83,7 @@ current state.
   context — step files, findings, wave maps — for the duration of execution.
 - The entire plan directory is deleted once the plan is complete. No plan
   files survive after completion; their outcomes live in git history and in
-  `MASTER_PROGRESS.md`.
+  `CHANGELOG.md`.
 - Code comments and docs MUST NOT reference plan files.
 
 ## Artifacts
