@@ -38,3 +38,22 @@ package:
 
 # Full integration gate; run before merging to main and before a release.
 verify: check test test-e2e audit package
+
+# Fail when README's CLI reference and `doppel --help` disagree.
+docs-check:
+    scripts/check-docs.sh
+
+# Fail when CHANGELOG.md was not updated since the last tag.
+changelog-check:
+    scripts/check-changelog.sh
+
+# Fail unless every published version has a tag on main's first-parent chain.
+tag-check:
+    scripts/check-tags.sh
+
+# Release-scale tests (PROPTEST_CASES=10000) with no skipped tests.
+release-test:
+    scripts/release-test.sh
+
+# Stricter gate run before a release.
+release-verify: check audit package docs-check changelog-check tag-check release-test

@@ -213,7 +213,7 @@ max = 33
 ```
 
 Valid charset names for structural pattern segments: `alphanumeric`, `url_safe_base64`,
-`uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`.
+`uppercase_alphanumeric`, `digits`, `hex_lower`, `wide`, `base64_any`.
 
 (`wide` = 92 printable ASCII bytes: 0x21–0x7E excluding `"` and `\`; used by default for
 registered-secret variable segments.)
@@ -269,6 +269,7 @@ echo -n 'my-secret-value' | doppel register \
   [--anchor-len N] \
   [--tail-anchor-len M] \
   [--restrict-charset] \
+  [--trailing-run-guard N [--trailing-run-guard-charset NAME]] \
   [--force]
 ```
 
@@ -279,6 +280,13 @@ command-line arguments. `--identifier` is required and must be unique within the
 `--anchor-len` controls how many leading bytes of the secret become the detection anchor.
 Minimum 2 (hard fail for 0 or 1); default 3 is recommended. Values below 3 emit a
 warning — shorter anchors generate more false Aho-Corasick candidates per payload byte.
+
+`--trailing-run-guard <n>` makes the registered pattern suppress a match that is
+immediately followed by at least `n` bytes of the guard charset (a likely slice of an
+encoded blob). The guard charset is the variable segment's charset unless
+`--trailing-run-guard-charset <name>` names another (for example `base64_any`); that
+flag requires `--trailing-run-guard`. Both are rejected together with `--group`,
+because guard configuration lives on the pattern entry. Absent by default.
 
 Alternatively, use `--group <id>` instead of `--identifier` to add this secret as an
 additional digest to an existing group pattern (for grouping multiple secrets under one
@@ -302,7 +310,7 @@ segment in order. Segment specs:
 - `variable:<charset>:<min>:<max>` — variable-length field from named charset
 
 Valid charset names: `alphanumeric`, `url_safe_base64`, `uppercase_alphanumeric`,
-`digits`, `hex_lower`, `wide`.
+`digits`, `hex_lower`, `wide`, `base64_any`.
 
 At least one Variable segment is required. The identifier must be unique in the
 file. The first segment value must be at least 2 bytes (hard fail for shorter); values
