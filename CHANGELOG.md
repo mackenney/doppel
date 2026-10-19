@@ -14,10 +14,15 @@
 
 ### Documentation
 
+- README: `register` documents `--trailing-run-guard` and `--trailing-run-guard-charset`, the new unsupported-bytes rejection and the `echo -n` / `printf '%s'` advice; `define` and the patterns-file charset lists include `base64_any`. `docs/for-the-paranoid.md` notes that audit commands need the exact registered bytes.
+- New `RELEASING.md` documents the release process: version and tag conventions, mandatory tags on `main`'s first-parent chain, and the release gates.
 - SPEC.md: fake derivation is stable but not injective, so distinct secrets can in principle receive identical fakes (negligible above the 83-bit registration floor, non-negligible for low-capacity custom patterns); restore of such entries is unspecified. Documented as an accepted limitation with qualified invariant 4 and verifiable conditions 1, 2, 4 and 17.
 
 ### Testing
 
+- Property tests for the restore holdback bound (INV-8), entries leaking no secret or session-key bytes (INV-9), registration trailing-run-guard behavior end to end (INV-49/51) and `Detector` reuse and thread sharing (INV-40), each checked with mutation tests.
+- Development tooling: a `justfile` (`just verify`, `just release-verify`, `just audit`, ...), prek commit hooks (hygiene, `cargo fmt --check`, staged secret scan) and release gates that compare README to `--help`, require an updated CHANGELOG, verify tags and run the tests at 10000 property cases with no skips.
+- Bumped the locked `anyhow` to 1.0.104 for RUSTSEC-2026-0190 (unsoundness in `Error::downcast_mut`; only reachable through wasm tooling in the lockfile).
 - New `proptest` property tier (`doppel/tests/property/`, `cargo nextest run -p doppel --all-features --test property`, scale with `PROPTEST_CASES`) checks detection, guards, restore (sync and async), AEAD tampering, registration and patterns-file loading against independent oracles.
 
 ## [0.1.0] - 2026-08-11
