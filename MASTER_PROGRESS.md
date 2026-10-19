@@ -19,6 +19,7 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## Completed
 
+- `proptest-gaps` — property tests for restore holdback bound (INV-8), entries no-leak (INV-9), registration guard end-to-end (INV-49/51), Detector reuse/thread-sharing (INV-40); commits 7fbf9f5..4a113ad
 - `proptest-experiment` — proptest property tier (`doppel/tests/property/`, independent oracles, 83-bit generated-pattern floor); fixes for swap skipping an earlier-starting anchor, restore mangling prefix-related fakes, variable-range overflow; registration now rejects variable bytes outside the effective charset (INV-52); fake collisions documented as an accepted probabilistic limitation; commits 6738b73..0a5db67
 - `aws-akia-asia-default-guard` — AWS AKIA/ASIA built-in patterns now default-guarded (1024 bytes, `base64_any`), same weak shape as GCP; found via a real production false positive (screenshot upload corrupted through an `ASIA`-shaped chance match), corrects SPEC.md's prior "other built-ins need no guard" claim; commit 69094f0
 - `trailing-run-guard-charset-fix` — explicit `trailing_run_guard_charset` field + `base64_any` charset; fixes GCP guard's charset conflation (was inferring url_safe_base64 from match segment, providing zero suppression against real-world standard-base64 image blobs at any threshold); GCP default now explicit `base64_any`, 13/13 real-corpus false positives suppressed post-fix; includes round-2/3 review fixes (register/--group conflict, shared-validator dedup, bypass-test coverage, doc updates); commit b48fd08
