@@ -2,6 +2,29 @@
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- `swap` no longer skips an earlier-starting anchor when a shorter anchor ends earlier inside it (candidate automaton now uses leftmost-first matching instead of the default earliest-ending semantics); previously a genuine secret could pass through unreplaced when two patterns' anchors overlapped.
+- `restore` (sync and async) no longer lets a shorter fake shadow a longer fake that it prefixes; restore now matches the longest fake at a shared start, so the original payload is reproduced exactly.
+- Variable-segment matching clamps its length range to the remaining payload, removing an overflow panic and work proportional to the declared maximum length rather than the payload size.
+
+### Changed
+
+- **Behavior change:** `register` / `register_with_options` and `doppel register` now fail with the new `SecretError::UnsupportedSecretBytes { offset }` when a byte of the secret's variable portion lies outside the effective variable charset (for example a space, `"`, `\`, a control byte, or any non-ASCII byte). Previously registration succeeded but produced a Pattern that could never detect the secret; with `echo secret | doppel register` the trailing newline silently caused this. The check applies even with `force`/`--force`, and the error carries only the byte offset, never secret bytes. Use `echo -n` or `printf` when piping a secret to `register`.
+
+### Documentation
+
+- README: `register` documents `--trailing-run-guard` and `--trailing-run-guard-charset`, the new unsupported-bytes rejection and the `echo -n` / `printf '%s'` advice; `define` and the patterns-file charset lists include `base64_any`. `docs/for-the-paranoid.md` notes that audit commands need the exact registered bytes.
+- New `RELEASING.md` documents the release process: version and tag conventions, mandatory tags on `main`'s first-parent chain, and the release gates.
+- SPEC.md: fake derivation is stable but not injective, so distinct secrets can in principle receive identical fakes (negligible above the 83-bit registration floor, non-negligible for low-capacity custom patterns); restore of such entries is unspecified. Documented as an accepted limitation with qualified invariant 4 and verifiable conditions 1, 2, 4 and 17.
+
+### Testing
+
+- Property tests for the restore holdback bound (INV-8), entries leaking no secret or session-key bytes (INV-9), registration trailing-run-guard behavior end to end (INV-49/51) and `Detector` reuse and thread sharing (INV-40), each checked with mutation tests.
+- Development tooling: a `justfile` (`just verify`, `just release-verify`, `just audit`, ...), prek commit hooks (hygiene, `cargo fmt --check`, staged secret scan) and release gates that compare README to `--help`, require an updated CHANGELOG, verify tags and run the tests at 10000 property cases with no skips.
+- Bumped the locked `anyhow` to 1.0.104 for RUSTSEC-2026-0190 (unsoundness in `Error::downcast_mut`; only reachable through wasm tooling in the lockfile).
+- New `proptest` property tier (`doppel/tests/property/`, `cargo nextest run -p doppel --all-features --test property`, scale with `PROPTEST_CASES`) checks detection, guards, restore (sync and async), AEAD tampering, registration and patterns-file loading against independent oracles.
+
 ## [0.1.0] - 2026-08-11
 
 ### Added
