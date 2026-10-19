@@ -4,11 +4,6 @@
 
 Active
 
-## Objective
-
-Implement `doppel`: a Rust library and CLI for secret swapping and
-restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
-
 ## In Progress
 
 *(none)*
