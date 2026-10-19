@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tag policy: every version published to crates.io has a `v<version>` tag whose
-# commit is on main's first-parent chain (a merge or release commit, never a
-# feature-branch commit) and whose Cargo.toml versions match the tag.
+# commit is the release commit `chore: release v<version>` (single parent, not a
+# merge) on main's first-parent chain, and whose Cargo.toml versions match the
+# tag.
 # Usage: check-tags.sh [--after-release <version>]
 #   default            checks every published version (run before a release)
 #   --after-release V  also requires V to be tagged, published and pushed
@@ -34,6 +35,9 @@ for v in $versions; do
   tag="v$v"
   commit=$(git rev-parse -q --verify "refs/tags/$tag^{commit}") || { note "$tag does not exist"; continue; }
   grep -qx "$commit" <<<"$main_chain" || note "$tag ($commit) is not on main's first-parent chain"
+  subject=$(git log -1 --format=%s "$commit")
+  [[ $subject == "chore: release $tag" ]] || note "$tag ($commit) is not the release commit: subject is '$subject'"
+  [[ $(git rev-list --parents -n1 "$commit" | wc -w) -eq 2 ]] || note "$tag ($commit) is a merge or root commit, not a single-parent release commit"
   for c in "${crates[@]}"; do
     tv=$(git show "$tag:$c/Cargo.toml" | sed -n 's/^version *= *"\(.*\)"/\1/p' | head -1)
     [[ $tv == "$v" ]] || note "$tag: $c/Cargo.toml says '$tv'"

@@ -57,11 +57,11 @@ current state.
 **What it contains:**
 - **In Progress** — active plans with a link to their plan directory
 - **Queued** — not-started plans with a link to their plan directory
-- **Completed** — one-liner per finished feature/plan, with commit hash
+- **Completed** — core milestones only, one line each with commit hash; routine changes belong in `CHANGELOG.md`
 - **Known Gaps** — identified issues with no active plan owner
 
 **Rules:**
-- When a plan completes and is deleted → add a one-liner to Completed with the merge commit
+- When a plan completes and is deleted → add a Completed line only if it is a core milestone
 - When a new plan is created → add it to Queued
 - When work starts on a plan → move it from Queued to In Progress
 - Keep entries as one-liners; all detail lives in plan files and git history

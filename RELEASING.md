@@ -49,7 +49,8 @@ feature merge.
 
 ## Checklist
 
-1. Move finished plans to Completed in `MASTER_PROGRESS.md`.
+1. Update `MASTER_PROGRESS.md`: Known Gaps and, for a milestone-sized change,
+   a Completed line.
 2. CHANGELOG, strictly: `[Unreleased]` MUST list every user-visible change since
    the last tag (Added, Changed, Fixed, Documentation, Testing), flag behavior
    changes, and keep the `<!-- next-header -->` / `<!-- next-url -->` markers.
@@ -84,10 +85,10 @@ feature merge.
    `main` and the tag to both remotes. Needs a crates.io token and push access
    to both remotes.
 9. Verify with `scripts/check-tags.sh --after-release <version>`: the tag exists
-   on `main`'s first-parent chain and on every push destination, both crates are
+   on `main`'s first-parent chain, is the single-parent
+   `chore: release v<version>` commit, and is on every push destination, both crates are
    on crates.io, and each `Cargo.toml` at the tag matches. Check the CHANGELOG
    compare links resolve.
-10. Add a Completed line to `MASTER_PROGRESS.md`.
 
 If `cargo release` fails after publishing `doppel` but before `doppel-cli`,
 do not retry blindly: check crates.io state, then publish the remaining crate

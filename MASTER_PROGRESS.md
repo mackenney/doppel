@@ -19,28 +19,17 @@ restoration in arbitrary byte payloads. Full behavioral contract in `SPEC.md`.
 
 ## Completed
 
-- `proptest-gaps` — property tests for restore holdback bound (INV-8), entries no-leak (INV-9), registration guard end-to-end (INV-49/51), Detector reuse/thread-sharing (INV-40); commits 7fbf9f5..4a113ad
-- `proptest-experiment` — proptest property tier (`doppel/tests/property/`, independent oracles, 83-bit generated-pattern floor); fixes for swap skipping an earlier-starting anchor, restore mangling prefix-related fakes, variable-range overflow; registration now rejects variable bytes outside the effective charset (INV-52); fake collisions documented as an accepted probabilistic limitation; commits 6738b73..0a5db67
-- `aws-akia-asia-default-guard` — AWS AKIA/ASIA built-in patterns now default-guarded (1024 bytes, `base64_any`), same weak shape as GCP; found via a real production false positive (screenshot upload corrupted through an `ASIA`-shaped chance match), corrects SPEC.md's prior "other built-ins need no guard" claim; commit 69094f0
-- `trailing-run-guard-charset-fix` — explicit `trailing_run_guard_charset` field + `base64_any` charset; fixes GCP guard's charset conflation (was inferring url_safe_base64 from match segment, providing zero suppression against real-world standard-base64 image blobs at any threshold); GCP default now explicit `base64_any`, 13/13 real-corpus false positives suppressed post-fix; includes round-2/3 review fixes (register/--group conflict, shared-validator dedup, bypass-test coverage, doc updates); commit b48fd08
-- `trailing-run-guard` — opt-in trailing same-charset run guard suppressing base64-blob false positives (SPEC items 44-49 + item 18 guard tie-breaks, VC 18-25, GCP guarded by default 2048 bytes, registration option); commit 7bff46b
+Core milestones only; per-change detail lives in `CHANGELOG.md` and git history.
 
-- `initial-implementation` — full library + CLI (11 steps, 65 tests, all 23 INV invariants) commit 63672b1
-- `exploit-memory-forensics` — session key recoverable via /proc/pid/mem in 0.25s; key_hex unzeroized; commit 650ae57
-- `exploit-filesystem-race` — key file 0644 mode race confirmed + /proc/environ leak confirmed; chained PoC decrypts entries.json; commit 3c0560b
-- `exploit-aad-tampering` — 6 PoC tests: fake-swap, stealth Unicode trigger, prefix-shadow DoS+redirect, batch exfil, e2e; 72/72 pass; commit 7005d46
-- `workspace-lib-split` — workspace split, Pattern opacity, SwapError cleanup, lib docs, review fixes; commit 4b47145
-- `exploit-tier2-leakage` — start_fragment leakage PoC confirmed; fix: wide-charset default, opt-in prefix/suffix; commit 662fca8
-- `tier1-segments` — segment-list model for Tier 1 detection (INV-28, INV-29, VC-13); fixes Anthropic AA suffix, OpenAI T3BlbkFJ, GitHub FG `_` separator, Slack digit structure; commit 895e596
-- `patterns-file-stable-fakes` — deterministic fakes across restarts (INV-13), Tier 2 at-match derivation, SecretsFile JSON serde, CLI init/register/--patterns, 102 tests; merge commit 6904209
-- `toml-patterns-user-tier1` — TOML+hex patterns file (v2), user-defined Tier 1 patterns, CLI define/list/inspect/remove, register --label, CollisionLimit fix; commit 7e4b9a8
-- `sync-test-parity` — parity async/sync restore tests: empty input, two distinct secrets, Tier 2; INV-5 ref in async Zeroizing; commit 0922dd4
-- `review-remediation` — INV-12 CLI zeroization, async spec tests (INV-5/6/8), shared restore abstraction (process_safe_region), charset O(1) bitmap+static, AC pre-filter, dedup alloc fix; commit 36f8099
-- `restore-followup` — zeroize decrypted plaintext in sync restore, AEAD log in sync; commit 3bb4f97
-- `test-cleanup` — nonce consistency (24-byte), output.is_empty() assertion, explicit break in None branch; commit 54201f0
-- `restore-fixes` — empty-fake guard, cursor O(n) refactor, zeroize plaintext, AEAD log, #[must_use], async tests; commit 35dfb76
-- `spec-unified-pattern` — unified Pattern model (literal/opaque/variable segments), v3 patterns file, anchor_len registration, entropy enforcement, 28 built-ins, 130 tests; commit 38168b3
-- `doc-fixes` — Rust source doc fixes, secrets-example.toml, CHANGELOG.md, README v3 rewrite, for-the-paranoid v3 rewrite, INV-42/43 anchor enforcement; commit 7b37fd6
+- Initial implementation: library + CLI, swap/restore with AEAD-bound fakes, streaming restore (63672b1)
+- Workspace split (`doppel` lib, `doppel-cli`) and opaque `Pattern` API (4b47145)
+- Unified pattern model: literal/opaque/variable segments, v3 TOML patterns file, 28 built-ins (38168b3)
+- Stable fakes across restarts, user-defined patterns, CLI define/register/list/inspect/remove (6904209, 7e4b9a8)
+- Security hardening from exploit rounds: key zeroization, key-file permissions, AAD fake binding, Tier 2 leakage (650ae57, 3c0560b, 7005d46, 662fca8)
+- Trailing-run guard against base64-blob false positives, default for GCP and AWS AKIA/ASIA (7bff46b, b48fd08, 69094f0)
+- Property-test tier with independent oracles; swap/restore/registration bugs fixed (6738b73..4a113ad)
+- Release discipline: `just` gates, hooks, tag policy, `RELEASING.md`; v0.1.0 released (5ff3156)
+
 ## Known Gaps
 
 - Property tier built and validated on Rust 1.86 only; exact 1.85 (declared MSRV) not tested because the toolchain is not installed.

@@ -2,6 +2,8 @@
 # Dry-run (default): cargo release patch --workspace
 # Execute:           cargo release patch --workspace --execute
 
+# The release commit is the one commit made directly on main (single parent,
+# not a merge); never loosen this to release from a feature branch.
 allow-branch = ["main"]
 
 # All crates move together; one commit covers the whole workspace.
