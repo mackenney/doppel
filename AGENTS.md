@@ -208,6 +208,12 @@ cargo nextest run --lib                                                        #
 - Branch names: `ignacio@<module>/<kebab-description>`
 - Every feature/fix lives on its own branch off `main`; never commit directly to `main`.
 - Merge feature branches with `git merge --no-ff` (always create a merge commit, even when a fast-forward is possible). Never fast-forward-merge a feature branch into `main`. `git config merge.ff false` (repo-local) enforces this by default.
+- `main` history is a first-parent chain of merge commits: only `--no-ff` merges of feature branches advance `main`, and each merge's first parent MUST be the previous `main` tip (no foxtrot merges, where the old `main` tip ends up as the second parent). Run merges from the `main` worktree (`git merge --no-ff <feature>`); to pick up newer `main` work while developing, merge `main` into the feature branch, never the reverse direction via `git pull` into `main` or a merge done on the feature branch and then fast-forwarded.
+- No squash merges, no rebasing or force-pushing `main`, no direct commits to `main` except the `cargo-release` commit `chore: release v<version>`.
+- Feature-branch commits may be checkpoints. Before merging into `main`, `just verify` MUST pass on the merge result, not only on the feature branch; if either tip moved since it last passed, re-run it.
+- Never bypass hooks (`--no-verify`) or edit `.pre-commit-config.yaml` / `.betterleaks.toml` just to get a commit through.
+- Bug fixes: find the root cause, write a regression test and see it fail for the intended reason, then fix; ask whether a faster test could have caught it. Never weaken a test to get green.
+- Release tags (`v<version>`) are created only by `cargo-release` from `main` and are never moved.
 - Format with `cargo fmt`, lint with `cargo clippy` before committing
 - No `#[allow(clippy::*)]` without a comment explaining why
 - No section-separator comments (`// ---`, `// ===`, etc.)
@@ -220,8 +226,15 @@ cargo nextest run --lib                                                        #
 - Zeroize key material on drop; use `zeroize` crate
 - No `unwrap()` on crypto operations — always propagate errors
 
+## Entrypoints and release
+
+- `just` is the canonical interface (`just --list`): `check`, `test`, `test-property`, `test-e2e`, `audit`, `package`, and `verify`, the full gate run before merging to `main` and releasing.
+- `just setup` installs the prek commit hooks (`.pre-commit-config.yaml`: hygiene, `cargo fmt --check`, staged secret scan). Test vectors that look like secrets are allowlisted by path in `.betterleaks.toml`; add a path there only for synthetic fixtures.
+- Release process, tag convention and checklist: `RELEASING.md`.
+
 ## Tooling
 
 - **Shell:** bash; `jq`, `rg`, `fdfind` available
 - **Build:** `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt`
 - **Tests:** `cargo nextest run` (required)
+- **Advisories:** `cargo audit` (RustSec), via `just audit`

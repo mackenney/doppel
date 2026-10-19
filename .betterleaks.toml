@@ -1,0 +1,19 @@
+# doppel's tests deliberately use structurally valid synthetic secrets as
+# vectors. They are not, and never were, live credentials. Listing paths rather
+# than rule IDs keeps every other file scanned for real leaks.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic test vectors"
+paths = [
+    'doppel/src/detector.rs',
+    'doppel/src/fake.rs',
+    'doppel/src/lib.rs',
+    'doppel/src/patterns.rs',
+    'doppel/src/swap.rs',
+    'doppel/tests/integration/detector.rs',
+    'doppel/tests/integration/round_trip.rs',
+    'doppel/tests/spec/inv.rs',
+    'doppel/tests/spec/inv_trailing_run_guard.rs',
+]
