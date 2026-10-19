@@ -2,6 +2,8 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.2.0] - 2026-10-19
+
 ### Fixed
 
 - `swap` no longer skips an earlier-starting anchor when a shorter anchor ends earlier inside it (candidate automaton now uses leftmost-first matching instead of the default earliest-ending semantics); previously a genuine secret could pass through unreplaced when two patterns' anchors overlapped.
@@ -122,7 +124,8 @@ pub struct Pattern {
 - CLI commands: `init`, `swap`, `restore`, `register` (`--identifier`, `--anchor-len`, `--tail-anchor-len`, `--group`, `--force`), `define`, `list`, `inspect`, `remove`.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/mackenney/doppel/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mackenney/doppel/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mackenney/doppel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mackenney/doppel/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/mackenney/doppel/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/mackenney/doppel/tree/v0.0.1
