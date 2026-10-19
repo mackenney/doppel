@@ -89,6 +89,15 @@ entropy override (`force`), and an optional trailing run guard
 followed by a long run of same-charset bytes. `register` is shorthand for
 `register_with_options` with all defaults.
 
+Registration fails with `SecretError::UnsupportedSecretBytes { offset }` when a byte
+between the anchors lies outside the fake's variable charset (the 92 printable ASCII
+`wide` charset, or the secret's detected charset with `restrict_charset`). Such a
+secret could never match its own pattern, so it is rejected rather than silently never
+detected. Spaces, `"`, `\`, control bytes (including a trailing newline) and non-ASCII
+bytes are rejected; they are tolerated only inside the leading `anchor_len` bytes or the
+tail anchor. The check applies even with `force`, and the error carries only the byte
+offset, never secret bytes.
+
 Source: [`doppel/src/secrets.rs`](doppel/src/secrets.rs).
 
 ### Salt — stable fakes across runs
@@ -273,8 +282,10 @@ echo -n 'my-secret-value' | doppel register \
   [--force]
 ```
 
-Reads the secret from stdin (raw bytes, no trimming), appends a new instance-pattern
-entry to the patterns file, and writes it back atomically. The secret never appears in
+Reads the secret from stdin (raw bytes, no trimming; a trailing newline is part of the
+secret and fails registration with an unsupported-bytes error, so use `echo -n` or
+`printf '%s'` rather than plain `echo`; `--force` does not override this), appends a
+new instance-pattern entry to the patterns file, and writes it back atomically. The secret never appears in
 command-line arguments. `--identifier` is required and must be unique within the file.
 
 `--anchor-len` controls how many leading bytes of the secret become the detection anchor.

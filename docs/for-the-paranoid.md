@@ -17,6 +17,11 @@ required.
 | `segments[1].type` | `"variable"` — variable portion |
 | `segments[1].min` | Byte count of the variable portion (`secret.len() - anchor_len`) |
 
+Registration rejects a secret whose variable portion contains bytes outside the
+fake's variable charset (for example a trailing newline), so the audit commands
+below must be fed the exact bytes you registered: pipe with `echo -n` or `printf '%s'`,
+never plain `echo`.
+
 The plaintext secret is never stored. The `digests` array may hold more than one entry
 when multiple secrets are grouped under one identifier (`doppel register --group`).
 
