@@ -36,7 +36,7 @@ Cargo.lock         Locked dependency versions
 clippy.toml        Clippy configuration
 rustfmt.toml       Rustfmt configuration
 secrets-example.toml  Example patterns file
-MASTER_PROGRESS.md Single source of truth for project-wide work status
+MASTER_PROGRESS.md Current and upcoming work (history lives in CHANGELOG.md)
 SPEC.md            Behavioral contract for the full system
 ```
 
@@ -50,20 +50,28 @@ SPEC.md            Behavioral contract for the full system
 
 ## Master Progress
 
-`MASTER_PROGRESS.md` is the single source of truth for project-wide work status.
-Every human and agent working on doppel reads it first to understand
-current state.
+`MASTER_PROGRESS.md` is the single source of truth for current and upcoming
+work. Every human and agent working on doppel reads it first.
 
-**What it contains:**
+**Roles of the status files:**
+- `MASTER_PROGRESS.md` — what is happening and what is next. No history.
+- `CHANGELOG.md` — what has been done and shipped; owns the history. Written
+  by hand under `[Unreleased]`, stamped by `cargo-release` (see `RELEASING.md`).
+- `plans/<feature>/` — step-level detail for one in-flight plan; deleted on
+  completion.
+- Git history — the full record of how and why.
+
+**What `MASTER_PROGRESS.md` contains:**
 - **In Progress** — active plans with a link to their plan directory
 - **Queued** — not-started plans with a link to their plan directory
-- **Completed** — one-liner per finished feature/plan, with commit hash
 - **Known Gaps** — identified issues with no active plan owner
 
 **Rules:**
-- When a plan completes and is deleted → add a one-liner to Completed with the merge commit
 - When a new plan is created → add it to Queued
 - When work starts on a plan → move it from Queued to In Progress
+- When a plan completes and is deleted → remove it from `MASTER_PROGRESS.md` and
+  record the user-visible outcome in `CHANGELOG.md` `[Unreleased]`
+- When a gap is fixed → remove it from Known Gaps
 - Keep entries as one-liners; all detail lives in plan files and git history
 - Never let `MASTER_PROGRESS.md` drift: update it in the same commit as the plan change
 
@@ -75,7 +83,7 @@ current state.
   context — step files, findings, wave maps — for the duration of execution.
 - The entire plan directory is deleted once the plan is complete. No plan
   files survive after completion; their outcomes live in git history and in
-  `MASTER_PROGRESS.md`.
+  `CHANGELOG.md`.
 - Code comments and docs MUST NOT reference plan files.
 
 ## Artifacts
@@ -209,11 +217,11 @@ cargo nextest run --lib                                                        #
 - Every feature/fix lives on its own branch off `main`; never commit directly to `main`.
 - Merge feature branches with `git merge --no-ff` (always create a merge commit, even when a fast-forward is possible). Never fast-forward-merge a feature branch into `main`. `git config merge.ff false` (repo-local) enforces this by default.
 - `main` history is a first-parent chain of merge commits: only `--no-ff` merges of feature branches advance `main`, and each merge's first parent MUST be the previous `main` tip (no foxtrot merges, where the old `main` tip ends up as the second parent). Run merges from the `main` worktree (`git merge --no-ff <feature>`); to pick up newer `main` work while developing, merge `main` into the feature branch, never the reverse direction via `git pull` into `main` or a merge done on the feature branch and then fast-forwarded.
-- No squash merges, no rebasing or force-pushing `main`, no direct commits to `main` except the `cargo-release` commit `chore: release v<version>`.
+- No squash merges, no rebasing or force-pushing `main`, no direct commits to `main` except the `cargo-release` commit `chore: release v<version>`: a single-parent, non-merge commit on top of the previous `main` tip that carries the version bump and CHANGELOG stamp and is the tagged commit (see `RELEASING.md`). It keeps the first-parent chain linear; never hand-make it.
 - Feature-branch commits may be checkpoints. Before merging into `main`, `just verify` MUST pass on the merge result, not only on the feature branch; if either tip moved since it last passed, re-run it.
 - Never bypass hooks (`--no-verify`) or edit `.pre-commit-config.yaml` / `.betterleaks.toml` just to get a commit through.
 - Bug fixes: find the root cause, write a regression test and see it fail for the intended reason, then fix; ask whether a faster test could have caught it. Never weaken a test to get green.
-- Release tags (`v<version>`) are mandatory for every crates.io version, are created only by `cargo-release` from `main`, point at a commit on `main`'s first-parent chain (never a feature-branch commit), and are never moved.
+- Release tags (`v<version>`) are mandatory for every crates.io version, are created only by `cargo-release` from `main`, point at the release commit on `main`'s first-parent chain (never a feature-branch commit or a feature merge), and are never moved.
 - Before a release run `just release-verify` (10000 property cases, no skipped tests, changelog updated, README matching `--help`, tags present); see `RELEASING.md`. Keep README's CLI reference in sync with `--help` whenever a flag changes.
 - Format with `cargo fmt`, lint with `cargo clippy` before committing
 - No `#[allow(clippy::*)]` without a comment explaining why
